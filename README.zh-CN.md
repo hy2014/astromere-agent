@@ -9,7 +9,7 @@ Astromere Agent 是一个面向研究和本地开发的 Claude Code fork，重�
 1. **DeepSeek 兼容的 Claude Code runtime**
 2. **带 Jupyter-like skill artifact 能力的 Desktop Agent UI**
 
-> 本项目 fork 自 `T-Lab-CUHKSZ/claude-code`。本项目不隶属于 Anthropic，也不由 Anthropic 维护或背书。
+> 本项目 fork 自 `T-Lab-CUHKSZ/claude-code`。
 
 ---
 
