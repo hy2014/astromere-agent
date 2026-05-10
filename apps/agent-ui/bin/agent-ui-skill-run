@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Dict, List, Any
+
+IGNORED_NAMES = {"manifest.json", ".DS_Store"}
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
+def default_run_id() -> str:
+    return time.strftime("%Y%m%d_%H%M%S")
+
+def infer_output_kind(path: Path) -> Dict[str, str]:
+    ext = path.suffix.lower().lstrip(".")
+    if ext == "csv":
+        return {"type": "dataframe", "format": "csv"}
+    if ext in {"html", "htm"}:
+        return {"type": "rich_display", "format": "html"}
+    if ext == "json":
+        return {"type": "file", "format": "json"}
+    if ext in {"txt", "log", "md"}:
+        return {"type": "log", "format": ext}
+    if ext in {"png", "jpg", "jpeg", "webp", "svg"}:
+        return {"type": "rich_display", "format": ext}
+    return {"type": "file", "format": ext or "unknown"}
+
+def snapshot(output_dir: Path) -> Dict[str, float]:
+    if not output_dir.exists():
+        return {}
+    result: Dict[str, float] = {}
+    for path in output_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(output_dir).as_posix()
+        if path.name in IGNORED_NAMES:
+            continue
+        if rel.startswith("."):
+            continue
+        result[rel] = path.stat().st_mtime
+    return result
+
+def read_manifest(manifest_path: Path, session_id: str) -> Dict[str, Any]:
+    if manifest_path.exists():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.setdefault("version", 1)
+                data.setdefault("session_id", session_id)
+                data.setdefault("outputs", [])
+                return data
+        except Exception:
+            pass
+    return {"version": 1, "session_id": session_id, "outputs": []}
+
+def atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+def append_manifest(
+    output_dir: Path,
+    session_id: str,
+    skill: str,
+    method: str,
+    run_id: str,
+    new_files: List[str],
+) -> List[Dict[str, Any]]:
+    manifest_path = output_dir / "manifest.json"
+    manifest = read_manifest(manifest_path, session_id)
+    outputs = manifest.setdefault("outputs", [])
+
+    existing_names = {
+        item.get("name")
+        for item in outputs
+        if isinstance(item, dict)
+    }
+
+    appended: List[Dict[str, Any]] = []
+    for rel in sorted(new_files):
+        if rel in existing_names:
+            continue
+        path = output_dir / rel
+        if not path.exists() or not path.is_file():
+            continue
+
+        kind = infer_output_kind(path)
+        entry: Dict[str, Any] = {
+            "name": rel,
+            "skill": skill,
+            "method": method,
+            "run_id": run_id,
+            "type": kind["type"],
+            "format": kind["format"],
+            "title": rel,
+            "created_at": now_ms(),
+            "size_bytes": path.stat().st_size,
+        }
+        outputs.append(entry)
+        appended.append(entry)
+
+    manifest["updated_at"] = now_ms()
+    atomic_write_json(manifest_path, manifest)
+    return appended
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Run a skill script and register newly generated outputs into agent-ui manifest.json."
+    )
+    parser.add_argument("--skill", required=True)
+    parser.add_argument("--method", default="")
+    parser.add_argument("--output-dir", default=os.environ.get("AGENT_UI_OUTPUT_DIR", ""))
+    parser.add_argument("--session-id", default=os.environ.get("AGENT_UI_SESSION_ID", ""))
+    parser.add_argument("--run-id", default=os.environ.get("AGENT_UI_RUN_ID", ""))
+    parser.add_argument("--cwd", default="")
+    parser.add_argument("cmd", nargs=argparse.REMAINDER)
+
+    args = parser.parse_args()
+
+    if args.cmd and args.cmd[0] == "--":
+        command = args.cmd[1:]
+    else:
+        command = args.cmd
+
+    if not command:
+        print("agent-ui-skill-run: missing command after --", file=sys.stderr)
+        return 2
+
+    session_id = args.session_id or os.environ.get("CLAUDE_SESSION_ID") or "default"
+    run_id = args.run_id or default_run_id()
+
+    output_dir_raw = (
+        args.output_dir
+        or os.environ.get("AGENT_UI_OUTPUT_DIR")
+        or f".agent-ui/{session_id}"
+    )
+    output_dir = Path(output_dir_raw).expanduser()
+    if not output_dir.is_absolute():
+        output_dir = Path.cwd() / output_dir
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    before = snapshot(output_dir)
+
+    env = os.environ.copy()
+    env["AGENT_UI_SESSION_ID"] = session_id
+    env["AGENT_UI_OUTPUT_DIR"] = str(output_dir)
+    env["AGENT_UI_RUN_ID"] = run_id
+    env["AGENT_UI_SKILL"] = args.skill
+    env["AGENT_UI_METHOD"] = args.method
+
+    proc = subprocess.run(
+        command,
+        cwd=args.cwd or None,
+        env=env,
+        text=True,
+    )
+
+    after = snapshot(output_dir)
+    new_files = [
+        rel
+        for rel in after.keys()
+        if rel not in before and Path(rel).name not in IGNORED_NAMES
+    ]
+
+    appended = append_manifest(
+        output_dir=output_dir,
+        session_id=session_id,
+        skill=args.skill,
+        method=args.method,
+        run_id=run_id,
+        new_files=new_files,
+    )
+
+    print()
+    print("AGENT_UI_SKILL_RUN_RESULT")
+    print(f"skill: {args.skill}")
+    print(f"method: {args.method or '-'}")
+    print(f"run_id: {run_id}")
+    print(f"output_dir: {output_dir}")
+    print(f"manifest: {output_dir / 'manifest.json'}")
+    print("outputs:")
+    if appended:
+        for item in appended:
+            print(f"- {item['name']} | {item['type']}/{item['format']}")
+    else:
+        print("- none")
+
+    return proc.returncode
+
+if __name__ == "__main__":
+    raise SystemExit(main())

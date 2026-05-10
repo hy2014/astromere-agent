@@ -101,6 +101,756 @@ import {
 } from '../claudeAiLimits.js'
 import { getAPIContextManagement } from '../compact/apiMicrocompact.js'
 
+function isDeepSeekModelForThinking(model: string): boolean {
+  const canonical = model.trim().toLowerCase()
+  const modelName = canonical.split('/').at(-1) ?? canonical
+
+  return (
+    modelName === 'deepseek-chat' ||
+    modelName === 'deepseek-reasoner' ||
+    modelName.startsWith('deepseek-')
+  )
+}
+
+const DEEPSEEK_TOOL_RESULT_STATUS_PREFIX = 'TOOL_RESULT_STATUS:'
+const DEEPSEEK_TOOL_RESULT_ERROR_STATUS = 'TOOL_RESULT_STATUS: ERROR'
+
+function addDeepSeekToolResultErrorStatus(
+  messages: (UserMessage | AssistantMessage)[],
+): (UserMessage | AssistantMessage)[] {
+  return messages.map(message => {
+    if (message.type !== 'user') return message
+
+    const content = message.message.content
+    if (!Array.isArray(content)) return message
+
+    let messageChanged = false
+    const nextContent = content.map(block => {
+      if (block.type !== 'tool_result') return block
+
+      const rawToolResultContent = block.content
+      const normalizedToolResultContent =
+        typeof rawToolResultContent === 'string'
+          ? rawToolResultContent.length > 0
+            ? ([
+                {
+                  type: 'text',
+                  text: rawToolResultContent,
+                } satisfies TextBlockParam,
+              ])
+            : []
+          : Array.isArray(rawToolResultContent)
+            ? rawToolResultContent
+            : []
+
+      const contentWithoutStatus = normalizedToolResultContent.filter(
+        innerBlock =>
+          !(
+            innerBlock.type === 'text' &&
+            innerBlock.text.startsWith(DEEPSEEK_TOOL_RESULT_STATUS_PREFIX)
+          ),
+      )
+
+      const removedExistingStatus =
+        contentWithoutStatus.length !== normalizedToolResultContent.length
+
+      if (!block.is_error && !removedExistingStatus) return block
+
+      messageChanged = true
+      return {
+        ...block,
+        content: block.is_error
+          ? [
+              {
+                type: 'text',
+                text: DEEPSEEK_TOOL_RESULT_ERROR_STATUS,
+              } satisfies TextBlockParam,
+              ...contentWithoutStatus,
+            ]
+          : contentWithoutStatus,
+      }
+    })
+
+    if (!messageChanged) return message
+    return {
+      ...message,
+      message: {
+        ...message.message,
+        content: nextContent,
+      },
+    }
+  })
+}
+
+type DeepSeekToolResultOnlyUserMessage = UserMessage & {
+  message: UserMessage['message'] & {
+    content: BetaContentBlockParam[]
+  }
+}
+
+function isDeepSeekToolResultOnlyUserMessage(
+  message: UserMessage | AssistantMessage,
+): message is DeepSeekToolResultOnlyUserMessage {
+  if (message.type !== 'user') return false
+
+  const content = message.message.content
+  return (
+    Array.isArray(content) &&
+    content.length > 0 &&
+    content.every(
+      block =>
+        typeof block === 'object' &&
+        block !== null &&
+        'type' in block &&
+        block.type === 'tool_result',
+    )
+  )
+}
+
+function mergeConsecutiveDeepSeekToolResultMessages(
+  messages: (UserMessage | AssistantMessage)[],
+): (UserMessage | AssistantMessage)[] {
+  const merged: (UserMessage | AssistantMessage)[] = []
+
+  for (const message of messages) {
+    const last = merged.at(-1)
+
+    if (
+      last !== undefined &&
+      isDeepSeekToolResultOnlyUserMessage(last) &&
+      isDeepSeekToolResultOnlyUserMessage(message)
+    ) {
+      merged[merged.length - 1] = {
+        ...last,
+        message: {
+          ...last.message,
+          content: [...last.message.content, ...message.message.content],
+        },
+      }
+      continue
+    }
+
+    merged.push(message)
+  }
+
+  return merged
+}
+
+type DeepSeekRuntimeControlSignals = {
+  latestError?: string
+  latestPermissionDenied?: string
+}
+
+function addDeepSeekRuntimeControlMessage(
+  messages: (UserMessage | AssistantMessage)[],
+): (UserMessage | AssistantMessage)[] {
+  if (hasDeepSeekRuntimeControlMessage(messages)) return messages
+
+  const signals = scanDeepSeekRuntimeControlSignals(messages)
+  const controlText = getDeepSeekRuntimeControlText(signals)
+  if (controlText === undefined) return messages
+
+  return [
+    ...messages,
+    createUserMessage({
+      content: controlText,
+      isMeta: true,
+    }),
+  ]
+}
+
+function hasDeepSeekRuntimeControlMessage(
+  messages: (UserMessage | AssistantMessage)[],
+): boolean {
+  return messages.some(message => {
+    const content = message.message.content
+
+    if (typeof content === 'string') {
+      return content.startsWith('[SYSTEM CONTROL')
+    }
+
+    if (!Array.isArray(content)) return false
+
+    return content.some(
+      block =>
+        isRecord(block) &&
+        block.type === 'text' &&
+        typeof block.text === 'string' &&
+        block.text.startsWith('[SYSTEM CONTROL'),
+    )
+  })
+}
+
+function scanDeepSeekRuntimeControlSignals(
+  messages: (UserMessage | AssistantMessage)[],
+): DeepSeekRuntimeControlSignals {
+  const signals: DeepSeekRuntimeControlSignals = {}
+
+  for (const message of messages) {
+    const content = message.message.content
+    if (!Array.isArray(content)) continue
+
+    for (const block of content) {
+      if (!isDeepSeekToolResultBlock(block)) continue
+
+      const rawOutput = flattenDeepSeekToolResultContent(block.content)
+      const observedError =
+        block.is_error === true || looksLikeDeepSeekToolError(rawOutput)
+
+      if (looksLikeDeepSeekPermissionDenied(rawOutput)) {
+        signals.latestPermissionDenied = shortenDeepSeekControlError(rawOutput)
+      } else if (observedError) {
+        signals.latestError = shortenDeepSeekControlError(rawOutput)
+      }
+    }
+  }
+
+  return signals
+}
+
+function getDeepSeekRuntimeControlText(
+  signals: DeepSeekRuntimeControlSignals,
+): string | undefined {
+  if (signals.latestPermissionDenied !== undefined) {
+    return `[SYSTEM CONTROL]
+Permission was denied.
+
+Error: ${signals.latestPermissionDenied}
+
+Do not retry the same protected operation. Explain the limitation and continue with an allowed strategy.`
+  }
+
+  if (signals.latestError !== undefined) {
+    return `[SYSTEM CONTROL]
+The previous tool call failed.
+
+Error: ${signals.latestError}
+
+Do not blindly retry the same operation. Diagnose the failure and choose a different strategy, or report the blocker.`
+  }
+
+  return undefined
+}
+
+function isDeepSeekToolResultBlock(
+  block: unknown,
+): block is BetaToolResultBlockParam {
+  return isRecord(block) && block.type === 'tool_result'
+}
+
+function flattenDeepSeekToolResultContent(content: unknown): string {
+  if (content === undefined || content === null) return ''
+
+  if (typeof content === 'string') return content
+
+  if (Array.isArray(content)) {
+    return content
+      .map(block => {
+        if (
+          isRecord(block) &&
+          block.type === 'text' &&
+          typeof block.text === 'string'
+        ) {
+          return block.text
+        }
+
+        return stringifyDeepSeekControlValue(block)
+      })
+      .filter(text => text.length > 0)
+      .join('\n')
+  }
+
+  return stringifyDeepSeekControlValue(content)
+}
+
+function stringifyDeepSeekControlValue(value: unknown): string {
+  if (typeof value === 'string') return value
+
+  try {
+    const json = JSON.stringify(value)
+    return json === undefined ? String(value) : json
+  } catch {
+    return String(value)
+  }
+}
+
+function looksLikeDeepSeekToolError(output: string): boolean {
+  const lowered = output.toLowerCase()
+  return (
+    lowered.includes('tool_result_status: error') ||
+    lowered.includes('no such file or directory') ||
+    lowered.includes('command not found') ||
+    lowered.includes('permission denied') ||
+    lowered.includes('error:')
+  )
+}
+
+function looksLikeDeepSeekPermissionDenied(output: string): boolean {
+  const lowered = output.toLowerCase()
+  return (
+    lowered.includes('permission denied') ||
+    lowered.includes('denied by user') ||
+    lowered.includes('not permitted') ||
+    lowered.includes('operation not permitted')
+  )
+}
+
+function shortenDeepSeekControlError(output: string): string {
+  const compact = output.trim()
+  const maxLength = 600
+
+  if (compact.length <= maxLength) return compact
+
+  return `${compact.slice(0, maxLength)}...`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+/* DeepSeek unsupported request param guard start */
+const DEEPSEEK_SUPPORTED_TOP_LEVEL_REQUEST_KEYS = new Set([
+  'model',
+  'max_tokens',
+  'messages',
+  'system',
+  'tools',
+  'tool_choice',
+  'temperature',
+  'top_p',
+  'frequency_penalty',
+  'presence_penalty',
+  'stop',
+  'stop_sequences',
+  'stream',
+  'thinking',
+])
+
+function sanitizeDeepSeekUnsupportedParams<T extends Record<string, unknown>>(
+  model: string,
+  params: T,
+): T {
+  if (!isDeepSeekModelForThinking(model)) return params
+
+  const sanitized = deepSeekStripCacheControlDeep(params)
+  if (!isDeepSeekRequestRecord(sanitized)) return params
+
+  for (const key of Object.keys(sanitized)) {
+    if (!DEEPSEEK_SUPPORTED_TOP_LEVEL_REQUEST_KEYS.has(key)) {
+      delete sanitized[key]
+    }
+  }
+
+  // rust.zip parity: DeepSeek always gets explicit disabled thinking unless
+  // future compatibility says otherwise. No adaptive/budget/redacted thinking.
+  sanitized.thinking = { type: 'disabled' }
+
+  if ('messages' in sanitized) {
+    sanitized.messages = sanitizeDeepSeekMessagesParam(sanitized.messages)
+  }
+
+  if ('system' in sanitized) {
+    const system = sanitizeDeepSeekSystemParam(sanitized.system)
+    if (system === undefined) {
+      delete sanitized.system
+    } else {
+      sanitized.system = system
+    }
+  }
+
+  if ('tools' in sanitized) {
+    const tools = sanitizeDeepSeekToolsParam(sanitized.tools)
+    if (tools.length > 0) {
+      sanitized.tools = tools
+    } else {
+      delete sanitized.tools
+    }
+  }
+
+  if ('tool_choice' in sanitized) {
+    const toolChoice = sanitizeDeepSeekToolChoiceParam(sanitized.tool_choice)
+    if (toolChoice === undefined) {
+      delete sanitized.tool_choice
+    } else {
+      sanitized.tool_choice = toolChoice
+    }
+  }
+
+  return sanitized as T
+}
+
+function sanitizeDeepSeekMessagesParam(messages: unknown): unknown {
+  if (!Array.isArray(messages)) return messages
+
+  return messages.map(message => {
+    const cloned = deepSeekStripCacheControlDeep(message)
+    if (!isDeepSeekRequestRecord(cloned)) return cloned
+
+    const contentOwner = isDeepSeekRequestRecord(cloned.message)
+      ? cloned.message
+      : cloned
+
+    if ('content' in contentOwner) {
+      contentOwner.content = sanitizeDeepSeekContentBlocks(contentOwner.content)
+    }
+
+    return cloned
+  })
+}
+
+function sanitizeDeepSeekSystemParam(system: unknown): unknown {
+  const stripped = deepSeekStripCacheControlDeep(system)
+
+  if (typeof stripped === 'string') return stripped
+
+  if (!Array.isArray(stripped)) return stripped
+
+  const textBlocks = stripped.filter(
+    block =>
+      isDeepSeekRequestRecord(block) &&
+      block.type === 'text' &&
+      typeof block.text === 'string',
+  )
+
+  return textBlocks.length > 0 ? textBlocks : undefined
+}
+
+function sanitizeDeepSeekToolsParam(tools: unknown): unknown[] {
+  if (!Array.isArray(tools)) return []
+
+  const sanitizedTools: unknown[] = []
+
+  for (const tool of tools) {
+    const stripped = deepSeekStripCacheControlDeep(tool)
+    if (!isDeepSeekRequestRecord(stripped)) continue
+
+    // DeepSeek/rust.zip only supports normal client tools:
+    // { name, description?, input_schema }
+    // Drop server tools/advisor/deferred tools/MCP special shapes.
+    if (typeof stripped.name !== 'string') continue
+    if (!('input_schema' in stripped)) continue
+
+    const sanitizedTool: Record<string, unknown> = {
+      name: stripped.name,
+      input_schema: stripped.input_schema,
+    }
+
+    if (typeof stripped.description === 'string') {
+      sanitizedTool.description = stripped.description
+    }
+
+    sanitizedTools.push(sanitizedTool)
+  }
+
+  return sanitizedTools
+}
+
+function sanitizeDeepSeekToolChoiceParam(toolChoice: unknown): unknown {
+  const stripped = deepSeekStripCacheControlDeep(toolChoice)
+  if (!isDeepSeekRequestRecord(stripped)) return stripped
+
+  const type = stripped.type
+
+  // Strip disable_parallel_tool_use and any beta/extra fields.
+  if (type === 'auto' || type === 'any' || type === 'none') {
+    return { type }
+  }
+
+  if (type === 'tool' && typeof stripped.name === 'string') {
+    return { type, name: stripped.name }
+  }
+
+  return undefined
+}
+
+
+function getDeepSeekImageBlockRecord(
+  block: unknown,
+): Record<string, unknown> | undefined {
+  return block && typeof block === 'object'
+    ? (block as Record<string, unknown>)
+    : undefined
+}
+
+function getDeepSeekImageBlockSource(
+  block: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const source = block.source
+  return source && typeof source === 'object'
+    ? (source as Record<string, unknown>)
+    : undefined
+}
+
+function getDeepSeekImageBlockFile(
+  block: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const file = block.file
+  return file && typeof file === 'object'
+    ? (file as Record<string, unknown>)
+    : undefined
+}
+
+function getDeepSeekImageBlockMediaType(
+  block: Record<string, unknown>,
+): string | undefined {
+  const source = getDeepSeekImageBlockSource(block)
+  const file = getDeepSeekImageBlockFile(block)
+  const value = source?.media_type ?? block.media_type ?? file?.type ?? file?.media_type
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function getDeepSeekImageBlockBase64Data(
+  block: Record<string, unknown>,
+): string | undefined {
+  const source = getDeepSeekImageBlockSource(block)
+  const file = getDeepSeekImageBlockFile(block)
+  const value = source?.data ?? block.data ?? file?.base64 ?? file?.data
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  const comma = value.indexOf(',')
+  return comma >= 0 ? value.slice(comma + 1) : value
+}
+
+function getDeepSeekImageDecodedByteLength(
+  block: Record<string, unknown>,
+): number | undefined {
+  const explicitSize = block.size ?? block.size_bytes ?? block.originalSize
+  if (typeof explicitSize === 'number' && Number.isFinite(explicitSize)) {
+    return Math.max(0, Math.floor(explicitSize))
+  }
+
+  const file = getDeepSeekImageBlockFile(block)
+  const fileSize = file?.originalSize ?? file?.size ?? file?.size_bytes
+  if (typeof fileSize === 'number' && Number.isFinite(fileSize)) {
+    return Math.max(0, Math.floor(fileSize))
+  }
+
+  const data = getDeepSeekImageBlockBase64Data(block)
+  if (!data) return undefined
+  const normalized = data.replace(/\s/g, '')
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding)
+}
+
+function getDeepSeekDimensionPair(
+  value: unknown,
+): { width: number; height: number } | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const width = record.width
+  const height = record.height
+  if (
+    typeof width === 'number' &&
+    Number.isFinite(width) &&
+    typeof height === 'number' &&
+    Number.isFinite(height)
+  ) {
+    return { width: Math.round(width), height: Math.round(height) }
+  }
+  return undefined
+}
+
+function getDeepSeekImageDimensions(
+  block: Record<string, unknown>,
+): { width: number; height: number } | undefined {
+  const source = getDeepSeekImageBlockSource(block)
+  const file = getDeepSeekImageBlockFile(block)
+  return (
+    getDeepSeekDimensionPair(block.dimensions) ??
+    getDeepSeekDimensionPair(source?.dimensions) ??
+    getDeepSeekDimensionPair(file?.dimensions) ??
+    getDeepSeekDimensionPair(block) ??
+    getDeepSeekDimensionPair(source) ??
+    getDeepSeekDimensionPair(file)
+  )
+}
+
+function formatDeepSeekImageBytes(bytes: number | undefined): string | undefined {
+  if (bytes === undefined) return undefined
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+}
+
+function formatDeepSeekImageMetaLine(
+  block: Record<string, unknown>,
+  index: number,
+): string {
+  const parts: string[] = []
+  const mediaType = getDeepSeekImageBlockMediaType(block)
+  const size = formatDeepSeekImageBytes(getDeepSeekImageDecodedByteLength(block))
+  const dimensions = getDeepSeekImageDimensions(block)
+
+  if (mediaType) parts.push(mediaType)
+  if (size) parts.push(size)
+  if (dimensions) parts.push(`${dimensions.width}x${dimensions.height}`)
+
+  return `${index}. ${parts.length > 0 ? parts.join(' | ') : 'image block'}`
+}
+
+function formatDeepSeekImageMetaText(imageMetaLines: string[]): string {
+  const label =
+    imageMetaLines.length === 1 ? '图片' : `${imageMetaLines.length} 张图片`
+
+  return [
+    `[ARTIFACT_META] ${label}已转换为文本元信息：`,
+    ...imageMetaLines,
+    '当前 DeepSeek 兼容模型不支持直接接收图片内容；如图片来自工具读取，表示文件已存在并已成功读取。',
+  ].join('\n')
+}
+
+function rewriteDeepSeekImageBlocksToTextBlocks(content: unknown): unknown {
+  if (!Array.isArray(content)) return content
+
+  const rewrittenBlocks: unknown[] = []
+  const imageMetaLines: string[] = []
+
+  for (const rawBlock of content) {
+    const block = getDeepSeekImageBlockRecord(rawBlock)
+    if (block?.type === 'image') {
+      imageMetaLines.push(
+        formatDeepSeekImageMetaLine(block, imageMetaLines.length + 1),
+      )
+      continue
+    }
+
+    rewrittenBlocks.push(rawBlock)
+  }
+
+  if (imageMetaLines.length === 0) return content
+
+  rewrittenBlocks.push({
+    type: 'text',
+    text: formatDeepSeekImageMetaText(imageMetaLines),
+  })
+  return rewrittenBlocks
+}
+
+function sanitizeDeepSeekContentBlocks(content: unknown): unknown {
+  const rewrittenDeepSeekImageBlocks = rewriteDeepSeekImageBlocksToTextBlocks(content)
+  if (rewrittenDeepSeekImageBlocks !== content) {
+    return sanitizeDeepSeekContentBlocks(rewrittenDeepSeekImageBlocks as never)
+  }
+
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return content
+
+  const sanitizedBlocks: unknown[] = []
+
+  for (const block of content) {
+    const stripped = deepSeekStripCacheControlDeep(block)
+    if (!isDeepSeekRequestRecord(stripped)) continue
+
+    if (stripped.type === 'text' && typeof stripped.text === 'string') {
+      sanitizedBlocks.push({
+        type: 'text',
+        text: stripped.text,
+      })
+      continue
+    }
+
+    if (
+      stripped.type === 'tool_use' &&
+      typeof stripped.id === 'string' &&
+      typeof stripped.name === 'string'
+    ) {
+      sanitizedBlocks.push({
+        type: 'tool_use',
+        id: stripped.id,
+        name: stripped.name,
+        input: stripped.input ?? {},
+      })
+      continue
+    }
+
+    if (
+      stripped.type === 'tool_result' &&
+      typeof stripped.tool_use_id === 'string'
+    ) {
+      const sanitizedToolResult: Record<string, unknown> = {
+        type: 'tool_result',
+        tool_use_id: stripped.tool_use_id,
+        content: sanitizeDeepSeekToolResultContent(stripped.content),
+      }
+
+      if (stripped.is_error === true) {
+        sanitizedToolResult.is_error = true
+      }
+
+      sanitizedBlocks.push(sanitizedToolResult)
+      continue
+    }
+
+    // Drop unsupported Anthropic-only blocks for DeepSeek:
+    // image, document, thinking, redacted_thinking, server tool blocks,
+    // MCP blocks, container blocks, etc.
+  }
+
+  return sanitizedBlocks.length > 0
+    ? sanitizedBlocks
+    : [{ type: 'text', text: '' }]
+}
+
+function sanitizeDeepSeekToolResultContent(content: unknown): unknown {
+  if (typeof content === 'string') return content as never
+  if (!Array.isArray(content)) return content as never
+
+  const sanitizedBlocks: unknown[] = []
+  const imageMetaLines: string[] = []
+
+  for (const rawBlock of content) {
+    const block = getDeepSeekImageBlockRecord(rawBlock)
+    if (!block) continue
+
+    if (block.type === 'text') {
+      sanitizedBlocks.push(rawBlock)
+      continue
+    }
+
+    if (block.type === 'image') {
+      imageMetaLines.push(
+        formatDeepSeekImageMetaLine(block, imageMetaLines.length + 1),
+      )
+      continue
+    }
+
+    // DeepSeek-compatible models do not support non-text tool_result content.
+    // Preserve the previous sanitizer behavior for other unsupported block types.
+  }
+
+  if (imageMetaLines.length > 0) {
+    sanitizedBlocks.push({
+      type: 'text',
+      text: formatDeepSeekImageMetaText(imageMetaLines),
+    })
+  }
+
+  return sanitizedBlocks as never
+}
+
+function deepSeekStripCacheControlDeep(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(deepSeekStripCacheControlDeep)
+  }
+
+  if (!isDeepSeekRequestRecord(value)) return value
+
+  const result: Record<string, unknown> = {}
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (key === 'cache_control') continue
+    result[key] = deepSeekStripCacheControlDeep(nestedValue)
+  }
+
+  return result
+}
+
+function isDeepSeekRequestRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+/* DeepSeek unsupported request param guard end */
+
 /* eslint-disable @typescript-eslint/no-require-imports */
 const autoModeStateModule = feature('TRANSCRIPT_CLASSIFIER')
   ? (require('../../utils/permissions/autoModeState.js') as typeof import('../../utils/permissions/autoModeState.js'))
@@ -1324,6 +2074,12 @@ async function* queryModel(
   // so the fingerprint reflects the actual user input.
   const fingerprint = computeFingerprintFromMessages(messagesForAPI)
 
+  if (isDeepSeekModelForThinking(options.model)) {
+    messagesForAPI = mergeConsecutiveDeepSeekToolResultMessages(messagesForAPI)
+    messagesForAPI = addDeepSeekRuntimeControlMessage(messagesForAPI)
+    messagesForAPI = addDeepSeekToolResultErrorStatus(messagesForAPI)
+  }
+
   // When the delta attachment is enabled, deferred tools are announced
   // via persisted deferred_tools_delta attachments instead of this
   // ephemeral prepend (which busts cache whenever the pool changes).
@@ -1593,7 +2349,9 @@ async function* queryModel(
       options.maxOutputTokensOverride ||
       getMaxOutputTokensForModel(options.model)
 
+    const isDeepSeekModel = isDeepSeekModelForThinking(options.model)
     const hasThinking =
+      !isDeepSeekModel &&
       thinkingConfig.type !== 'disabled' &&
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
     let thinking: BetaMessageStreamParams['thinking'] | undefined = undefined
@@ -1627,6 +2385,10 @@ async function* queryModel(
           type: 'enabled',
         } satisfies BetaMessageStreamParams['thinking']
       }
+    }
+
+    if (isDeepSeekModel && thinking === undefined) {
+      thinking = { type: 'disabled' } satisfies BetaMessageStreamParams['thinking']
     }
 
     // Get API context management strategies if enabled
@@ -1696,7 +2458,7 @@ async function* queryModel(
 
     lastRequestBetas = betasParams
 
-    return {
+    return sanitizeDeepSeekUnsupportedParams(options.model, {
       model: normalizeModelStringForAPI(options.model),
       messages: addCacheBreakpoints(
         messagesForAPI,
@@ -1725,7 +2487,7 @@ async function* queryModel(
         output_config: outputConfig,
       }),
       ...(speed !== undefined && { speed }),
-    }
+    })
   }
 
   // Compute log scalars synchronously so the fire-and-forget .then() closure

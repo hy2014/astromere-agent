@@ -14,6 +14,18 @@ import { getModelStrings } from './modelStrings.js'
 // Cache valid models to avoid repeated API calls
 const validModelCache = new Map<string, boolean>()
 
+function isDeepSeekModel(model: string): boolean {
+  const lower = model.toLowerCase()
+  return (
+    lower === 'deepseek-v4-flash' ||
+    lower === 'deepseek-v4-pro' ||
+    // Backward-compatible aliases / older DeepSeek model names.
+    lower === 'deepseek-chat' ||
+    lower === 'deepseek-reasoner' ||
+    lower.startsWith('deepseek-')
+  )
+}
+
 /**
  * Validates a model by attempting an actual API call.
  */
@@ -27,12 +39,22 @@ export async function validateModel(
     return { valid: false, error: 'Model name cannot be empty' }
   }
 
-  // Check against availableModels allowlist before any API call
-  if (!isModelAllowed(normalizedModel)) {
+  // Check against availableModels allowlist before any API call.
+  // DeepSeek models are allowed when using an Anthropic-compatible endpoint.
+  if (!isDeepSeekModel(normalizedModel) && !isModelAllowed(normalizedModel)) {
     return {
       valid: false,
       error: `Model '${normalizedModel}' is not in the list of available models`,
     }
+  }
+
+  // DeepSeek Claude-compatible endpoint models are accepted locally.
+  // They are expected to be used with:
+  //   ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+  //   ANTHROPIC_AUTH_TOKEN=sk-...
+  if (isDeepSeekModel(normalizedModel)) {
+    validModelCache.set(normalizedModel, true)
+    return { valid: true }
   }
 
   // Check if it's a known alias (these are always valid)
@@ -63,11 +85,16 @@ export async function validateModel(
         {
           role: 'user',
           content: [
-            {
-              type: 'text',
-              text: 'Hi',
-              cache_control: { type: 'ephemeral' },
-            },
+            isDeepSeekModel(normalizedModel)
+              ? {
+                  type: 'text',
+                  text: 'Hi',
+                }
+              : {
+                  type: 'text',
+                  text: 'Hi',
+                  cache_control: { type: 'ephemeral' },
+                },
           ],
         },
       ],
