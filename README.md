@@ -1,18 +1,96 @@
-# Claude Code Source - Buildable Research Fork
+# Astromere Agent
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Bun](https://img.shields.io/badge/runtime-Bun-f9f1e1?logo=bun)](https://bun.sh)
-[![TypeScript](https://img.shields.io/badge/lang-TypeScript-3178c6?logo=typescript&logoColor=white)]()
-[![Lines of Code](https://img.shields.io/badge/lines-512K+-blue)]()
-[![License](https://img.shields.io/badge/license-research%20only-orange)]()
-[![Stars](https://img.shields.io/github/stars/beita6969/claude-code?style=social)](https://github.com/beita6969/claude-code/stargazers)
-[![Forks](https://img.shields.io/github/forks/beita6969/claude-code?style=social)](https://github.com/beita6969/claude-code/network/members)
+[中文 README](README.zh-CN.md)
 
-> A **buildable, modifiable, and runnable** version of the Claude Code source.
+Astromere Agent is a research-oriented fork of Claude Code focused on adapting the agent runtime to alternative model providers and a desktop-first workflow.
 
-Based on the Claude Code source snapshot publicly exposed on 2026-03-31 via an npm source map leak. The original snapshot contained only raw TypeScript source with no build configuration — it could not be compiled or run. This fork reconstructs the full build system and fixes all missing components to make it functional.
+This fork currently focuses on two major directions:
 
-**[Quick Start](#quick-start)** | **[Architecture](#architecture-overview)** | **[Feature Flags](#feature-flags)** | **[Extension Guide](#extension-points-no-source-modification-needed)**
+1. **DeepSeek-compatible Claude Code runtime**
+2. **Desktop Agent UI with Jupyter-like skill artifacts**
+
+> This project is a fork of `T-Lab-CUHKSZ/claude-code`. It is not affiliated with, endorsed by, or maintained by Anthropic.
+
+---
+
+## Highlights
+
+### DeepSeek adaptation
+
+Astromere Agent adds compatibility work for running Claude Code-style agent flows against DeepSeek / Anthropic-compatible endpoints.
+
+The adaptation work includes:
+
+- Model configuration support for non-Anthropic providers
+- DeepSeek-compatible request and response handling
+- Runtime guards for unsupported model parameters
+- Stream-json compatibility fixes for tool calls and tool results
+- Model-specific handling for runtime control messages
+- Safer handling of connector text blocks and provider-specific behavior
+
+### Desktop Agent UI
+
+This repository adds a desktop UI under `apps/agent-ui`.
+
+The desktop UI is designed around long-running coding sessions and agent workflows:
+
+- Multi-session desktop interface
+- Project/session sidebar
+- Claude Code stream-json REPL bridge
+- Process lifecycle management for agent sessions
+- Runtime status and debug inspection
+- Local `@file` reference injection
+- Slash-command skill entry
+- Rich artifact preview panel
+
+### Jupyter-like skill artifacts
+
+Astromere Agent adds a skill/artifact workflow inspired by notebooks:
+
+- Type `/` to open slash commands
+- Select a skill such as `/kline-chart`
+- Reference local files with `@file`
+- Run skills through `agent-ui-skill-run`
+- Store generated artifacts under a session-scoped `.agent-ui/<session-id>/` directory
+- Record outputs in `manifest.json`
+- Render rich HTML artifacts in the desktop preview panel
+
+The skill wrapper captures generated files and emits a structured result block:
+
+```text
+AGENT_UI_SKILL_RUN_RESULT
+skill: kline-chart
+method: kline
+run_id: ...
+output_dir: ...
+manifest: ...
+outputs:
+- chart.html | rich_display/html
+```
+
+The UI can expose output links and preview HTML artifacts on the right side of the desktop app.
+
+---
+
+## Repository Layout
+
+```text
+apps/
+  agent-ui/                 Desktop Agent UI
+    src/
+      app/App.tsx           Main React UI
+      tauri.ts              Tauri command bridge
+    src-tauri/
+      src/main.rs           Desktop backend / process manager
+    bin/
+      agent-ui-skill-run    Skill wrapper and artifact registrar
+
+src/
+  services/api/             Model provider API layer
+  utils/model/              Model validation / compatibility logic
+  tools/                    Claude Code tool system
+  skills/                   Skill system support
+```
 
 ---
 
@@ -20,197 +98,176 @@ Based on the Claude Code source snapshot publicly exposed on 2026-03-31 via an n
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) >= 1.3.x
-- Valid Anthropic authentication (OAuth via `claude login` or `ANTHROPIC_API_KEY`)
+- Bun
+- Node.js / npm
+- Rust toolchain
+- Tauri prerequisites for your platform
+- A valid API key for your configured model provider
 
-### Install & Run
+### Install dependencies
 
 ```bash
-git clone https://github.com/beita6969/claude-code.git
-cd claude-code
-
-# Install dependencies (auto-creates bun:bundle polyfill via postinstall)
 bun install
-
-# Run directly
-bun src/main.tsx -p "your prompt here" --output-format text
 ```
 
-### Build (Optional)
+For the desktop app:
 
 ```bash
-# Compile to single bundle (~20MB)
-bun build src/main.tsx --outdir=dist --target=bun
+cd apps/agent-ui
+npm install
 ```
 
-### Run Modes
+### Run the CLI
 
 ```bash
-# Headless print mode (no TTY needed)
-bun src/main.tsx -p "your prompt here" --output-format text
-
-# JSON output
-bun src/main.tsx -p "your prompt here" --output-format json
-
-# Interactive REPL mode (needs TTY)
-bun src/main.tsx
+bun src/main.tsx -p "hello" --output-format text
 ```
 
-> **Note**: If `ANTHROPIC_API_KEY` is set in your environment, it must be valid. To use OAuth instead, unset it:
-> ```bash
-> unset ANTHROPIC_API_KEY
-> ```
+### Run the desktop UI
 
----
-
-## What Changed vs. the Original Snapshot
-
-The original snapshot shipped **no `package.json`, no `tsconfig.json`, no lockfile, and no build scripts**. Over 100 internal/feature-gated modules were also missing from the source map.
-
-### Build System (Reconstructed)
-
-| File | Purpose |
-|------|---------|
-| `package.json` | 60+ npm dependencies reverse-engineered from ~1,900 source files |
-| `tsconfig.json` | TypeScript config (ESNext + JSX + Bun bundler resolution) |
-| `bunfig.toml` | Bun runtime configuration |
-| `scripts/postinstall.sh` | Auto-creates `bun:bundle` runtime polyfill after `bun install` |
-| `.gitignore` | Excludes `node_modules/`, `dist/`, lockfiles |
-
-### Stub Modules (Created)
-
-The original source imports many Anthropic-internal packages and feature-gated modules that were not included in the leak. Minimal stubs were created so the build completes:
-
-| Category | Count | Examples |
-|----------|-------|---------|
-| Anthropic internal packages (`@ant/*`) | 4 | computer-use-mcp, computer-use-swift, claude-for-chrome-mcp |
-| Native addons | 3 | color-diff-napi, audio-capture-napi, modifiers-napi |
-| Cloud provider SDKs | 6 | Bedrock/Foundry/Vertex SDK, AWS STS, Azure Identity |
-| OpenTelemetry exporters | 10 | OTLP gRPC/HTTP/Proto exporters |
-| Other optional packages | 2 | sharp, turndown |
-| Feature-gated source modules | ~90 | Tools, commands, services, components excluded from the source map |
-
-### Source Fixes
-
-| File | Change |
-|------|--------|
-| `src/main.tsx` | Runtime `MACRO` constant injection (compile-time define in production) |
-| `src/main.tsx` | Fixed Commander.js `-d2e` short flag incompatibility |
-| `src/bootstrap/state.ts` | Added missing `isReplBridgeActive()` export |
-| `src/types/connectorText.ts` | Added `isConnectorTextBlock` function stub |
-| `src/tools/WorkflowTool/constants.ts` | Added `WORKFLOW_TOOL_NAME` export |
-
----
-
-## Architecture Overview
-
-```
-src/
-├── main.tsx              # CLI entrypoint (Commander.js + React/Ink)
-├── QueryEngine.ts        # Core LLM API engine
-├── query.ts              # Agentic loop (async generator)
-├── Tool.ts               # Tool type definitions
-├── tools.ts              # Tool registry
-├── commands.ts           # Command registry
-├── context.ts            # System prompt context
-│
-├── tools/                # 40+ tool implementations
-│   ├── AgentTool/        # Sub-agent spawning & coordination
-│   ├── BashTool/         # Shell command execution
-│   ├── FileReadTool/     # File reading
-│   ├── FileEditTool/     # File editing
-│   ├── GrepTool/         # ripgrep-based search
-│   ├── MCPTool/          # MCP server tool invocation
-│   ├── SkillTool/        # Skill execution
-│   └── ...
-│
-├── services/             # External integrations
-│   ├── api/              # Anthropic API client
-│   ├── mcp/              # MCP server management
-│   └── ...
-│
-├── memdir/               # Persistent memory system
-├── skills/               # Skill system (bundled + user)
-├── components/           # React/Ink terminal UI
-├── hooks/                # React hooks
-├── coordinator/          # Multi-agent orchestration
-└── stubs/                # Stub packages for missing internals
-```
-
-### Key Systems
-
-| System | Files | Description |
-|--------|-------|-------------|
-| **Agentic Loop** | `query.ts`, `QueryEngine.ts` | `while(true)` async generator: query -> tool calls -> results -> loop |
-| **Memory** | `memdir/` | 4-type file-based memory (user/feedback/project/reference) with MEMORY.md index |
-| **MCP** | `services/mcp/` | Model Context Protocol server management (stdio/http/sse/ws) |
-| **Skills** | `skills/`, `tools/SkillTool/` | Reusable workflow templates (SKILL.md format) |
-| **Agents** | `tools/AgentTool/` | Custom agent types via `.claude/agents/*.md` |
-| **System Prompt** | `constants/prompts.ts` | Layered prompt: static -> dynamic -> memory -> agent |
-
-### Extension Points (No Source Modification Needed)
-
-| Mechanism | Location | Format |
-|-----------|----------|--------|
-| Custom Skills | `.claude/skills/name/SKILL.md` | YAML frontmatter + Markdown |
-| Custom Agents | `.claude/agents/name.md` | YAML frontmatter + Markdown |
-| MCP Servers | `.mcp.json` | JSON config |
-| Hooks | `~/.claude/settings.json` | JSON event-action mappings |
-
----
-
-## Feature Flags
-
-The `bun:bundle` `feature()` function controls feature gating. In this build, all features default to **disabled**. To enable features, edit `node_modules/bundle/index.js` (auto-generated by `bun install`):
-
-```javascript
-const ENABLED_FEATURES = new Set([
-  // Uncomment to enable:
-  // 'KAIROS',              // Assistant mode
-  // 'PROACTIVE',           // Proactive mode
-  // 'BRIDGE_MODE',         // IDE bridge
-  // 'VOICE_MODE',          // Voice input
-  // 'COORDINATOR_MODE',    // Multi-agent coordinator
-  // 'EXTRACT_MEMORIES',    // Background memory extraction
-  // 'TEAMMEM',             // Team memory
-])
+```bash
+cd apps/agent-ui
+npm run tauri dev
 ```
 
 ---
 
-## Tech Stack
+## Desktop Skill Flow
 
-| Layer | Technology |
-|-------|-----------|
-| Runtime | Bun |
-| Language | TypeScript (strict) |
-| Terminal UI | React + Ink |
-| CLI | Commander.js |
-| Validation | Zod v4 |
-| Search | ripgrep |
-| Protocols | MCP SDK, LSP |
-| API | Anthropic SDK |
-| Telemetry | OpenTelemetry |
+A typical skill flow looks like this:
+
+```text
+/kline-chart @samples/kline_sample.csv Generate a chart
+```
+
+The UI sends the prompt plus local file reference context to the agent runtime.
+
+The model is expected to call the wrapper:
+
+```bash
+$HOME/.agent-ui/bin/agent-ui-skill-run \
+  --skill kline-chart \
+  --method kline \
+  --input "/absolute/path/to/input.csv"
+```
+
+The wrapper resolves the skill implementation, runs the skill script, captures generated files, updates `manifest.json`, and emits structured artifact metadata.
+
+Skill scripts should read `AGENT_UI_OUTPUT_DIR` internally and write artifacts into that directory. The model should not manually manage output directories.
 
 ---
 
-## Scale
+## Artifact Model
 
-- **~1,900 source files**
-- **512,000+ lines of TypeScript**
-- **40+ tools**, **100+ commands**, **140+ UI components**
-- **20MB** compiled bundle
+Artifacts are session-scoped:
+
+```text
+<workspace>/.agent-ui/<session-id>/
+```
+
+Each skill run may create or update:
+
+```text
+manifest.json
+*.html
+*.csv
+*.json
+*.png
+...
+```
+
+The wrapper classifies outputs such as:
+
+```text
+rich_display/html
+rich_display/image
+artifact/table
+artifact/json
+artifact/file
+```
+
+HTML artifacts can be opened in the right-side preview panel through sandboxed iframe rendering.
+
+---
+
+## Skill Design Principles
+
+A skill should keep runtime details out of the model-facing instructions.
+
+Recommended division of responsibility:
+
+- `SKILL.md` tells the model how to invoke the wrapper.
+- `agent-ui-skill-run` resolves the skill directory and records artifacts.
+- The skill script performs the actual business logic.
+- The script reads `AGENT_UI_OUTPUT_DIR` internally.
+- The UI displays published artifacts through links and preview panels.
+
+The model-facing skill instructions should not ask the model to manage output directories, export environment variables, or call implementation scripts directly.
+
+---
+
+## DeepSeek Notes
+
+Astromere Agent includes provider compatibility work for DeepSeek-style Anthropic-compatible APIs.
+
+The goal is not just to switch an endpoint. The runtime needs to account for model-specific differences in:
+
+- Thinking / reasoning support
+- Tool result format
+- Unsupported parameters
+- Runtime control messages
+- Consecutive tool result merging
+- Error status propagation
+
+---
+
+## Development Notes
+
+Useful commands:
+
+```bash
+# Frontend
+cd apps/agent-ui
+npm run dev
+
+# Tauri desktop
+npm run tauri dev
+
+# Rust backend check
+cd apps/agent-ui/src-tauri
+cargo check
+```
+
+For repository remotes, a common fork setup is:
+
+```bash
+git remote -v
+git remote set-url origin git@github.com:hy2014/astromere-agent.git
+git remote add upstream https://github.com/T-Lab-CUHKSZ/claude-code.git
+```
+
+Use `origin` for your fork and `upstream` to sync with the original fork source.
+
+---
+
+## Status
+
+This fork is experimental and research-oriented.
+
+Recently added:
+
+- Desktop Agent UI
+- Session-scoped agent runtime
+- UUID-backed session IDs
+- Stream-json REPL process management
+- Skill artifact wrapper
+- Manifest-backed artifact outputs
+- HTML rich preview
+- Slash-command and `@file` input UX
+- DeepSeek compatibility work
 
 ---
 
 ## Disclaimer
 
-- This repository is for **educational and research purposes only**.
-- The original Claude Code source is the property of **Anthropic**.
-- This repository is **not affiliated with, endorsed by, or maintained by Anthropic**.
-- Original source exposure: 2026-03-31 via npm source map leak.
-
----
-
-If this helps your research, please give it a ⭐!
-
+This repository is a research fork of Claude Code-related source work. It is not affiliated with Anthropic. Use it for experimentation, local development, and research at your own risk.

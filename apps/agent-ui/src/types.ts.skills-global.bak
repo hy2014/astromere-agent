@@ -1,0 +1,310 @@
+export type WorkspaceState = {
+  root: string;
+  name: string;
+};
+
+export type WorkspaceRegistry = {
+  workspaces: WorkspaceState[];
+};
+
+export type ProjectEntry = {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+};
+
+export type SkillSourceKind =
+  | "project"
+  | "user"
+  | "managed"
+  | "plugin"
+  | "mcp"
+  | "bundled"
+  | "remote";
+
+export type SkillSummary = {
+  id?: string;
+  name: string;
+  description?: string;
+  whenToUse?: string;
+  version?: string;
+  path?: string;
+  skillRoot?: string;
+  source?: {
+    kind?: SkillSourceKind;
+    label?: string;
+    path?: string;
+  };
+  origin?: {
+    id?: string;
+    label?: string;
+  };
+  enabled?: boolean;
+  userInvocable?: boolean;
+  modelInvocable?: boolean;
+  context?: "inline" | "fork";
+  agent?: string;
+  model?: string;
+  effort?: string;
+  allowedTools?: string[];
+  capabilities?: string[];
+  paths?: string[];
+  hooks?: string[];
+  sizeBytes?: number;
+  installedAtMs?: number;
+  validation?: string[];
+  shadowedBy?: unknown;
+  shadowed_by?: unknown;
+};
+
+export type SkillsReport = {
+  kind: "skills";
+  action: "list";
+  installed?: SkillSummary;
+  summary?: {
+    total: number;
+    active: number;
+    shadowed: number;
+  };
+  skills: SkillSummary[];
+};
+
+export type FileView = {
+  path: string;
+  content: string;
+  total_lines: number;
+  size_bytes: number;
+  language: string;
+};
+
+
+export type LocalFileReferenceSummary = {
+  path: string;
+  name?: string;
+  language?: string;
+  total_lines?: number | null;
+  size_bytes?: number | null;
+  injected_bytes?: number | null;
+  truncated?: boolean;
+  failed?: boolean;
+  error?: string;
+};
+
+export type WorkspaceFileReference = {
+  path: string;
+  name: string;
+  directory: string;
+  extension?: string | null;
+  size_bytes?: number | null;
+  modified_epoch_millis?: number | null;
+  score: number;
+};
+
+export type LocalImagePreview = {
+  path: string;
+  mimeType: string;
+  dataUrl: string;
+  sizeBytes: number;
+};
+
+export type LocalImageMetadata = {
+  path: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
+export type GitDiff = {
+  path?: string;
+  diff: string;
+  is_empty: boolean;
+};
+
+export type PermissionMode = "read-only" | "workspace-write" | "danger-full-access";
+
+export type AgentPermissionState = {
+  currentMode: PermissionMode;
+  availableModes: PermissionMode[];
+};
+
+export type AgentTurnResponse = {
+  ok: boolean;
+  message: string;
+  requires_confirmation: boolean;
+  permission_prompt?: string | null;
+  model?: string;
+  iterations?: number;
+  tool_uses?: unknown[];
+  tool_results?: unknown[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+  estimated_cost?: string;
+  raw_json?: unknown;
+  stderr?: string;
+};
+
+export type AgentReplProcessState = {
+  sessionId: string;
+  root: string;
+  model: string;
+  permissionMode: PermissionMode;
+};
+
+export type AgentReplProcessStatus = {
+  sessionId: string;
+  root: string;
+  running: boolean;
+  pid?: number | null;
+};
+
+export type AgentReplSendResult = {
+  accepted: boolean;
+};
+
+export type AgentReplStreamEvent = {
+  sessionId: string;
+  root: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+};
+
+export type ModelProvider = "deepseek" | "openai" | "anthropic";
+
+export type ModelEndpointConfig = {
+  id: string;
+  name: string;
+  provider: ModelProvider;
+  model?: string;
+  supportModels?: string[];
+  apiKey: string;
+  baseUrl: string;
+  organizationId?: string | null;
+  maxTokens: number;
+  temperature: number;
+  enabled: boolean;
+};
+
+export type ModelSettings = {
+  activeModelId: string;
+  models: ModelEndpointConfig[];
+};
+
+export type ModelConnectionTestResult = {
+  ok: boolean;
+  message: string;
+  model: string;
+  stderr?: string;
+};
+
+export type GrepRuntimeRequest = {
+  pattern: string;
+  path?: string;
+  glob?: string;
+  output_mode?: "files_with_matches" | "content" | "count";
+  case_insensitive?: boolean;
+  head_limit?: number;
+};
+
+export type BashRuntimeRequest = {
+  command: string;
+  timeout_ms?: number;
+};
+
+export type RuntimeSessionSummary = {
+  id: string;
+  title: string;
+  path: string;
+  updated_at_ms: number;
+  modified_epoch_millis: number;
+  message_count: number;
+  parent_session_id?: string;
+  branch_name?: string;
+};
+
+export type RuntimeSessionMessage = {
+  id: string;
+  role: "user" | "assistant" | "system" | "tool";
+  text: string;
+  raw_json?: unknown;
+  event_type?: string | null;
+};
+
+export type RuntimeSessionDetail = {
+  id: string;
+  path: string;
+  title: string;
+  version: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+  message_count: number;
+  prompt_history_count: number;
+  model?: string | null;
+  workspace_root?: string | null;
+  has_compaction: boolean;
+  messages: RuntimeSessionMessage[];
+  fork?: {
+    parent_session_id: string;
+    branch_name?: string | null;
+  } | null;
+};
+
+export type StreamItem =
+  | {
+      id: string;
+      kind: "message";
+      role: "user" | "assistant" | "system";
+      text: string;
+      links?: StreamLink[];
+      /** Assistant-only: intermediate assistant text observed before the final result. */
+      progressText?: string;
+      /** Assistant-only: whether this message is still receiving stream-json events. */
+      status?: "streaming" | "complete";
+      /** Assistant-only: whether the intermediate process panel is open. */
+      progressOpen?: boolean;
+      /** User-only: local files referenced with @ and injected into the transport prompt. */
+      fileReferences?: LocalFileReferenceSummary[] | undefined;
+    }
+  | {
+      id: string;
+      kind: "system";
+      subtype:
+        | "status"
+        | "compact_notice"
+        | "permission_request"
+        | "permission_response"
+        | "interrupt"
+        | "session_switch"
+        | "session_clear"
+        | "permissions"
+        | "model"
+        | "cost"
+        | "error"
+        | "info";
+      title: string;
+      detail: string;
+    }
+  | {
+      id: string;
+      kind: "tool";
+      title: string;
+      detail: string;
+      status: "pending" | "success" | "error";
+    }
+  | {
+      id: string;
+      kind: "artifact";
+      title: string;
+      artifactKind: "markdown" | "json" | "file" | "table" | "chart" | "diff" | "link";
+      preview: string;
+      path?: string;
+    };
+
+export type StreamLink = {
+  id: string;
+  label: string;
+  kind: "file" | "markdown" | "pdf" | "image" | "report";
+  path: string;
+};
