@@ -9,7 +9,7 @@ This fork currently focuses on two major directions:
 1. **DeepSeek-compatible Claude Code runtime**
 2. **Desktop Agent UI with Jupyter-like skill artifacts**
 
-> This project is a fork of `T-Lab-CUHKSZ/claude-code`. It is not affiliated with, endorsed by, or maintained by Anthropic.
+> This project is a fork of `T-Lab-CUHKSZ/claude-code`. 
 
 ---
 
