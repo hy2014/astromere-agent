@@ -2,60 +2,165 @@
 
 [中文 README](README.zh-CN.md)
 
-Astromere Agent is a research-oriented fork of Claude Code focused on adapting the agent runtime to alternative model providers and a desktop-first workflow.
+Astromere Agent is an experimental agent runtime and desktop UI for building **Jupyter-like exploratory workflows through conversation**.
 
-This fork currently focuses on two major directions:
+The goal is not to expose more code to the user. The goal is to reduce the cost of exploration: instead of writing Python cells manually, users describe what they want, reference existing context or artifacts, and let the agent run reusable skills that produce rich, interactive outputs.
 
-1. **DeepSeek-compatible Claude Code runtime**
-2. **Desktop Agent UI with Jupyter-like skill artifacts**
+In short:
 
-> This project is a fork of `T-Lab-CUHKSZ/claude-code`. 
+```text
+skill + artifact/input reference + natural-language intent
+=> exploratory result
+```
+
+This project is currently built as a fork of Claude Code, with additional work around DeepSeek compatibility, desktop UI, skill execution, and session-scoped artifacts.
+
+> This project is a fork of `T-Lab-CUHKSZ/claude-code`. It is not affiliated with, endorsed by, or maintained by Anthropic.
 
 ---
 
-## Highlights
+## Why Jupyter-like?
 
-### DeepSeek adaptation
+Traditional Jupyter workflows are powerful because they combine:
 
-Astromere Agent adds compatibility work for running Claude Code-style agent flows against DeepSeek / Anthropic-compatible endpoints.
+- cells
+- Python code
+- reusable variables
+- iterative exploration
+- rich displays such as dataframes, charts, Plotly HTML, images, and reports
 
-The adaptation work includes:
+But traditional notebooks still require users to write and maintain code.
 
-- Model configuration support for non-Anthropic providers
-- DeepSeek-compatible request and response handling
-- Runtime guards for unsupported model parameters
-- Stream-json compatibility fixes for tool calls and tool results
-- Model-specific handling for runtime control messages
-- Safer handling of connector text blocks and provider-specific behavior
+Astromere Agent explores a different interface:
+
+```text
+conversation as cells
+skills as reusable analysis functions
+artifacts as reusable runtime outputs
+rich display as the notebook output layer
+```
+
+The user should not need to know how the underlying Python code works. They should be able to ask:
+
+```text
+/kline-chart @samples/kline_sample.csv Generate an interactive chart
+```
+
+and receive an interactive artifact that can be opened, previewed, referenced, and reused later.
+
+---
+
+## Core Design
+
+### 1. Each conversation turn is a runtime cell
+
+A user message is treated like a runtime cell.
+
+It may contain:
+
+- natural language requirements
+- slash-command skill invocation
+- file references through `@file`
+- references to previously generated artifacts
+
+The runtime cell can execute tools, call skills, and produce outputs.
+
+### 2. Runtime cells produce rich-display artifacts
+
+A cell output is not limited to text.
+
+It can produce:
+
+- interactive HTML
+- tables / dataframes
+- images
+- JSON
+- reports
+- charts
+- intermediate files used by later cells
+
+The desktop UI can show generated artifacts as output links and render rich HTML in a right-side preview panel.
+
+### 3. Artifacts become reusable context
+
+Generated artifacts are stored under a session-scoped directory:
+
+```text
+<workspace>/.agent-ui/<session-id>/
+```
+
+Artifacts can be referenced by later turns, allowing the user to continue exploration without manually managing files.
+
+Conceptually:
+
+```text
+turn A creates cleaned data
+turn B references cleaned data and creates a chart
+turn C references the chart/data and creates a report
+```
+
+### 4. Skills are reusable Python analysis functions
+
+A skill is a reusable capability. It should behave like a high-level analysis function.
+
+The model-facing instruction should stay simple. The user and model should not need to know the implementation details.
+
+For example, the model calls:
+
+```bash
+$HOME/.agent-ui/bin/agent-ui-skill-run \
+  --skill kline-chart \
+  --method kline \
+  --input "/absolute/path/to/input.csv"
+```
+
+The wrapper resolves the implementation, runs the script, records artifacts, and emits structured output metadata.
+
+### 5. The user explores through dialogue, not code
+
+The intended workflow is:
+
+```text
+User intent + referenced data/artifacts
+=> agent selects or runs a skill
+=> skill produces rich artifact
+=> user previews result
+=> user asks follow-up question or reuses output
+```
+
+The user does not have to write Python, import libraries, manage variables, or remember file paths.
+
+---
+
+## Current Capabilities
 
 ### Desktop Agent UI
 
-This repository adds a desktop UI under `apps/agent-ui`.
+The desktop UI under `apps/agent-ui` provides:
 
-The desktop UI is designed around long-running coding sessions and agent workflows:
+- multi-session project sidebar
+- stream-json REPL process management
+- session-scoped runtime environment
+- slash-command input
+- local `@file` reference injection
+- output links
+- right-side artifact preview
+- HTML iframe preview for interactive artifacts
+- debug view for agent turns
 
-- Multi-session desktop interface
-- Project/session sidebar
-- Claude Code stream-json REPL bridge
-- Process lifecycle management for agent sessions
-- Runtime status and debug inspection
-- Local `@file` reference injection
-- Slash-command skill entry
-- Rich artifact preview panel
+### Skill Artifact Runtime
 
-### Jupyter-like skill artifacts
+The skill artifact flow currently supports:
 
-Astromere Agent adds a skill/artifact workflow inspired by notebooks:
+- session-scoped artifact directories
+- `AGENT_UI_OUTPUT_DIR` injection
+- `agent-ui-skill-run` wrapper
+- `manifest.json` artifact records
+- output classification such as `rich_display/html`
+- clickable output links
+- interactive HTML preview
 
-- Type `/` to open slash commands
-- Select a skill such as `/kline-chart`
-- Reference local files with `@file`
-- Run skills through `agent-ui-skill-run`
-- Store generated artifacts under a session-scoped `.agent-ui/<session-id>/` directory
-- Record outputs in `manifest.json`
-- Render rich HTML artifacts in the desktop preview panel
-
-The skill wrapper captures generated files and emits a structured result block:
+The wrapper emits structured skill results:
 
 ```text
 AGENT_UI_SKILL_RUN_RESULT
@@ -68,7 +173,77 @@ outputs:
 - chart.html | rich_display/html
 ```
 
-The UI can expose output links and preview HTML artifacts on the right side of the desktop app.
+### DeepSeek Adaptation
+
+Astromere Agent also includes compatibility work for DeepSeek / Anthropic-compatible APIs:
+
+- provider configuration
+- runtime parameter guards
+- DeepSeek-compatible tool result handling
+- stream-json compatibility fixes
+- model-specific control message handling
+
+---
+
+## Example: K-line Chart Skill
+
+Input:
+
+```text
+/kline-chart @samples/kline_sample.csv Generate an interactive chart
+```
+
+Execution model:
+
+```text
+skill: kline-chart
+input: samples/kline_sample.csv
+intent: Generate an interactive K-line chart
+```
+
+Output:
+
+```text
+.agent-ui/<session-id>/kline-chart.xxx.html
+```
+
+The result is an interactive HTML artifact that can be opened in the desktop preview panel.
+
+---
+
+## Skill Design Principles
+
+A skill should hide implementation details from the user and from the model whenever possible.
+
+Recommended separation:
+
+```text
+SKILL.md
+  Describes when and how to invoke the skill wrapper.
+
+agent-ui-skill-run
+  Resolves the skill implementation.
+  Runs the script.
+  Captures outputs.
+  Writes manifest metadata.
+
+scripts/run.py
+  Performs the actual analysis or transformation.
+  Reads AGENT_UI_OUTPUT_DIR internally.
+  Writes artifacts.
+
+Agent UI
+  Displays output links.
+  Opens rich artifacts in preview.
+```
+
+The model-facing skill instruction should not ask the model to:
+
+- manage output directories
+- export environment variables
+- guess artifact paths
+- call internal scripts directly
+- decide low-level runtime details
 
 ---
 
@@ -76,33 +251,25 @@ The UI can expose output links and preview HTML artifacts on the right side of t
 
 ```text
 apps/
-  agent-ui/                 Desktop Agent UI
+  agent-ui/
     src/
-      app/App.tsx           Main React UI
-      tauri.ts              Tauri command bridge
+      app/App.tsx
+      tauri.ts
     src-tauri/
-      src/main.rs           Desktop backend / process manager
+      src/main.rs
     bin/
-      agent-ui-skill-run    Skill wrapper and artifact registrar
+      agent-ui-skill-run
 
 src/
-  services/api/             Model provider API layer
-  utils/model/              Model validation / compatibility logic
-  tools/                    Claude Code tool system
-  skills/                   Skill system support
+  services/api/
+  utils/model/
+  tools/
+  skills/
 ```
 
 ---
 
 ## Quick Start
-
-### Prerequisites
-
-- Bun
-- Node.js / npm
-- Rust toolchain
-- Tauri prerequisites for your platform
-- A valid API key for your configured model provider
 
 ### Install dependencies
 
@@ -110,7 +277,7 @@ src/
 bun install
 ```
 
-For the desktop app:
+For the desktop UI:
 
 ```bash
 cd apps/agent-ui
@@ -132,139 +299,19 @@ npm run tauri dev
 
 ---
 
-## Desktop Skill Flow
-
-A typical skill flow looks like this:
-
-```text
-/kline-chart @samples/kline_sample.csv Generate a chart
-```
-
-The UI sends the prompt plus local file reference context to the agent runtime.
-
-The model is expected to call the wrapper:
-
-```bash
-$HOME/.agent-ui/bin/agent-ui-skill-run \
-  --skill kline-chart \
-  --method kline \
-  --input "/absolute/path/to/input.csv"
-```
-
-The wrapper resolves the skill implementation, runs the skill script, captures generated files, updates `manifest.json`, and emits structured artifact metadata.
-
-Skill scripts should read `AGENT_UI_OUTPUT_DIR` internally and write artifacts into that directory. The model should not manually manage output directories.
-
----
-
-## Artifact Model
-
-Artifacts are session-scoped:
-
-```text
-<workspace>/.agent-ui/<session-id>/
-```
-
-Each skill run may create or update:
-
-```text
-manifest.json
-*.html
-*.csv
-*.json
-*.png
-...
-```
-
-The wrapper classifies outputs such as:
-
-```text
-rich_display/html
-rich_display/image
-artifact/table
-artifact/json
-artifact/file
-```
-
-HTML artifacts can be opened in the right-side preview panel through sandboxed iframe rendering.
-
----
-
-## Skill Design Principles
-
-A skill should keep runtime details out of the model-facing instructions.
-
-Recommended division of responsibility:
-
-- `SKILL.md` tells the model how to invoke the wrapper.
-- `agent-ui-skill-run` resolves the skill directory and records artifacts.
-- The skill script performs the actual business logic.
-- The script reads `AGENT_UI_OUTPUT_DIR` internally.
-- The UI displays published artifacts through links and preview panels.
-
-The model-facing skill instructions should not ask the model to manage output directories, export environment variables, or call implementation scripts directly.
-
----
-
-## DeepSeek Notes
-
-Astromere Agent includes provider compatibility work for DeepSeek-style Anthropic-compatible APIs.
-
-The goal is not just to switch an endpoint. The runtime needs to account for model-specific differences in:
-
-- Thinking / reasoning support
-- Tool result format
-- Unsupported parameters
-- Runtime control messages
-- Consecutive tool result merging
-- Error status propagation
-
----
-
-## Development Notes
-
-Useful commands:
-
-```bash
-# Frontend
-cd apps/agent-ui
-npm run dev
-
-# Tauri desktop
-npm run tauri dev
-
-# Rust backend check
-cd apps/agent-ui/src-tauri
-cargo check
-```
-
-For repository remotes, a common fork setup is:
-
-```bash
-git remote -v
-git remote set-url origin git@github.com:hy2014/astromere-agent.git
-git remote add upstream https://github.com/T-Lab-CUHKSZ/claude-code.git
-```
-
-Use `origin` for your fork and `upstream` to sync with the original fork source.
-
----
-
 ## Status
 
-This fork is experimental and research-oriented.
+Astromere Agent is experimental.
 
-Recently added:
+The current focus is:
 
-- Desktop Agent UI
-- Session-scoped agent runtime
-- UUID-backed session IDs
-- Stream-json REPL process management
-- Skill artifact wrapper
-- Manifest-backed artifact outputs
-- HTML rich preview
-- Slash-command and `@file` input UX
-- DeepSeek compatibility work
+- conversational exploratory computing
+- Jupyter-like runtime cells
+- reusable skill functions
+- session-scoped artifacts
+- interactive rich display
+- DeepSeek-compatible agent runtime
+- desktop-first agent workflow
 
 ---
 
