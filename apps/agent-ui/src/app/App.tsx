@@ -4,6 +4,7 @@ import {
   addWorkspaceRegistryEntry,
   ensureAgentReplProcess,
   getAgentPermissionState,
+  getAgentReplCapabilities,
   getAgentReplProcessStatus,
   killAgentReplProcess,
   interruptAgentTurn,
@@ -26,6 +27,7 @@ import {
   setAgentPermissionMode,
   testModelConnection,
 } from "../tauri";
+import type { AgentReplCapabilityItem } from "../tauri";
 import type {
   AgentPermissionState,
   AgentReplStreamEvent,
@@ -143,7 +145,7 @@ type FileMentionState = {
   end: number;
 };
 
-type SlashCommandMenuLevel = "root" | "skills";
+type SlashCommandMenuLevel = "root" | "skills" | "commands";
 
 type SlashCommandMenuState = {
   active: boolean;
@@ -152,7 +154,8 @@ type SlashCommandMenuState = {
   start: number;
   end: number;
   selectedIndex: number;
-  skills: SkillSummary[];
+  skills: AgentReplCapabilityItem[];
+  commands: AgentReplCapabilityItem[];
   isLoadingSkills: boolean;
   error?: string;
 };
@@ -166,7 +169,7 @@ type SlashRootItem = {
 
 const slashRootItems: SlashRootItem[] = [
   { id: "skills", label: "Skills", description: "Use a project or user skill" },
-  { id: "commands", label: "Commands", description: "Built-in commands, coming soon", disabled: true },
+  { id: "commands", label: "Commands", description: "Built-in slash commands" },
   { id: "agents", label: "Agents", description: "Delegate to sub-agents, coming soon", disabled: true },
   { id: "workflows", label: "Workflows", description: "Run workflow templates, coming soon", disabled: true },
 ];
@@ -2222,6 +2225,7 @@ export function App() {
     end: 0,
     selectedIndex: 0,
     skills: [],
+    commands: [],
     isLoadingSkills: false,
   });
   const [isResolvingFileReferences, setIsResolvingFileReferences] = useState(false);
@@ -2235,16 +2239,18 @@ export function App() {
   const [activeView, setActiveView] = useState<AppView>("workspace");
   const [isRunningTurn, setIsRunningTurn] = useState(false);
   const [isInterruptingTurn, setIsInterruptingTurn] = useState(false);
-  const [pendingPermission, setPendingPermission] = useState<{
-    root: string;
-    sessionId: string;
-    messageId: string;
-    requestId: string;
-    prompt: string;
-    toolName?: string;
-    input?: unknown;
-    rawJson?: unknown;
-  } | null>(null);
+  const [pendingPermissions, setPendingPermissions] = useState<
+    Array<{
+      root: string;
+      sessionId: string;
+      messageId: string;
+      requestId: string;
+      prompt: string;
+      toolName?: string;
+      input?: unknown;
+      rawJson?: unknown;
+    }>
+  >([]);
   const [error, setError] = useState<string | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<string[]>([
     "deepseek-v4-flash",
@@ -2252,6 +2258,15 @@ export function App() {
   ]);
   const [selectedChatModel, setSelectedChatModel] =
     useState<string>("deepseek-v4-flash");
+
+  const promptImeStateRef = useRef({
+    isComposing: false,
+    blockSubmitUntil: 0,
+  });
+
+  const pendingPermission = activeSessionId
+    ? (pendingPermissions.find((permission) => permission.sessionId === activeSessionId) ?? null)
+    : null;
 
   const activePreview =
     previewTabs.find((tab) => tab.id === activePreviewId) ??
@@ -2273,6 +2288,44 @@ export function App() {
     !pendingPermission &&
     !isResolvingFileReferences,
   );
+
+  function enqueuePendingPermission(permission: (typeof pendingPermissions)[number]) {
+    if (!permission.requestId) {
+      return;
+    }
+
+    setPendingPermissions((current) => {
+      const existingIndex = current.findIndex(
+        (item) =>
+          item.sessionId === permission.sessionId &&
+          item.requestId === permission.requestId,
+      );
+
+      if (existingIndex >= 0) {
+        const next = current.slice();
+        next[existingIndex] = permission;
+        return next;
+      }
+
+      return [...current, permission];
+    });
+  }
+
+  function removePendingPermission(sessionId: string, requestId: string) {
+    setPendingPermissions((current) =>
+      current.filter(
+        (permission) =>
+          permission.sessionId !== sessionId ||
+          permission.requestId !== requestId,
+      ),
+    );
+  }
+
+  function clearPendingPermissionsForSession(sessionId: string) {
+    setPendingPermissions((current) =>
+      current.filter((permission) => permission.sessionId !== sessionId),
+    );
+  }
   const promptSkillToken = useMemo(() => extractPromptSkillToken(prompt), [prompt]);
   const slashRootOptions = useMemo(() => {
     const query = slashCommandMenu.query.trim().toLowerCase();
@@ -2281,17 +2334,31 @@ export function App() {
       `${item.label} ${item.description} ${item.id}`.toLowerCase().includes(query),
     );
   }, [slashCommandMenu.query]);
-  const slashSkillOptions = useMemo(() => {
+  const filterCapabilityItems = (items: AgentReplCapabilityItem[]) => {
     const query = slashCommandMenu.query.trim().toLowerCase();
-    return slashCommandMenu.skills.filter((skill) => {
+    return items.filter((item) => {
       if (!query) return true;
-      return [skill.name, skill.description, skill.whenToUse]
+      return [item.name, item.slash, item.description]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(query);
     });
-  }, [slashCommandMenu.query, slashCommandMenu.skills]);
+  };
+  const slashSkillOptions = useMemo(
+    () => filterCapabilityItems(slashCommandMenu.skills),
+    [slashCommandMenu.query, slashCommandMenu.skills],
+  );
+  const slashCommandOptions = useMemo(
+    () => filterCapabilityItems(slashCommandMenu.commands),
+    [slashCommandMenu.query, slashCommandMenu.commands],
+  );
+  const slashLeafOptions = slashCommandMenu.level === "commands" ? slashCommandOptions : slashSkillOptions;
+  const slashLeafTitle = slashCommandMenu.level === "commands" ? "Commands" : "Skills";
+  const slashLeafDescription =
+    slashCommandMenu.level === "commands" ? "选择后插入 /command" : "选择后插入 /skill-name";
+  const slashLeafEmptyText =
+    slashCommandMenu.level === "commands" ? "没有可用 command" : "没有可用 skill";
 
   const activeSessionTitle = useMemo(() => {
     for (const folder of projects) {
@@ -2420,18 +2487,28 @@ export function App() {
 
 
 
-  // load skills for slash command menu
+  // Load slash commands and skills from the current runtime process.
   useEffect(() => {
-    if (!slashCommandMenu.active || slashCommandMenu.level !== "skills" || !activeProject) return;
+    if (
+      !slashCommandMenu.active ||
+      (slashCommandMenu.level !== "skills" && slashCommandMenu.level !== "commands") ||
+      !activeProject ||
+      !activeSessionId
+    ) {
+      return;
+    }
 
     let cancelled = false;
     setSlashCommandMenu((current) => ({ ...current, isLoadingSkills: true, error: undefined }));
-    listSkills(activeProject.root)
-      .then((report) => {
+
+    ensureAgentReplProcess(activeProject.root, activeSessionId, selectedChatModel, permissionState?.permissionMode ?? "workspace-write")
+      .then((state) => getAgentReplCapabilities(activeProject.root, state.sessionId || activeSessionId))
+      .then((capabilities) => {
         if (cancelled) return;
         setSlashCommandMenu((current) => ({
           ...current,
-          skills: report.skills ?? [],
+          commands: capabilities.commands ?? [],
+          skills: capabilities.skills ?? [],
           selectedIndex: 0,
           isLoadingSkills: false,
         }));
@@ -2440,16 +2517,24 @@ export function App() {
         if (cancelled) return;
         setSlashCommandMenu((current) => ({
           ...current,
+          commands: [],
           skills: [],
           selectedIndex: 0,
           isLoadingSkills: false,
           error: String(reason),
         }));
       });
+
     return () => {
       cancelled = true;
     };
-  }, [slashCommandMenu.active, slashCommandMenu.level, activeProject?.root]);
+  }, [
+    slashCommandMenu.active,
+    slashCommandMenu.level,
+    activeProject?.root,
+    activeSessionId,
+    selectedChatModel,
+  ]);
 
   useEffect(() => {
     if (!fileMention.active || !activeProject) {
@@ -2536,7 +2621,8 @@ export function App() {
         const promptText = String(
           event.payload.prompt ?? `${toolName} requests permission`,
         );
-        setPendingPermission({
+
+        enqueuePendingPermission({
           root: event.root,
           sessionId: event.sessionId,
           messageId: `permission:${event.sessionId}:${requestId || Date.now()}`,
@@ -2545,31 +2631,6 @@ export function App() {
           toolName,
           input,
           rawJson: event.payload.raw_json ?? event.payload,
-        });
-        setIsRunningTurn(false);
-      }
-
-      if (event.eventType === "permission_request") {
-        const requestId = String(
-          event.payload.requestId ?? event.payload.request_id ?? "",
-        );
-        const toolName = String(
-          event.payload.toolName ?? event.payload.tool_name ?? "tool",
-        );
-        const input = event.payload.input;
-        const rawJson = event.payload.raw_json ?? event.payload;
-        const promptText = String(
-          event.payload.prompt ?? `${toolName} requests permission`,
-        );
-        setPendingPermission({
-          root: event.root,
-          sessionId: event.sessionId,
-          messageId: `permission:${event.sessionId}:${requestId}`,
-          requestId,
-          prompt: promptText,
-          toolName,
-          input,
-          rawJson,
         });
         setIsRunningTurn(false);
       }
@@ -2651,7 +2712,7 @@ export function App() {
         event.eventType === "process_exit"
       ) {
         setIsRunningTurn(false);
-        setPendingPermission(null);
+        clearPendingPermissionsForSession(event.sessionId);
       }
 
       if (event.eventType === "process_exit") {
@@ -2697,7 +2758,7 @@ export function App() {
           detail.includes("missing_credentials")
         ) {
           setIsRunningTurn(false);
-          setPendingPermission(null);
+          clearPendingPermissionsForSession(event.sessionId);
         }
       }
     })
@@ -3276,18 +3337,18 @@ export function App() {
 
   function selectSlashRootItem(item: SlashRootItem) {
     if (item.disabled) return;
-    if (item.id === "skills") {
+    if (item.id === "skills" || item.id === "commands") {
       setSlashCommandMenu((current) => ({
         ...current,
-        level: "skills",
+        level: item.id,
         query: "",
         selectedIndex: 0,
       }));
     }
   }
 
-  function selectSlashSkill(skill: SkillSummary) {
-    const insertion = `/${skill.name} `;
+  function selectSlashItem(item: AgentReplCapabilityItem) {
+    const insertion = `${item.slash || `/${item.name}`} `;
     const nextPrompt = `${prompt.slice(0, slashCommandMenu.start)}${insertion}${prompt.slice(slashCommandMenu.end)}`;
     const nextCursor = slashCommandMenu.start + insertion.length;
     setPrompt(nextPrompt);
@@ -3436,13 +3497,14 @@ export function App() {
       activeProject.root,
       targetSessionId,
       selectedChatModel,
+      permissionState?.permissionMode ?? "workspace-write",
     )
       .then(() =>
         sendAgentReplInput(activeProject.root, targetSessionId, inputForClaude),
       )
       .catch((reason) => {
         setError(String(reason));
-        setPendingPermission(null);
+        clearPendingPermissionsForSession(targetSessionId);
         updateSessionStream(targetSessionId, (items) =>
           items.map((item) =>
             item.id === pendingId && item.kind === "message"
@@ -3464,7 +3526,7 @@ export function App() {
     }
     const target = pendingPermission;
     setError(null);
-    setPendingPermission(null);
+    removePendingPermission(target.sessionId, target.requestId);
     setCopyToast(`${approved ? "已允许" : "已拒绝"} ${target.toolName ?? "tool"}`);
     window.setTimeout(() => setCopyToast(null), 1600);
     setIsRunningTurn(true);
@@ -3475,7 +3537,7 @@ export function App() {
       approved,
     ).catch((reason) => {
       setError(String(reason));
-      setPendingPermission(target);
+      enqueuePendingPermission(target);
       setIsRunningTurn(false);
     });
   }
@@ -3485,12 +3547,14 @@ export function App() {
       return;
     }
     setIsInterruptingTurn(true);
-    interruptAgentTurn()
+    interruptAgentTurn(activeProject?.root ?? "", activeSessionId ?? "")
       .catch((reason) => {
         setError(String(reason));
       })
       .finally(() => {
-        setPendingPermission(null);
+        if (activeSessionId) {
+          clearPendingPermissionsForSession(activeSessionId);
+        }
         setIsInterruptingTurn(false);
       });
   }
@@ -3508,14 +3572,68 @@ export function App() {
       });
   }
 
+  function markPromptImeActive(blockMs = 350) {
+    promptImeStateRef.current.blockSubmitUntil = Math.max(
+      promptImeStateRef.current.blockSubmitUntil,
+      performance.now() + blockMs,
+    );
+  }
+
+  function isPromptSubmitBlockedByIme() {
+    return (
+      promptImeStateRef.current.isComposing ||
+      performance.now() < promptImeStateRef.current.blockSubmitUntil
+    );
+  }
+
+  function isPromptImeKeyEvent(event: KeyboardEvent<HTMLTextAreaElement>) {
+    const nativeEvent = event.nativeEvent as globalThis.KeyboardEvent & {
+      isComposing?: boolean;
+      keyCode?: number;
+      which?: number;
+    };
+
+    return (
+      promptImeStateRef.current.isComposing ||
+      nativeEvent.isComposing === true ||
+      nativeEvent.keyCode === 229 ||
+      nativeEvent.which === 229 ||
+      event.key === "Process"
+    );
+  }
+
   function handlePromptSubmit(event: FormEvent) {
     event.preventDefault();
+
+    if (isPromptSubmitBlockedByIme()) {
+      return;
+    }
+
     submitPrompt();
   }
 
   function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    const isPlainEnter =
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey;
+
+    if (isPlainEnter) {
+      if (isPromptImeKeyEvent(event)) {
+        return;
+      }
+
+      if (isPromptSubmitBlockedByIme()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
+
     if (slashCommandMenu.active) {
-      const options = slashCommandMenu.level === "root" ? slashRootOptions : slashSkillOptions;
+      const options = slashCommandMenu.level === "root" ? slashRootOptions : slashLeafOptions;
       if (event.key === "ArrowDown") {
         event.preventDefault();
         setSlashCommandMenu((current) => ({
@@ -3534,7 +3652,7 @@ export function App() {
           event.preventDefault();
           const selected = options[Math.min(slashCommandMenu.selectedIndex, options.length - 1)];
           if (slashCommandMenu.level === "root") selectSlashRootItem(selected as SlashRootItem);
-          else selectSlashSkill(selected as SkillSummary);
+          else selectSlashItem(selected as AgentReplCapabilityItem);
           return;
         }
       }
@@ -3578,6 +3696,7 @@ export function App() {
     ) {
       return;
     }
+
     event.preventDefault();
     submitPrompt();
   }
@@ -4219,6 +4338,44 @@ export function App() {
                       event.currentTarget.selectionStart ?? event.currentTarget.value.length,
                     )
                   }
+                  onCompositionStart={() => {
+                    promptImeStateRef.current.isComposing = true;
+                    markPromptImeActive(1000);
+                  }}
+                  onCompositionUpdate={() => {
+                    promptImeStateRef.current.isComposing = true;
+                    markPromptImeActive(1000);
+                  }}
+                  onCompositionEnd={() => {
+                    promptImeStateRef.current.isComposing = false;
+                    markPromptImeActive(350);
+                  }}
+                  onBeforeInput={(event) => {
+                    const nativeEvent = event.nativeEvent as Event & {
+                      isComposing?: boolean;
+                      inputType?: string;
+                    };
+
+                    if (
+                      nativeEvent.isComposing === true ||
+                      nativeEvent.inputType === "insertCompositionText"
+                    ) {
+                      markPromptImeActive(1000);
+                    }
+                  }}
+                  onInput={(event) => {
+                    const nativeEvent = event.nativeEvent as Event & {
+                      isComposing?: boolean;
+                      inputType?: string;
+                    };
+
+                    if (
+                      nativeEvent.isComposing !== true &&
+                      nativeEvent.inputType !== "insertCompositionText"
+                    ) {
+                      promptImeStateRef.current.isComposing = false;
+                    }
+                  }}
                   onClick={(event) => {
                     const cursor = event.currentTarget.selectionStart ?? event.currentTarget.value.length;
                     updateFileMentionFromInput(event.currentTarget.value, cursor);
@@ -4295,8 +4452,8 @@ export function App() {
                           >
                             ←
                           </button>
-                          <span>Skills</span>
-                          <small>选择后插入 /skill-name</small>
+                          <span>{slashLeafTitle}</span>
+                          <small>{slashLeafDescription}</small>
                         </>
                       )}
                     </div>
@@ -4319,29 +4476,29 @@ export function App() {
                         </button>
                       ))
                     ) : slashCommandMenu.isLoadingSkills ? (
-                      <div className="slash-command-empty">加载 skills 中…</div>
+                      <div className="slash-command-empty">加载 {slashLeafTitle.toLowerCase()} 中…</div>
                     ) : slashCommandMenu.error ? (
                       <div className="slash-command-empty">加载失败：{slashCommandMenu.error}</div>
-                    ) : slashSkillOptions.length > 0 ? (
-                      slashSkillOptions.map((skill, index) => (
+                    ) : slashLeafOptions.length > 0 ? (
+                      slashLeafOptions.map((skill, index) => (
                         <button
-                          key={skill.id ?? skill.name}
+                          key={skill.slash || skill.name}
                           type="button"
                           role="option"
                           aria-selected={index === slashCommandMenu.selectedIndex}
                           className={`slash-command-option skill ${index === slashCommandMenu.selectedIndex ? "active" : ""}`}
                           onMouseDown={(event) => {
                             event.preventDefault();
-                            selectSlashSkill(skill);
+                            selectSlashItem(skill);
                           }}
                         >
                           <span className="slash-command-icon skill" aria-hidden="true">/</span>
-                          <span><strong>{skill.name}</strong><small>{skill.description || "No description"}</small></span>
-                          <em>{skill.source?.label ?? skill.origin?.label ?? "Skill"}</em>
+                          <span><strong>{skill.slash || `/${skill.name}`}</strong><small>{skill.description || "No description"}</small></span>
+                          <em>{skill.kind === "skill" ? "Skill" : "Command"}</em>
                         </button>
                       ))
                     ) : (
-                      <div className="slash-command-empty">没有可用 skill</div>
+                      <div className="slash-command-empty">{slashLeafEmptyText}</div>
                     )}
                   </div>
                 ) : null}

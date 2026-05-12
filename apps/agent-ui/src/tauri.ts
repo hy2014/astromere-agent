@@ -25,6 +25,22 @@ import type {
   WorkspaceRegistry,
 } from "./types";
 
+export type AgentReplCapabilityItem = {
+  name: string;
+  slash: string;
+  kind: "command" | "skill" | string;
+  description?: string | null;
+};
+
+export type AgentReplCapabilities = {
+  root: string;
+  sessionId: string;
+  commands: AgentReplCapabilityItem[];
+  skills: AgentReplCapabilityItem[];
+  slashCommands: AgentReplCapabilityItem[];
+  updatedAtMs: number;
+};
+
 export function getDefaultWorkspace(): Promise<WorkspaceState> {
   return invoke("default_workspace");
 }
@@ -135,8 +151,8 @@ export function testModelConnection(settings: ModelSettings): Promise<ModelConne
   return invoke("test_model_connection", { settings });
 }
 
-export function interruptAgentTurn(): Promise<boolean> {
-  return invoke("interrupt_agent_turn");
+export function interruptAgentTurn(root: string, sessionId: string): Promise<boolean> {
+  return invoke("interrupt_agent_turn", { root, sessionId });
 }
 
 export function getAgentReplProcessStatus(root: string, sessionId: string): Promise<AgentReplProcessStatus> {
@@ -168,8 +184,16 @@ export function ensureAgentReplProcess(
   root: string,
   sessionId: string,
   modelOverride?: string,
+  permissionMode?: PermissionMode,
 ): Promise<AgentReplProcessState> {
-  return invoke("ensure_agent_repl_process", { root, sessionId, modelOverride });
+  return invoke("ensure_agent_repl_process", { root, sessionId, modelOverride, permissionMode });
+}
+
+export function getAgentReplCapabilities(
+  root: string,
+  sessionId: string,
+): Promise<AgentReplCapabilities> {
+  return invoke("get_agent_repl_capabilities", { root, sessionId });
 }
 
 export function sendAgentReplInput(

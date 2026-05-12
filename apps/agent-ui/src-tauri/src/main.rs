@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
 #[derive(Debug, Serialize)]
@@ -178,6 +178,27 @@ struct AgentReplProcessStatus {
     pid: Option<u32>,
 }
 
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AgentReplCapabilityItem {
+    name: String,
+    slash: String,
+    kind: String,
+    description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AgentReplCapabilities {
+    root: String,
+    session_id: String,
+    commands: Vec<AgentReplCapabilityItem>,
+    skills: Vec<AgentReplCapabilityItem>,
+    slash_commands: Vec<AgentReplCapabilityItem>,
+    updated_at_ms: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct GrepRuntimeRequest {
     pattern: String,
@@ -214,10 +235,191 @@ struct ClawProcess {
     child: Child,
 }
 
+
+struct ControlResponseRegistry {
+    responses: Mutex<HashMap<String, Value>>,
+    condvar: Condvar,
+}
+
 static CLAW_PROCESSES: OnceLock<Mutex<HashMap<String, ClawProcess>>> = OnceLock::new();
+static CONTROL_RESPONSES: OnceLock<ControlResponseRegistry> = OnceLock::new();
 
 fn claw_processes() -> &'static Mutex<HashMap<String, ClawProcess>> {
     CLAW_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+
+fn control_responses() -> &'static ControlResponseRegistry {
+    CONTROL_RESPONSES.get_or_init(|| ControlResponseRegistry {
+        responses: Mutex::new(HashMap::new()),
+        condvar: Condvar::new(),
+    })
+}
+
+fn control_response_request_id(value: &Value) -> Option<String> {
+    value
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("request_id"))
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("response"))
+                .and_then(|response| response.get("request_id"))
+                .and_then(|v| v.as_str())
+        })
+        .filter(|request_id| !request_id.trim().is_empty())
+        .map(|request_id| request_id.to_string())
+}
+
+fn remember_control_response(value: &Value) {
+    if value.get("type").and_then(|v| v.as_str()) != Some("control_response") {
+        return;
+    }
+
+    let Some(request_id) = control_response_request_id(value) else {
+        return;
+    };
+
+    let registry = control_responses();
+    if let Ok(mut responses) = registry.responses.lock() {
+        responses.insert(request_id, value.clone());
+        registry.condvar.notify_all();
+    }
+}
+
+fn wait_for_control_response(request_id: &str, timeout: Duration) -> Result<Value, String> {
+    let registry = control_responses();
+    let deadline = Instant::now() + timeout;
+    let mut responses = registry.responses.lock().map_err(error_to_string)?;
+
+    loop {
+        if let Some(response) = responses.remove(request_id) {
+            return Ok(response);
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(format!("Timed out waiting for control response {request_id}"));
+        }
+
+        let wait_for = deadline.saturating_duration_since(now);
+        let (next_responses, wait_result) = registry
+            .condvar
+            .wait_timeout(responses, wait_for)
+            .map_err(error_to_string)?;
+        responses = next_responses;
+
+        if wait_result.timed_out() {
+            return Err(format!("Timed out waiting for control response {request_id}"));
+        }
+    }
+}
+
+fn capability_item_from_value(value: &Value, fallback_kind: &str) -> Option<AgentReplCapabilityItem> {
+    if let Some(name) = value.as_str() {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        return Some(AgentReplCapabilityItem {
+            name: name.to_string(),
+            slash: format!("/{name}"),
+            kind: fallback_kind.to_string(),
+            description: None,
+        });
+    }
+
+    let object = value.as_object()?;
+    let name = object
+        .get("name")
+        .or_else(|| object.get("command"))
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().trim_start_matches('/').to_string())
+        .filter(|v| !v.is_empty())?;
+
+    let slash = object
+        .get("slash")
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| format!("/{name}"));
+
+    let kind = object
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| fallback_kind.to_string());
+
+    let description = object
+        .get("description")
+        .or_else(|| object.get("summary"))
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+
+    Some(AgentReplCapabilityItem {
+        name,
+        slash,
+        kind,
+        description,
+    })
+}
+
+fn capability_items_from_value(value: Option<&Value>, fallback_kind: &str) -> Vec<AgentReplCapabilityItem> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| capability_item_from_value(item, fallback_kind))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn capabilities_from_control_response(
+    root: &str,
+    session_id: &str,
+    value: &Value,
+) -> Result<AgentReplCapabilities, String> {
+    let capabilities = value
+        .pointer("/response/capabilities")
+        .or_else(|| value.pointer("/response/response/capabilities"))
+        .ok_or_else(|| format!("Control response did not include capabilities: {value}"))?;
+
+    let commands = capability_items_from_value(capabilities.get("commands"), "command");
+    let skills = capability_items_from_value(capabilities.get("skills"), "skill");
+
+    let slash_commands = capability_items_from_value(
+        capabilities
+            .get("slashCommands")
+            .or_else(|| capabilities.get("slash_commands")),
+        "command",
+    );
+
+    let slash_commands = if slash_commands.is_empty() {
+        commands
+            .iter()
+            .cloned()
+            .chain(skills.iter().cloned())
+            .collect()
+    } else {
+        slash_commands
+    };
+
+    Ok(AgentReplCapabilities {
+        root: root.to_string(),
+        session_id: session_id.to_string(),
+        commands,
+        skills,
+        slash_commands,
+        updated_at_ms: now_millis() as u64,
+    })
 }
 
 fn process_key(root: &str, session_id: &str) -> String {
@@ -354,8 +556,61 @@ fn get_agent_permission_state() -> Result<AgentPermissionState, String> {
 }
 
 #[tauri::command]
-fn interrupt_agent_turn() -> Result<bool, String> {
-    Ok(false)
+fn interrupt_agent_turn(
+    app: tauri::AppHandle,
+    root: String,
+    session_id: String,
+) -> Result<bool, String> {
+    let request_id = format!("agent-ui-interrupt-{}", now_millis());
+    let request = json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "interrupt"
+        }
+    });
+
+    let key = process_key(&root, &session_id);
+    let mut processes = claw_processes().lock().map_err(error_to_string)?;
+
+    let proc_state = if processes.contains_key(&key) {
+        processes.get_mut(&key)
+    } else {
+        processes
+            .iter_mut()
+            .find(|(_, candidate)| candidate.root == root)
+            .map(|(_, candidate)| candidate)
+    };
+
+    match proc_state {
+        Some(proc_state) => {
+            let line = serde_json::to_string(&request).map_err(error_to_string)?;
+            writeln!(proc_state.stdin, "{line}").map_err(error_to_string)?;
+            proc_state.stdin.flush().map_err(error_to_string)?;
+            let _ = app.emit("agent-repl-event", json!({
+                "sessionId": session_id,
+                "root": root,
+                "eventType": "interrupt",
+                "payload": {
+                    "ok": true,
+                    "text": "Interrupt signal sent"
+                }
+            }));
+            Ok(true)
+        }
+        None => {
+            let _ = app.emit("agent-repl-event", json!({
+                "sessionId": session_id,
+                "root": root,
+                "eventType": "interrupt",
+                "payload": {
+                    "ok": false,
+                    "text": "No running process to interrupt"
+                }
+            }));
+            Ok(false)
+        }
+    }
 }
 
 #[tauri::command]
@@ -421,8 +676,11 @@ fn respond_agent_permission(
     }
     .ok_or_else(|| "REPL process is not running for permission response".to_string())?;
 
-    writeln!(proc_state.stdin, "{line}").map_err(error_to_string)?;
+    eprintln!("[DEBUG] respond_agent_permission: root={}, session={}, request={}, approved={}", root, session_id, request_id, approved);
+    eprintln!("[DEBUG] response line: {}", line);
+    writeln!(proc_state.stdin, "{}", line).map_err(error_to_string)?;
     proc_state.stdin.flush().map_err(error_to_string)?;
+    eprintln!("[DEBUG] response written and flushed");
 
     Ok(AgentReplSendResult { accepted: true })
 }
@@ -1585,7 +1843,11 @@ fn ensure_agent_repl_process(
     root: String,
     session_id: String,
     model_override: Option<String>,
+    permission_mode: Option<String>,
 ) -> Result<AgentReplProcessState, String> {
+    let permission_mode =
+        normalize_permission_mode(permission_mode.as_deref().unwrap_or("workspace-write"))?
+            .to_string();
     let root_path = canonical_workspace_root(&root)?;
     let repo = repo_root()?;
     let settings = load_model_settings().unwrap_or_else(|_| default_model_settings());
@@ -1631,7 +1893,7 @@ fn ensure_agent_repl_process(
                         session_id,
                         root,
                         model,
-                        permission_mode: "workspace-write".to_string(),
+                        permission_mode: permission_mode.clone(),
                     });
                 }
                 Some(status) => {
@@ -1757,7 +2019,7 @@ fn ensure_agent_repl_process(
         session_id,
         root,
         model,
-        permission_mode: "workspace-write".to_string(),
+        permission_mode: permission_mode.clone(),
     })
 }
 
@@ -1810,10 +2072,45 @@ fn send_agent_repl_input(
     });
 
     let line = serde_json::to_string(&message).map_err(error_to_string)?;
-    writeln!(proc_state.stdin, "{line}").map_err(error_to_string)?;
+    writeln!(proc_state.stdin, "{}", line).map_err(error_to_string)?;
     proc_state.stdin.flush().map_err(error_to_string)?;
 
     Ok(AgentReplSendResult { accepted: true })
+}
+
+
+#[tauri::command]
+fn get_agent_repl_capabilities(root: String, session_id: String) -> Result<AgentReplCapabilities, String> {
+    let request_id = format!("agent-ui-capabilities-{}", now_millis());
+    let request = json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "get_capabilities"
+        }
+    });
+
+    {
+        let registry = control_responses();
+        let mut responses = registry.responses.lock().map_err(error_to_string)?;
+        responses.remove(&request_id);
+    }
+
+    let line = serde_json::to_string(&request).map_err(error_to_string)?;
+    let key = process_key(&root, &session_id);
+
+    {
+        let mut processes = claw_processes().lock().map_err(error_to_string)?;
+        let proc_state = processes
+            .get_mut(&key)
+            .ok_or_else(|| "REPL process is not running".to_string())?;
+
+        writeln!(proc_state.stdin, "{line}").map_err(error_to_string)?;
+        proc_state.stdin.flush().map_err(error_to_string)?;
+    }
+
+    let response = wait_for_control_response(&request_id, Duration::from_secs(5))?;
+    capabilities_from_control_response(&root, &session_id, &response)
 }
 
 #[tauri::command]
@@ -1929,6 +2226,8 @@ fn spawn_repl_stdout_reader(
                     continue;
                 }
             };
+
+            remember_control_response(&value);
 
             let _ = app.emit("agent-repl-event", json!({
                 "sessionId": event_session_id,
@@ -2816,6 +3115,7 @@ fn main() {
             respond_agent_permission,
             set_agent_permission_mode,
             ensure_agent_repl_process,
+            get_agent_repl_capabilities,
             send_agent_repl_input,
             run_agent_turn
         ])
