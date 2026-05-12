@@ -2761,6 +2761,71 @@ function runHeadlessStreaming(
     })
   }
 
+  type AgentUiSlashCommandCapability = {
+    name: string
+    slash: string
+    kind: 'command' | 'skill'
+    description: string
+    argumentHint: string
+    source?: string
+    loadedFrom?: string
+  }
+
+  function isAgentUiSkillCommand(cmd: Command): boolean {
+    return (
+      cmd.type === 'prompt' &&
+      (cmd.loadedFrom === 'skills' ||
+        cmd.loadedFrom === 'bundled' ||
+        Boolean(cmd.skillRoot))
+    )
+  }
+
+  function agentUiCommandSource(cmd: Command): string | undefined {
+    if (cmd.loadedFrom) {
+      return cmd.loadedFrom
+    }
+    return cmd.type === 'prompt' ? cmd.source : undefined
+  }
+
+  function toAgentUiSlashCapability(
+    cmd: Command,
+    kind: 'command' | 'skill',
+  ): AgentUiSlashCommandCapability {
+    const name = getCommandName(cmd)
+    return {
+      name,
+      slash: `/${name}`,
+      kind,
+      description: formatDescriptionWithSource(cmd),
+      argumentHint: cmd.argumentHint || '',
+      source: agentUiCommandSource(cmd),
+      loadedFrom: cmd.loadedFrom,
+    }
+  }
+
+  function buildAgentUiCapabilities(commands: Command[]) {
+    const userInvocable = uniqBy(
+      commands.filter(cmd => cmd.userInvocable !== false),
+      cmd => getCommandName(cmd),
+    )
+
+    const skills = userInvocable
+      .filter(isAgentUiSkillCommand)
+      .map(cmd => toAgentUiSlashCapability(cmd, 'skill'))
+
+    const nonSkillCommands = userInvocable
+      .filter(cmd => !isAgentUiSkillCommand(cmd))
+      .map(cmd => toAgentUiSlashCapability(cmd, 'command'))
+
+    return {
+      commands: nonSkillCommands,
+      skills,
+      slashCommands: [...nonSkillCommands, ...skills].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      ),
+    }
+  }
+
   // Handle unexpected permission responses by looking up the unresolved tool
   // call in the transcript and executing it
   const handledOrphanedToolUseIds = new Set<string>()
@@ -3062,6 +3127,13 @@ function runHeadlessStreaming(
           if (sdkServersChanged) {
             void updateSdkMcp()
           }
+        } else if (
+          (message.request as { subtype?: string }).subtype ===
+          'get_capabilities'
+        ) {
+          sendControlResponseSuccess(message, {
+            capabilities: buildAgentUiCapabilities(currentCommands),
+          })
         } else if (message.request.subtype === 'reload_plugins') {
           try {
             if (

@@ -412,6 +412,16 @@ export const SDKControlReloadPluginsRequestSchema = lazySchema(() =>
     ),
 )
 
+export const SDKControlGetCapabilitiesRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('get_capabilities'),
+    })
+    .describe(
+      'Returns the current runtime-visible slash commands and skills.',
+    ),
+)
+
 export const SDKControlReloadPluginsResponseSchema = lazySchema(() =>
   z
     .object({
@@ -566,6 +576,7 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     SDKControlSeedReadStateRequestSchema(),
     SDKControlMcpSetServersRequestSchema(),
     SDKControlReloadPluginsRequestSchema(),
+    SDKControlGetCapabilitiesRequestSchema(),
     SDKControlMcpReconnectRequestSchema(),
     SDKControlMcpToggleRequestSchema(),
     SDKControlStopTaskRequestSchema(),
