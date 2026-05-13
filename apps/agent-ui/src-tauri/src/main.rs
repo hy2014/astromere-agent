@@ -1837,6 +1837,109 @@ fn test_model_connection(settings: ModelSettings) -> Result<ModelConnectionTestR
     })
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpToolConfig {
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    parameters: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpServerConfig {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default, rename = "type")]
+    server_type: Option<String>,
+    command: String,
+    #[serde(default)]
+    args: Option<Vec<String>>,
+    #[serde(default)]
+    env: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    tools: Vec<McpToolConfig>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpSettings {
+    #[serde(default)]
+    mcp_servers: std::collections::BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpSettingsFile {
+    path: String,
+    settings: McpSettings,
+}
+
+fn default_mcp_settings() -> McpSettings {
+    McpSettings {
+        mcp_servers: std::collections::BTreeMap::new(),
+    }
+}
+
+fn astromere_mcp_config_path() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "failed to resolve home directory for MCP settings".to_string())?;
+
+    Ok(PathBuf::from(home)
+        .join(".claude")
+        .join("astromere")
+        .join("mcp.json"))
+}
+
+#[tauri::command]
+fn load_mcp_settings() -> Result<McpSettingsFile, String> {
+    let path = astromere_mcp_config_path()?;
+
+    if !path.is_file() {
+        return Ok(McpSettingsFile {
+            path: path.to_string_lossy().to_string(),
+            settings: default_mcp_settings(),
+        });
+    }
+
+    let raw = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read MCP settings {}: {error}", path.display()))?;
+
+    let settings = serde_json::from_str::<McpSettings>(&raw)
+        .map_err(|error| format!("failed to parse MCP settings {}: {error}", path.display()))?;
+
+    Ok(McpSettingsFile {
+        path: path.to_string_lossy().to_string(),
+        settings,
+    })
+}
+
+#[tauri::command]
+fn save_mcp_settings(settings: McpSettings) -> Result<McpSettingsFile, String> {
+    let path = astromere_mcp_config_path()?;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create MCP settings dir {}: {error}", parent.display()))?;
+    }
+
+    let raw = serde_json::to_string_pretty(&settings)
+        .map_err(|error| format!("failed to serialize MCP settings: {error}"))?;
+
+    fs::write(&path, format!("{raw}\n"))
+        .map_err(|error| format!("failed to write MCP settings {}: {error}", path.display()))?;
+
+    Ok(McpSettingsFile {
+        path: path.to_string_lossy().to_string(),
+        settings,
+    })
+}
+
 #[tauri::command]
 fn ensure_agent_repl_process(
     app: tauri::AppHandle,
@@ -2592,6 +2695,10 @@ fn apply_agent_ui_env(
     command.env("AGENT_UI_SESSION_ID", effective_session_id);
     command.env("AGENT_UI_OUTPUT_DIR", output_dir.to_string_lossy().to_string());
 
+    if let Ok(mcp_config_path) = astromere_mcp_config_path() {
+        command.env("ASTROMERE_MCP_CONFIG", mcp_config_path.to_string_lossy().to_string());
+    }
+
     if let Ok(home) = std::env::var("HOME") {
         let helper_bin = PathBuf::from(home).join(".agent-ui").join("bin");
         let helper_bin_str = helper_bin.to_string_lossy().to_string();
@@ -3107,6 +3214,8 @@ fn main() {
             read_git_diff,
             load_model_settings,
             save_model_settings,
+            load_mcp_settings,
+            save_mcp_settings,
             test_model_connection,
             get_agent_permission_state,
             interrupt_agent_turn,

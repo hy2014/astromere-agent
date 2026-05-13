@@ -180,6 +180,31 @@ export type AgentReplStreamEvent = {
   payload: Record<string, unknown>;
 };
 
+export type McpToolConfig = {
+  name: string;
+  description?: string | null;
+  parameters: Record<string, unknown>;
+};
+
+export type McpServerConfig = {
+  enabled?: boolean;
+  type?: "stdio" | string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string | null;
+  tools: McpToolConfig[];
+};
+
+export type McpSettings = {
+  mcpServers: Record<string, McpServerConfig>;
+};
+
+export type McpSettingsFile = {
+  path: string;
+  settings: McpSettings;
+};
+
 export type ModelProvider = "deepseek" | "openai" | "anthropic";
 
 export type ModelEndpointConfig = {
