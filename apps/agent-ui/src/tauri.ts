@@ -14,6 +14,8 @@ import type {
   GitDiff,
   GrepRuntimeRequest,
   ModelConnectionTestResult,
+  McpSettings,
+  McpSettingsFile,
   ModelSettings,
   PermissionMode,
   ProjectEntry,
@@ -59,6 +61,14 @@ export function addWorkspaceRegistryEntry(path: string): Promise<WorkspaceRegist
 
 export function listProjectEntries(root: string): Promise<ProjectEntry[]> {
   return invoke("list_project_entries", { root });
+}
+
+export function loadMcpSettings(): Promise<McpSettingsFile> {
+  return invoke("load_mcp_settings");
+}
+
+export function saveMcpSettings(settings: McpSettings): Promise<McpSettingsFile> {
+  return invoke("save_mcp_settings", { settings });
 }
 
 export function listSkills(root: string): Promise<SkillsReport> {
