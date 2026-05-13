@@ -550,7 +550,7 @@ fn add_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, Strin
 #[tauri::command]
 fn get_agent_permission_state() -> Result<AgentPermissionState, String> {
     Ok(AgentPermissionState {
-        current_mode: "workspace-write".to_string(),
+        current_mode: "default".to_string(),
         available_modes: available_permission_modes(),
     })
 }
@@ -1949,7 +1949,7 @@ fn ensure_agent_repl_process(
     permission_mode: Option<String>,
 ) -> Result<AgentReplProcessState, String> {
     let permission_mode =
-        normalize_permission_mode(permission_mode.as_deref().unwrap_or("workspace-write"))?
+        normalize_permission_mode(permission_mode.as_deref().unwrap_or("default"))?
             .to_string();
     let root_path = canonical_workspace_root(&root)?;
     let repo = repo_root()?;
@@ -2037,8 +2037,9 @@ fn ensure_agent_repl_process(
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
+        .arg("--replay-user-messages")
         .arg("--permission-mode")
-        .arg("default")
+        .arg(&permission_mode)
         .arg("--permission-prompt-tool")
         .arg("stdio");
 
@@ -2886,18 +2887,22 @@ fn is_supported_image_path(path: &Path) -> bool {
 
 fn normalize_permission_mode(value: &str) -> Result<&'static str, String> {
     match value {
-        "read-only" => Ok("read-only"),
-        "workspace-write" => Ok("workspace-write"),
-        "danger-full-access" => Ok("danger-full-access"),
+        "default" => Ok("default"),
+        "acceptEdits" => Ok("acceptEdits"),
+        "bypassPermissions" => Ok("bypassPermissions"),
+        "dontAsk" => Ok("dontAsk"),
+        "plan" => Ok("plan"),
         _ => Err(format!("invalid permission mode: {value}")),
     }
 }
 
 fn available_permission_modes() -> Vec<String> {
     vec![
-        "read-only".to_string(),
-        "workspace-write".to_string(),
-        "danger-full-access".to_string(),
+        "default".to_string(),
+        "acceptEdits".to_string(),
+        "bypassPermissions".to_string(),
+        "dontAsk".to_string(),
+        "plan".to_string(),
     ]
 }
 

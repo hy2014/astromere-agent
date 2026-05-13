@@ -128,7 +128,7 @@ export type GitDiff = {
   is_empty: boolean;
 };
 
-export type PermissionMode = "read-only" | "workspace-write" | "danger-full-access";
+export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "plan";
 
 export type AgentPermissionState = {
   currentMode: PermissionMode;
