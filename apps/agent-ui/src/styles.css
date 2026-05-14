@@ -900,6 +900,59 @@ input:disabled {
   stroke-width: 3;
 }
 
+
+.deepseek-pricing-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid #dbe2ee;
+  border-radius: 4px;
+  padding: 14px;
+  background: #f8fafc;
+}
+
+.deepseek-pricing-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.deepseek-pricing-table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid #dbe2ee;
+  border-radius: 4px;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.deepseek-pricing-table th,
+.deepseek-pricing-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #111827;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.deepseek-pricing-table th {
+  color: #64748b;
+  background: #f1f5f9;
+  font-weight: 800;
+}
+
+.deepseek-pricing-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.deepseek-pricing-empty {
+  color: #64748b;
+  font-size: 13px;
+}
+
 .settings-actions {
   display: flex;
   align-items: center;

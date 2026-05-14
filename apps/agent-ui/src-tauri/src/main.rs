@@ -11,6 +11,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
+mod sqlite;
+use sqlite::{sqlite_database_info, sqlite_execute, sqlite_query};
+
 #[derive(Debug, Serialize)]
 struct WorkspaceState {
     root: String,
@@ -29,6 +32,7 @@ struct WorkspaceRegistryEntry {
 struct WorkspaceRegistry {
     workspaces: Vec<WorkspaceRegistryEntry>,
 }
+
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -133,9 +137,34 @@ struct ModelEndpointConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct DeepSeekPricingItem {
+    item: String,
+    price_per_m_tokens: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeepSeekPricingModel {
+    model: String,
+    items: Vec<DeepSeekPricingItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeepSeekPricingConfig {
+    source: String,
+    fetched_at: String,
+    url: String,
+    models: Vec<DeepSeekPricingModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ModelSettings {
     active_model_id: String,
     models: Vec<ModelEndpointConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deepseek_pricing: Option<DeepSeekPricingConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1785,21 +1814,26 @@ fn read_git_diff(root: String, path: Option<String>) -> Result<GitDiff, String> 
     })
 }
 
+
 #[tauri::command]
 fn load_model_settings() -> Result<ModelSettings, String> {
     let path = model_settings_path()?;
 
-    if path.exists() {
+    let mut settings = if path.exists() {
         let content = fs::read_to_string(path).map_err(error_to_string)?;
-        serde_json::from_str(&content).map_err(error_to_string)
+        serde_json::from_str(&content).map_err(error_to_string)?
     } else {
-        Ok(default_model_settings())
-    }
+        default_model_settings()
+    };
+
+    ensure_deepseek_pricing(&mut settings);
+    Ok(settings)
 }
 
 #[tauri::command]
 fn save_model_settings(mut settings: ModelSettings) -> Result<ModelSettings, String> {
     normalize_model_settings(&mut settings)?;
+    ensure_deepseek_pricing(&mut settings);
 
     let path = model_settings_path()?;
     if let Some(parent) = path.parent() {
@@ -2642,6 +2676,66 @@ fn default_model_settings() -> ModelSettings {
                 enabled: true,
             },
         ],
+        deepseek_pricing: Some(default_deepseek_pricing()),
+    }
+}
+
+
+fn default_deepseek_pricing() -> DeepSeekPricingConfig {
+    DeepSeekPricingConfig {
+        source: "builtin".to_string(),
+        fetched_at: format!("unix-ms:{}", now_millis()),
+        url: "https://api-docs.deepseek.com/quick_start/pricing".to_string(),
+        models: vec![
+            DeepSeekPricingModel {
+                model: "deepseek-v4-flash".to_string(),
+                items: vec![
+                    DeepSeekPricingItem { item: "cache_hit_input".to_string(), price_per_m_tokens: 0.0028 },
+                    DeepSeekPricingItem { item: "cache_miss_input".to_string(), price_per_m_tokens: 0.14 },
+                    DeepSeekPricingItem { item: "output".to_string(), price_per_m_tokens: 0.28 },
+                ],
+            },
+            DeepSeekPricingModel {
+                model: "deepseek-v4-pro".to_string(),
+                items: vec![
+                    DeepSeekPricingItem { item: "cache_hit_input".to_string(), price_per_m_tokens: 0.003625 },
+                    DeepSeekPricingItem { item: "cache_miss_input".to_string(), price_per_m_tokens: 0.435 },
+                    DeepSeekPricingItem { item: "output".to_string(), price_per_m_tokens: 0.87 },
+                ],
+            },
+        ],
+    }
+}
+
+fn ensure_deepseek_pricing(settings: &mut ModelSettings) {
+    if settings.deepseek_pricing.is_none() {
+        settings.deepseek_pricing = Some(default_deepseek_pricing());
+    }
+}
+
+fn refresh_deepseek_pricing_on_startup() -> Result<(), String> {
+    let cwd = std::env::current_dir().map_err(error_to_string)?;
+    let candidates = [
+        cwd.join("scripts/fetch-deepseek-pricing.mjs"),
+        cwd.join("../scripts/fetch-deepseek-pricing.mjs"),
+        cwd.join("../../scripts/fetch-deepseek-pricing.mjs"),
+    ];
+    let script = candidates
+        .iter()
+        .find(|candidate| candidate.exists())
+        .ok_or_else(|| "scripts/fetch-deepseek-pricing.mjs not found".to_string())?;
+
+    let output = Command::new("node")
+        .arg(script)
+        .arg("--write")
+        .output()
+        .map_err(error_to_string)?;
+
+    if output.status.success() {
+        eprintln!("[deepseek-pricing] refreshed on startup");
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
     }
 }
 
@@ -3195,7 +3289,18 @@ fn error_to_string(error: impl std::fmt::Display) -> String {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|_app| {
+            thread::spawn(|| {
+                if let Err(error) = refresh_deepseek_pricing_on_startup() {
+                    eprintln!("[deepseek-pricing] refresh failed: {error}");
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            sqlite_query,
+            sqlite_execute,
+            sqlite_database_info,
             default_workspace,
             open_workspace,
             load_workspace_registry,

@@ -41,6 +41,16 @@ import {
 } from "../runtime";
 import type { AgentReplCapabilityItem, RemoteProfile } from "../runtime";
 import "./App.css";
+import {
+  debugEventsFromSqliteRows,
+  debugEventsSqliteReadEnabled,
+  initDebugEventsSqlite,
+  loadDebugEventsFromSqlite,
+  migrateAssistantDebugBundlesToSqlite,
+  persistDebugEventToSqlite,
+  rekeyDebugEventsInSqlite,
+} from "../debugEventsSqlite";
+import { sqliteDatabaseInfo } from "../sqlite";
 import type {
   AgentPermissionState,
   AgentReplStreamEvent,
@@ -132,6 +142,7 @@ type DebugStreamEvent = {
   eventType: string;
   receivedAt: number;
   payload: Record<string, unknown>;
+  debugStorageSource?: string;
 };
 
 type AssistantMessageDebugBundle = {
@@ -514,6 +525,7 @@ function createDebugEvent(event: AgentReplStreamEvent): DebugStreamEvent {
     eventType: event.eventType,
     receivedAt: Date.now(),
     payload: event.payload,
+    debugStorageSource: "runtime-memory",
   };
 }
 
@@ -1009,6 +1021,33 @@ function formatDebugTime(timestamp: number): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function debugStorageSource(event: Pick<DebugStreamEvent, "debugStorageSource">): string {
+  return event.debugStorageSource || "sqlite-missing-source";
+}
+
+function debugStorageSourceCounts(
+  events: Array<Pick<DebugStreamEvent, "debugStorageSource">>,
+): Record<string, number> {
+  return events.reduce<Record<string, number>>((counts, event) => {
+    const source = debugStorageSource(event);
+    counts[source] = (counts[source] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
+function debugStorageSourceSummary(
+  events: Array<Pick<DebugStreamEvent, "debugStorageSource">>,
+): string {
+  const entries = Object.entries(debugStorageSourceCounts(events));
+  if (entries.length === 0) {
+    return "source: none";
+  }
+  return entries
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([source, count]) => `${source}: ${count}`)
+    .join(" · ");
 }
 
 function welcomeStream(
@@ -2199,6 +2238,27 @@ function streamEventToItems(
 }
 
 export function App() {
+  useEffect(() => {
+    void initDebugEventsSqlite()
+      .then(() => migrateAssistantDebugBundlesToSqlite(assistantDebugBundles))
+      .then((result) => {
+        console.info("[debug-events-sqlite] localStorage migration", result);
+      })
+      .catch((reason) => {
+        console.warn("[debug-events-sqlite] schema/migration failed", reason);
+      });
+  }, []);
+
+  useEffect(() => {
+    void sqliteDatabaseInfo()
+      .then((info) => {
+        console.info("[sqlite] database ready", info.path);
+      })
+      .catch((reason) => {
+        console.warn("[sqlite] database init failed", reason);
+      });
+  }, []);
+
   const [projects, setProjects] = useState<ProjectFolder[]>([]);
   const [previewTabs, setPreviewTabs] = useState<PreviewTab[]>([]);
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
@@ -2630,6 +2690,64 @@ export function App() {
   }
 
   useEffect(() => {
+    if (!debugEventsSqliteReadEnabled || !activeSessionId) {
+      return;
+    }
+
+    let cancelled = false;
+    loadDebugEventsFromSqlite({ sessionId: activeSessionId, limit: 600 })
+      .then((rows) => {
+        if (cancelled) return;
+
+        const loadedEvents = debugEventsFromSqliteRows(rows);
+        setSessionDebugEvents((events) => ({
+          ...events,
+          [activeSessionId]: loadedEvents,
+        }));
+
+        setAssistantDebugBundles((bundles) => {
+          const grouped = new Map<string, typeof loadedEvents>();
+          for (const event of loadedEvents) {
+            if (!event.assistantMessageId) continue;
+            grouped.set(event.assistantMessageId, [
+              ...(grouped.get(event.assistantMessageId) ?? []),
+              event,
+            ]);
+          }
+
+          let changed = false;
+          const next = { ...bundles };
+          for (const [messageId, bundle] of Object.entries(next)) {
+            if (bundle.sessionId !== activeSessionId) continue;
+            const sqliteEvents = grouped.get(messageId) ?? [];
+            changed = true;
+            next[messageId] = {
+              ...bundle,
+              events: sqliteEvents,
+              updatedAt: sqliteEvents.at(-1)?.receivedAt ?? bundle.updatedAt,
+            };
+          }
+
+          return changed ? next : bundles;
+        });
+
+        console.info("[debug-events-sqlite] loaded", {
+          sessionId: activeSessionId,
+          rows: rows.length,
+          fallback: false,
+        });
+      })
+      .catch((reason) => {
+        console.warn("[debug-events-sqlite] read failed", reason);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId]);
+
+
+  useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     listenAgentReplEvents((event) => {
@@ -2640,9 +2758,22 @@ export function App() {
 
       const debugEntry = createDebugEvent(event);
       setSessionDebugEvents((events) => appendDebugEvent(events, debugEntry));
-      setAssistantDebugBundles((bundles) =>
-        updateAssistantDebugBundleForEvent(bundles, event, debugEntry),
-      );
+      setAssistantDebugBundles((bundles) => {
+        const assistantMessageId = latestOpenAssistantDebugBundleId(
+          bundles,
+          event.sessionId,
+        );
+        void persistDebugEventToSqlite({
+          event: debugEntry,
+          sessionId: event.sessionId,
+          projectRoot: activeProject?.path ?? null,
+          assistantMessageId,
+          source: "runtime",
+        }).catch((reason) => {
+          console.warn("[debug-events-sqlite] write failed", reason);
+        });
+        return updateAssistantDebugBundleForEvent(bundles, event, debugEntry);
+      });
       updateSessionStream(event.sessionId, (items) =>
         streamEventToItems(items, event),
       );
@@ -2709,6 +2840,11 @@ export function App() {
         );
         setAssistantDebugBundles((bundles) =>
           rekeyAssistantDebugBundles(bundles, event.sessionId, realSessionId),
+        );
+        void rekeyDebugEventsInSqlite(event.sessionId, realSessionId).catch(
+          (reason) => {
+            console.warn("[debug-events-sqlite] rekey failed", reason);
+          },
         );
 
         const pid =
@@ -3242,6 +3378,7 @@ export function App() {
         toolResultCount: details.toolResults.length,
         eventCount: details.eventCount,
       },
+      debugSourceSummary: debugStorageSourceCounts(bundle?.events ?? []),
       commands: details.commandUses.map((tool) => ({
         name: toolName(tool),
         command: commandFromToolUse(tool),
@@ -3258,6 +3395,7 @@ export function App() {
       events: (bundle?.events ?? []).map((event) => ({
         eventType: event.eventType,
         receivedAt: new Date(event.receivedAt).toISOString(),
+        debugStorageSource: debugStorageSource(event),
         payload: event.payload,
       })),
     };
@@ -3950,7 +4088,7 @@ export function App() {
       </aside>
 
       {activeView === "skills" ? (
-        <SkillsView activeProject={activeProject} />
+        <SkillsView activeProject={activeProject ?? undefined} />
       ) : activeView === "mcp" ? (
         <McpServersView />
       ) : activeView === "settings" ? (
@@ -4001,7 +4139,9 @@ export function App() {
                   <article className="debug-event" key={event.id}>
                     <header>
                       <strong>{event.eventType}</strong>
-                      <span>{formatDebugTime(event.receivedAt)}</span>
+                      <span>
+                        {formatDebugTime(event.receivedAt)} · {debugStorageSource(event)}
+                      </span>
                     </header>
                     <pre>{JSON.stringify(event.payload, null, 2)}</pre>
                   </article>
@@ -4227,6 +4367,9 @@ export function App() {
                                   {assistantDebugBundle?.events.length
                                     ? ` · ${assistantDebugBundle.events.length} events`
                                     : " · 0 events"}
+                                  {assistantDebugBundle?.events.length
+                                    ? ` · ${debugStorageSourceSummary(assistantDebugBundle.events)}`
+                                    : ""}
                                 </span>
                                 <button
                                   type="button"
@@ -5230,8 +5373,8 @@ function mcpDraftRowsFromSettings(settings: unknown): McpServerDraftRow[] {
   });
 }
 
-function mcpSettingsFromDraftRows(rows: McpServerDraftRow[]): { mcpServers: Record<string, unknown> } {
-  const mcpServers: Record<string, unknown> = {};
+function mcpSettingsFromDraftRows(rows: McpServerDraftRow[]): McpSettings {
+  const mcpServers: McpSettings["mcpServers"] = {};
 
   for (const row of rows) {
     const name = row.name.trim();
@@ -5243,7 +5386,7 @@ function mcpSettingsFromDraftRows(rows: McpServerDraftRow[]): { mcpServers: Reco
       .map((item) => [item.key.trim(), item.value] as const)
       .filter(([key]) => Boolean(key));
 
-    const server: Record<string, unknown> = { command };
+    const server: McpSettings["mcpServers"][string] = { command, tools: [] };
     if (args.length > 0) server.args = args;
     if (envEntries.length > 0) server.env = Object.fromEntries(envEntries);
 
@@ -6057,28 +6200,40 @@ function SettingsView({ hiddenSessions, onRestoreSession }: SettingsViewProps) {
 
                     <section className="settings-row">
                       <div>
-                        <h4>Performance Graph</h4>
-                        <p>Inference latency over the last 24 hours.</p>
+                        <h4>DeepSeek Pricing</h4>
+                        <p>Fetched on desktop startup and used for local cost estimates.</p>
                       </div>
-                      <div
-                        className="performance-graph"
-                        aria-label="Performance graph placeholder"
-                      >
-                        <div className="graph-bars">
-                          {Array.from({ length: 24 }, (_, index) => (
-                            <span
-                              key={index}
-                              style={{ height: `${24 + ((index * 19) % 72)}%` }}
-                            />
-                          ))}
+                      <div className="deepseek-pricing-card">
+                        <div className="deepseek-pricing-meta">
+                          <span>Source: {draftSettings?.deepseekPricing?.source ?? "not loaded"}</span>
+                          <span>Fetched: {draftSettings?.deepseekPricing?.fetchedAt ?? "—"}</span>
                         </div>
-                        <svg
-                          viewBox="0 0 480 120"
-                          preserveAspectRatio="none"
-                          aria-hidden="true"
-                        >
-                          <polyline points="0,88 45,74 90,52 135,92 180,80 225,58 270,48 315,82 360,70 405,54 480,66" />
-                        </svg>
+                        {(draftSettings?.deepseekPricing?.models ?? []).length > 0 ? (
+                          <table className="deepseek-pricing-table">
+                            <thead>
+                              <tr>
+                                <th>Model</th>
+                                <th>Item</th>
+                                <th>USD / 1M tokens</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(draftSettings?.deepseekPricing?.models ?? []).flatMap((model) =>
+                                model.items.map((item) => (
+                                  <tr key={`${model.model}:${item.item}`}>
+                                    <td>{model.model}</td>
+                                    <td>{item.item}</td>
+                                    <td>${item.pricePerMTokens}</td>
+                                  </tr>
+                                )),
+                              )}
+                            </tbody>
+                          </table>
+                        ) : (
+                          <div className="deepseek-pricing-empty">
+                            No DeepSeek pricing loaded yet. Run npm run pricing:deepseek or restart the desktop app.
+                          </div>
+                        )}
                       </div>
                     </section>
                   </div>
