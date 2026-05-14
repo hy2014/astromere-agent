@@ -25,6 +25,10 @@ import type {
   WorkspaceFileReference,
   WorkspaceState,
   WorkspaceRegistry,
+  SqliteDatabaseInfo,
+  SqliteExecuteResult,
+  SqliteQueryRow,
+  SqliteValue,
 } from "./types";
 
 export type AgentReplCapabilityItem = {
@@ -57,6 +61,24 @@ export function loadWorkspaceRegistry(): Promise<WorkspaceRegistry> {
 
 export function addWorkspaceRegistryEntry(path: string): Promise<WorkspaceRegistry> {
   return invoke("add_workspace_registry_entry", { path });
+}
+
+export function sqliteDatabaseInfo(): Promise<SqliteDatabaseInfo> {
+  return invoke("sqlite_database_info");
+}
+
+export function sqliteExecute(
+  sql: string,
+  params?: SqliteValue[],
+): Promise<SqliteExecuteResult> {
+  return invoke("sqlite_execute", { sql, params });
+}
+
+export function sqliteQuery(
+  sql: string,
+  params?: SqliteValue[],
+): Promise<SqliteQueryRow[]> {
+  return invoke("sqlite_query", { sql, params });
 }
 
 export function listProjectEntries(root: string): Promise<ProjectEntry[]> {

@@ -7,6 +7,26 @@ export type WorkspaceRegistry = {
   workspaces: WorkspaceState[];
 };
 
+export type SqliteValue =
+  | null
+  | boolean
+  | number
+  | string
+  | Record<string, unknown>
+  | unknown[];
+
+export type SqliteQueryRow = Record<string, unknown>;
+
+export type SqliteDatabaseInfo = {
+  path: string;
+};
+
+export type SqliteExecuteResult = {
+  rowsAffected: number;
+  lastInsertRowid: number;
+  databasePath: string;
+};
+
 export type ProjectEntry = {
   name: string;
   path: string;
@@ -221,9 +241,27 @@ export type ModelEndpointConfig = {
   enabled: boolean;
 };
 
+export type DeepSeekPricingItem = {
+  item: "cache_hit_input" | "cache_miss_input" | "output" | string;
+  pricePerMTokens: number;
+};
+
+export type DeepSeekPricingModel = {
+  model: string;
+  items: DeepSeekPricingItem[];
+};
+
+export type DeepSeekPricingConfig = {
+  source: "official" | "builtin" | "failed" | string;
+  fetchedAt: string;
+  url: string;
+  models: DeepSeekPricingModel[];
+};
+
 export type ModelSettings = {
   activeModelId: string;
   models: ModelEndpointConfig[];
+  deepseekPricing?: DeepSeekPricingConfig | null;
 };
 
 export type ModelConnectionTestResult = {
