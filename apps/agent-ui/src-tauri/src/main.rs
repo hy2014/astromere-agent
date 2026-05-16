@@ -13,28 +13,26 @@ use tauri::Emitter;
 
 mod sqlite;
 use sqlite::{
-    sqlite_database_info, sqlite_execute, sqlite_query, sqlite_usage_assistant_summaries,
-    sqlite_usage_day_splits, sqlite_usage_read_source, sqlite_usage_records,
-    sqlite_usage_session_summary,
+    sqlite_database_info, sqlite_execute, sqlite_query
 };
 
 #[derive(Debug, Serialize)]
 struct WorkspaceState {
     root: String,
-    name: String,
+    name: String
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct WorkspaceRegistryEntry {
     root: String,
-    name: String,
+    name: String
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct WorkspaceRegistry {
-    workspaces: Vec<WorkspaceRegistryEntry>,
+    workspaces: Vec<WorkspaceRegistryEntry>
 }
 
 #[derive(Debug, Serialize)]
@@ -42,14 +40,14 @@ struct WorkspaceRegistry {
 struct ProjectEntry {
     name: String,
     path: String,
-    kind: ProjectEntryKind,
+    kind: ProjectEntryKind
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum ProjectEntryKind {
     File,
-    Directory,
+    Directory
 }
 
 #[derive(Debug, Serialize)]
@@ -58,7 +56,7 @@ struct FileView {
     content: String,
     total_lines: usize,
     size_bytes: u64,
-    language: String,
+    language: String
 }
 
 #[derive(Debug, Serialize)]
@@ -69,7 +67,7 @@ struct WorkspaceFileReference {
     extension: Option<String>,
     size_bytes: Option<u64>,
     modified_epoch_millis: Option<u128>,
-    score: i64,
+    score: i64
 }
 
 #[derive(Debug, Serialize)]
@@ -78,7 +76,7 @@ struct LocalImagePreview {
     path: String,
     mime_type: String,
     data_url: String,
-    size_bytes: u64,
+    size_bytes: u64
 }
 
 #[derive(Debug, Serialize)]
@@ -86,14 +84,14 @@ struct LocalImagePreview {
 struct LocalImageMetadata {
     path: String,
     mime_type: String,
-    size_bytes: u64,
+    size_bytes: u64
 }
 
 #[derive(Debug, Serialize)]
 struct GitDiff {
     path: Option<String>,
     diff: String,
-    is_empty: bool,
+    is_empty: bool
 }
 
 #[derive(Debug, Serialize)]
@@ -109,7 +107,7 @@ struct AgentTurnResponse {
     usage: Option<serde_json::Value>,
     estimated_cost: Option<String>,
     raw_json: Option<serde_json::Value>,
-    stderr: Option<String>,
+    stderr: Option<String>
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -117,7 +115,7 @@ struct AgentTurnResponse {
 enum ModelProvider {
     DeepSeek,
     OpenAI,
-    Anthropic,
+    Anthropic
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,21 +133,21 @@ struct ModelEndpointConfig {
     organization_id: Option<String>,
     max_tokens: u32,
     temperature: f32,
-    enabled: bool,
+    enabled: bool
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DeepSeekPricingItem {
     item: String,
-    price_per_m_tokens: f64,
+    price_per_m_tokens: f64
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DeepSeekPricingModel {
     model: String,
-    items: Vec<DeepSeekPricingItem>,
+    items: Vec<DeepSeekPricingItem>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,7 +158,7 @@ struct DeepSeekPricingConfig {
     url: String,
     currency: String,
     unit: String,
-    models: Vec<DeepSeekPricingModel>,
+    models: Vec<DeepSeekPricingModel>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,7 +167,7 @@ struct ModelSettings {
     active_model_id: String,
     models: Vec<ModelEndpointConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    deepseek_pricing: Option<DeepSeekPricingConfig>,
+    deepseek_pricing: Option<DeepSeekPricingConfig>
 }
 
 #[derive(Debug, Serialize)]
@@ -178,14 +176,14 @@ struct ModelConnectionTestResult {
     ok: bool,
     message: String,
     model: String,
-    stderr: Option<String>,
+    stderr: Option<String>
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentPermissionState {
     current_mode: String,
-    available_modes: Vec<String>,
+    available_modes: Vec<String>
 }
 
 #[derive(Debug, Serialize)]
@@ -194,13 +192,13 @@ struct AgentReplProcessState {
     session_id: String,
     root: String,
     model: String,
-    permission_mode: String,
+    permission_mode: String
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentReplSendResult {
-    accepted: bool,
+    accepted: bool
 }
 
 #[derive(Debug, Serialize)]
@@ -209,7 +207,7 @@ struct AgentReplProcessStatus {
     session_id: String,
     root: String,
     running: bool,
-    pid: Option<u32>,
+    pid: Option<u32>
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -218,7 +216,7 @@ struct AgentReplCapabilityItem {
     name: String,
     slash: String,
     kind: String,
-    description: Option<String>,
+    description: Option<String>
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -229,7 +227,7 @@ struct AgentReplCapabilities {
     commands: Vec<AgentReplCapabilityItem>,
     skills: Vec<AgentReplCapabilityItem>,
     slash_commands: Vec<AgentReplCapabilityItem>,
-    updated_at_ms: u64,
+    updated_at_ms: u64
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,13 +237,13 @@ struct GrepRuntimeRequest {
     glob: Option<String>,
     output_mode: Option<String>,
     case_insensitive: Option<bool>,
-    head_limit: Option<usize>,
+    head_limit: Option<usize>
 }
 
 #[derive(Debug, Deserialize)]
 struct BashRuntimeRequest {
     command: String,
-    timeout_ms: Option<u64>,
+    timeout_ms: Option<u64>
 }
 
 #[derive(Debug, Serialize)]
@@ -257,7 +255,7 @@ struct RuntimeSessionSummary {
     modified_epoch_millis: u128,
     message_count: usize,
     parent_session_id: Option<String>,
-    branch_name: Option<String>,
+    branch_name: Option<String>
 }
 
 struct ClawProcess {
@@ -265,12 +263,12 @@ struct ClawProcess {
     session_id: String,
     pid: u32,
     stdin: ChildStdin,
-    child: Child,
+    child: Child
 }
 
 struct ControlResponseRegistry {
     responses: Mutex<HashMap<String, Value>>,
-    condvar: Condvar,
+    condvar: Condvar
 }
 
 static CLAW_PROCESSES: OnceLock<Mutex<HashMap<String, ClawProcess>>> = OnceLock::new();
@@ -283,8 +281,8 @@ fn claw_processes() -> &'static Mutex<HashMap<String, ClawProcess>> {
 fn control_responses() -> &'static ControlResponseRegistry {
     CONTROL_RESPONSES.get_or_init(|| ControlResponseRegistry {
         responses: Mutex::new(HashMap::new()),
-        condvar: Condvar::new(),
-    })
+        condvar: Condvar::new()
+})
 }
 
 fn control_response_request_id(value: &Value) -> Option<String> {
@@ -369,8 +367,8 @@ fn capability_item_from_value(
             name: name.to_string(),
             slash: format!("/{name}"),
             kind: fallback_kind.to_string(),
-            description: None,
-        });
+            description: None
+});
     }
 
     let object = value.as_object()?;
@@ -404,8 +402,8 @@ fn capability_item_from_value(
         name,
         slash,
         kind,
-        description,
-    })
+        description
+})
 }
 
 fn capability_items_from_value(
@@ -459,8 +457,8 @@ fn capabilities_from_control_response(
         commands,
         skills,
         slash_commands,
-        updated_at_ms: now_millis() as u64,
-    })
+        updated_at_ms: now_millis() as u64
+})
 }
 
 fn process_key(root: &str, session_id: &str) -> String {
@@ -584,8 +582,8 @@ fn add_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, Strin
     if !registry.workspaces.iter().any(|w| w.root == ws.root) {
         registry.workspaces.push(WorkspaceRegistryEntry {
             root: ws.root,
-            name: ws.name,
-        });
+            name: ws.name
+});
     }
 
     write_workspace_registry(&registry)?;
@@ -596,8 +594,8 @@ fn add_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, Strin
 fn get_agent_permission_state() -> Result<AgentPermissionState, String> {
     Ok(AgentPermissionState {
         current_mode: "default".to_string(),
-        available_modes: available_permission_modes(),
-    })
+        available_modes: available_permission_modes()
+})
 }
 
 #[tauri::command]
@@ -679,8 +677,8 @@ fn get_agent_repl_process_status(
                     session_id,
                     root,
                     running: true,
-                    pid: Some(proc_state.pid),
-                });
+                    pid: Some(proc_state.pid)
+});
             }
             Some(_) => {
                 processes.remove(&key);
@@ -692,8 +690,8 @@ fn get_agent_repl_process_status(
         session_id,
         root,
         running: false,
-        pid: None,
-    })
+        pid: None
+})
 }
 
 #[tauri::command]
@@ -747,8 +745,8 @@ fn set_agent_permission_mode(_root: String, mode: String) -> Result<AgentPermiss
     let normalized = normalize_permission_mode(&mode)?.to_string();
     Ok(AgentPermissionState {
         current_mode: normalized,
-        available_modes: available_permission_modes(),
-    })
+        available_modes: available_permission_modes()
+})
 }
 
 #[tauri::command]
@@ -778,8 +776,8 @@ fn list_project_entries(root: String) -> Result<Vec<ProjectEntry>, String> {
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .to_string(),
-            kind,
-        });
+            kind
+});
     }
 
     entries.sort_by(|a, b| a.path.cmp(&b.path));
@@ -896,8 +894,8 @@ fn file_reference_from_absolute_path(path: &Path, score: i64) -> Option<Workspac
         extension,
         size_bytes: Some(metadata.len()),
         modified_epoch_millis,
-        score,
-    })
+        score
+})
 }
 
 fn search_absolute_or_home_file_references(
@@ -1012,15 +1010,15 @@ fn fuzzy_contains(value: &str, query: &str) -> bool {
     let mut query_chars = query.chars();
     let mut current = match query_chars.next() {
         Some(ch) => ch,
-        None => return true,
-    };
+        None => return true
+};
 
     for ch in value.chars() {
         if ch == current {
             match query_chars.next() {
                 Some(next) => current = next,
-                None => return true,
-            }
+                None => return true
+}
         }
     }
 
@@ -1125,8 +1123,8 @@ fn workspace_file_reference_from_path(
         extension,
         size_bytes: Some(metadata.len()),
         modified_epoch_millis,
-        score,
-    })
+        score
+})
 }
 
 fn collect_workspace_file_references(
@@ -1323,8 +1321,8 @@ fn frontmatter_bool(
     {
         "true" | "yes" | "1" | "on" => true,
         "false" | "no" | "0" | "off" => false,
-        _ => default,
-    }
+        _ => default
+}
 }
 
 fn directory_size(path: &Path) -> u64 {
@@ -1339,8 +1337,8 @@ fn directory_size(path: &Path) -> u64 {
             match fs::metadata(&path) {
                 Ok(metadata) if metadata.is_file() => metadata.len(),
                 Ok(metadata) if metadata.is_dir() => directory_size(&path),
-                _ => 0,
-            }
+                _ => 0
+}
         })
         .sum()
 }
@@ -1449,8 +1447,8 @@ fn build_skill_summary(
         &[
             "disable-model-invocation",
             "disable_model_invocation",
-            "disableModelInvocation",
-        ],
+            "disableModelInvocation"
+],
         false,
     );
     let model_invocable = !disable_model_invocation;
@@ -1504,8 +1502,8 @@ fn list_skills(root: String) -> Result<serde_json::Value, String> {
     let user_skills_dir = claude_config_dir()?.join("skills");
     let skill_sources = vec![
         ("project", "Project", project_skills_dir),
-        ("user", "User", user_skills_dir),
-    ];
+        ("user", "User", user_skills_dir)
+];
     let mut skills = Vec::new();
     let mut sources = Vec::new();
     let mut seen_by_name: HashMap<String, String> = HashMap::new();
@@ -1613,8 +1611,8 @@ fn read_workspace_file(root: String, path: String) -> Result<FileView, String> {
         total_lines: content.lines().count(),
         size_bytes: metadata.len(),
         language: language_for_path(&resolved.to_string_lossy()),
-        content,
-    })
+        content
+})
 }
 
 #[tauri::command]
@@ -1629,8 +1627,8 @@ fn read_local_reference_file(root: String, path: String) -> Result<FileView, Str
         total_lines: content.lines().count(),
         size_bytes: metadata.len(),
         language: language_for_path(&resolved.to_string_lossy()),
-        content,
-    })
+        content
+})
 }
 
 #[tauri::command]
@@ -1652,8 +1650,8 @@ fn read_local_image_metadata(root: String, path: String) -> Result<LocalImageMet
     Ok(LocalImageMetadata {
         path: resolved.to_string_lossy().to_string(),
         mime_type: image_mime_for_path(&resolved).to_string(),
-        size_bytes: metadata.len(),
-    })
+        size_bytes: metadata.len()
+})
 }
 
 #[tauri::command]
@@ -1693,8 +1691,8 @@ fn read_local_image_preview(root: String, path: String) -> Result<LocalImagePrev
         path: resolved.to_string_lossy().to_string(),
         mime_type,
         data_url,
-        size_bytes: metadata.len(),
-    })
+        size_bytes: metadata.len()
+})
 }
 
 #[tauri::command]
@@ -1742,8 +1740,8 @@ fn glob_runtime_search(
     let root_path = canonical_workspace_root(&root)?;
     let base = match path {
         Some(p) if !p.is_empty() => resolve_workspace_path(&root_path, &p)?,
-        _ => root_path,
-    };
+        _ => root_path
+};
 
     let output = Command::new("find")
         .arg(&base)
@@ -1767,8 +1765,8 @@ fn grep_runtime_search(
     let root_path = canonical_workspace_root(&root)?;
     let base = match request.path {
         Some(p) if !p.is_empty() => resolve_workspace_path(&root_path, &p)?,
-        _ => root_path,
-    };
+        _ => root_path
+};
 
     let mut cmd = Command::new("grep");
     cmd.arg("-R").arg("-n");
@@ -1880,8 +1878,8 @@ fn create_runtime_session(root: String) -> Result<RuntimeSessionSummary, String>
         modified_epoch_millis: now_millis(),
         message_count: 0,
         parent_session_id: None,
-        branch_name: None,
-    })
+        branch_name: None
+})
 }
 
 #[tauri::command]
@@ -1903,8 +1901,8 @@ fn read_git_diff(root: String, path: Option<String>) -> Result<GitDiff, String> 
     Ok(GitDiff {
         path,
         is_empty: diff.trim().is_empty(),
-        diff,
-    })
+        diff
+})
 }
 
 #[tauri::command]
@@ -1949,16 +1947,16 @@ fn test_model_connection(settings: ModelSettings) -> Result<ModelConnectionTestR
             ok: false,
             message: "API key 为空".to_string(),
             model,
-            stderr: None,
-        });
+            stderr: None
+});
     }
 
     Ok(ModelConnectionTestResult {
         ok: true,
         message: "配置格式看起来可用；真正连通性会在发送消息时验证。".to_string(),
         model,
-        stderr: None,
-    })
+        stderr: None
+})
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1968,7 +1966,7 @@ struct McpToolConfig {
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
-    parameters: serde_json::Value,
+    parameters: serde_json::Value
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1986,27 +1984,27 @@ struct McpServerConfig {
     #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
-    tools: Vec<McpToolConfig>,
+    tools: Vec<McpToolConfig>
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct McpSettings {
     #[serde(default)]
-    mcp_servers: std::collections::BTreeMap<String, McpServerConfig>,
+    mcp_servers: std::collections::BTreeMap<String, McpServerConfig>
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct McpSettingsFile {
     path: String,
-    settings: McpSettings,
+    settings: McpSettings
 }
 
 fn default_mcp_settings() -> McpSettings {
     McpSettings {
-        mcp_servers: std::collections::BTreeMap::new(),
-    }
+        mcp_servers: std::collections::BTreeMap::new()
+}
 }
 
 fn astromere_mcp_config_path() -> Result<PathBuf, String> {
@@ -2027,8 +2025,8 @@ fn load_mcp_settings() -> Result<McpSettingsFile, String> {
     if !path.is_file() {
         return Ok(McpSettingsFile {
             path: path.to_string_lossy().to_string(),
-            settings: default_mcp_settings(),
-        });
+            settings: default_mcp_settings()
+});
     }
 
     let raw = fs::read_to_string(&path)
@@ -2039,8 +2037,8 @@ fn load_mcp_settings() -> Result<McpSettingsFile, String> {
 
     Ok(McpSettingsFile {
         path: path.to_string_lossy().to_string(),
-        settings,
-    })
+        settings
+})
 }
 
 #[tauri::command]
@@ -2064,8 +2062,8 @@ fn save_mcp_settings(settings: McpSettings) -> Result<McpSettingsFile, String> {
 
     Ok(McpSettingsFile {
         path: path.to_string_lossy().to_string(),
-        settings,
-    })
+        settings
+})
 }
 
 #[tauri::command]
@@ -2126,8 +2124,8 @@ fn ensure_agent_repl_process(
                         session_id,
                         root,
                         model,
-                        permission_mode: permission_mode.clone(),
-                    });
+                        permission_mode: permission_mode.clone()
+});
                 }
                 Some(status) => {
                     let old_pid = proc_state.pid;
@@ -2247,8 +2245,8 @@ fn ensure_agent_repl_process(
                 session_id: session_id.clone(),
                 pid,
                 stdin,
-                child,
-            },
+                child
+},
         );
     }
 
@@ -2256,8 +2254,8 @@ fn ensure_agent_repl_process(
         session_id,
         root,
         model,
-        permission_mode: permission_mode.clone(),
-    })
+        permission_mode: permission_mode.clone()
+})
 }
 
 #[tauri::command]
@@ -2273,8 +2271,8 @@ fn kill_agent_repl_process(
             root,
             session_id,
             running: false,
-            pid: None,
-        });
+            pid: None
+});
     };
 
     let pid = proc_state.pid;
@@ -2285,8 +2283,8 @@ fn kill_agent_repl_process(
         root,
         session_id,
         running: false,
-        pid: Some(pid),
-    })
+        pid: Some(pid)
+})
 }
 
 #[tauri::command]
@@ -2431,8 +2429,8 @@ fn run_agent_turn(
             None
         } else {
             Some(stderr)
-        },
-    })
+        }
+})
 }
 
 fn spawn_repl_stdout_reader(
@@ -2544,7 +2542,6 @@ fn spawn_repl_stdout_reader(
                         );
                     }
 
-
                     for tool in extract_tool_uses(&value) {
                         let _ = app.emit(
                             "agent-repl-event",
@@ -2577,7 +2574,6 @@ fn spawn_repl_stdout_reader(
                                 "sessionId": event_session_id,
                                 "root": root,
                                 "eventType": "turn_text",
-                                "assistantMessageId": assistant_message_id_for_emit,
                                 "bindStatus": assistant_bind_status_for_emit,
                                 "payload": {
                                     "text": text,
@@ -2664,7 +2660,6 @@ fn spawn_repl_stdout_reader(
                         "sessionId": event_session_id,
                         "root": root,
                         "eventType": "turn_complete",
-                        "assistantMessageId": usage_bound_assistant_message_id_for_emit,
                         "bindStatus": usage_bind_status_for_emit,
                         "payload": {
                             "ok": value.get("is_error").and_then(|v| v.as_bool()).map(|v| !v).unwrap_or(true),
@@ -2736,7 +2731,6 @@ fn spawn_repl_stdout_reader(
                                 "sessionId": event_session_id,
                                 "root": root,
                                 "eventType": "turn_text",
-                                "assistantMessageId": assistant_message_id_for_emit,
                                 "bindStatus": assistant_bind_status_for_emit,
                                 "payload": {
                                     "text": text,
@@ -2888,8 +2882,8 @@ fn workspace_state_from_path(path: &Path) -> Result<WorkspaceState, String> {
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
-            .to_string(),
-    })
+            .to_string()
+})
 }
 
 fn default_model_settings() -> ModelSettings {
@@ -2911,8 +2905,8 @@ fn default_model_settings() -> ModelSettings {
                 organization_id: None,
                 max_tokens: 4096,
                 temperature: 0.2,
-                enabled: true,
-            },
+                enabled: true
+},
             ModelEndpointConfig {
                 id: "anthropic".to_string(),
                 name: "Anthropic".to_string(),
@@ -2924,11 +2918,11 @@ fn default_model_settings() -> ModelSettings {
                 organization_id: None,
                 max_tokens: 4096,
                 temperature: 0.2,
-                enabled: true,
-            },
-        ],
-        deepseek_pricing: None,
-    }
+                enabled: true
+}
+],
+        deepseek_pricing: None
+}
 }
 
 fn refresh_deepseek_pricing_on_startup() -> Result<(), String> {
@@ -2936,8 +2930,8 @@ fn refresh_deepseek_pricing_on_startup() -> Result<(), String> {
     let candidates = [
         cwd.join("scripts/fetch-deepseek-pricing.mjs"),
         cwd.join("../scripts/fetch-deepseek-pricing.mjs"),
-        cwd.join("../../scripts/fetch-deepseek-pricing.mjs"),
-    ];
+        cwd.join("../../scripts/fetch-deepseek-pricing.mjs")
+];
     let script = candidates
         .iter()
         .find(|candidate| candidate.exists())
@@ -2993,8 +2987,8 @@ fn resolve_model_for_provider(config: &ModelEndpointConfig) -> String {
         .unwrap_or_else(|| match config.provider {
             ModelProvider::DeepSeek => "deepseek-chat".to_string(),
             ModelProvider::OpenAI => "gpt-4o".to_string(),
-            ModelProvider::Anthropic => "claude-sonnet-4-5-20250929".to_string(),
-        })
+            ModelProvider::Anthropic => "claude-sonnet-4-5-20250929".to_string()
+})
 }
 
 fn apply_agent_ui_env(
@@ -3211,8 +3205,8 @@ fn image_mime_for_path(path: &Path) -> &'static str {
         "gif" => "image/gif",
         "webp" => "image/webp",
         "svg" => "image/svg+xml",
-        _ => "application/octet-stream",
-    }
+        _ => "application/octet-stream"
+}
 }
 
 fn is_supported_image_path(path: &Path) -> bool {
@@ -3233,8 +3227,8 @@ fn normalize_permission_mode(value: &str) -> Result<&'static str, String> {
         "bypassPermissions" => Ok("bypassPermissions"),
         "dontAsk" => Ok("dontAsk"),
         "plan" => Ok("plan"),
-        _ => Err(format!("invalid permission mode: {value}")),
-    }
+        _ => Err(format!("invalid permission mode: {value}"))
+}
 }
 
 fn available_permission_modes() -> Vec<String> {
@@ -3243,8 +3237,8 @@ fn available_permission_modes() -> Vec<String> {
         "acceptEdits".to_string(),
         "bypassPermissions".to_string(),
         "dontAsk".to_string(),
-        "plan".to_string(),
-    ]
+        "plan".to_string()
+]
 }
 
 fn repo_root() -> Result<PathBuf, String> {
@@ -3296,8 +3290,8 @@ fn collect_session_files(dir: &Path, out: &mut Vec<RuntimeSessionSummary>) -> Re
             modified_epoch_millis: modified_ms,
             message_count,
             parent_session_id: None,
-            branch_name: None,
-        });
+            branch_name: None
+});
     }
 
     Ok(())
@@ -3372,8 +3366,8 @@ fn looks_like_real_user_title(title: &str) -> bool {
         "we need continue",
         "here is a summary",
         "automatic context",
-        "auto context",
-    ];
+        "auto context"
+];
 
     !skipped_prefixes
         .iter()
@@ -3435,8 +3429,8 @@ fn json_value_contains_type(value: &serde_json::Value, expected_type: &str) -> b
         serde_json::Value::Object(map) => map
             .values()
             .any(|item| json_value_contains_type(item, expected_type)),
-        _ => false,
-    }
+        _ => false
+}
 }
 
 fn canonical_message_id_from_raw_json(value: &serde_json::Value) -> Option<&str> {
@@ -3484,8 +3478,8 @@ fn parse_jsonl_messages(content: &str) -> Vec<serde_json::Value> {
                     "result" => "assistant",
                     "user" => "user",
                     "tool" | "tool_result" => "tool",
-                    _ => "system",
-                }
+                    _ => "system"
+}
             };
 
             let content_value = value
@@ -3553,8 +3547,8 @@ fn language_for_path(path: &str) -> String {
         "yaml" | "yml" => "yaml",
         "html" => "html",
         "css" => "css",
-        other => other,
-    }
+        other => other
+}
     .to_string()
 }
 
@@ -3592,11 +3586,6 @@ fn main() {
             sqlite_query,
             sqlite_execute,
             sqlite_database_info,
-            sqlite_usage_read_source,
-            sqlite_usage_records,
-            sqlite_usage_assistant_summaries,
-            sqlite_usage_session_summary,
-            sqlite_usage_day_splits,
             default_workspace,
             open_workspace,
             load_workspace_registry,

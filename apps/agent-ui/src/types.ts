@@ -197,7 +197,6 @@ export type AgentReplStreamEvent = {
   sessionId: string;
   root: string;
   eventType: string;
-  assistantMessageId?: string | null;
   bindStatus?: "ok" | "missing_assistant_message_id" | string | null;
   payload: Record<string, unknown>;
 };

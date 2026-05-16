@@ -151,6 +151,7 @@ type DebugStreamEvent = {
 
 type AssistantMessageDebugBundle = {
   messageId: string;
+  modelCallIds: string[];
   sessionId: string;
   root: string;
   userMessage?: string;
@@ -456,64 +457,168 @@ function appendDebugEvent(
   };
 }
 
-function latestOpenAssistantDebugBundleId(
-  current: Record<string, AssistantMessageDebugBundle>,
-  sessionId: string,
-): string | null {
-  let selected: AssistantMessageDebugBundle | null = null;
-  for (const bundle of Object.values(current)) {
-    if (bundle.sessionId !== sessionId || bundle.completed) {
-      continue;
-    }
-    if (!selected || bundle.startedAt > selected.startedAt) {
-      selected = bundle;
-    }
+type ResolvedRuntimeBundleEvent = {
+  event: AgentReplStreamEvent;
+  bundleId: string | null;
+  previousBundleId: string | null;
+  modelCallId: string | null;
+  createsBundle: boolean;
+  completesBundle: boolean;
+};
+
+function addUniqueString(items: string[], value: string | null | undefined): string[] {
+  const trimmed = value?.trim();
+  if (!trimmed || items.includes(trimmed)) {
+    return items;
   }
-  return selected?.messageId ?? null;
+  return [...items, trimmed];
 }
 
-function updateAssistantDebugBundleForEvent(
-  current: Record<string, AssistantMessageDebugBundle>,
-  event: AgentReplStreamEvent,
-  debugEvent: DebugStreamEvent,
-): Record<string, AssistantMessageDebugBundle> {
-  const messageId = latestOpenAssistantDebugBundleId(current, event.sessionId);
-  if (!messageId) {
-    return current;
+function modelCallIdFromRawJson(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
   }
-
-  const bundle = current[messageId];
-  if (!bundle) {
-    return current;
+  const message = value.message;
+  if (!isRecord(message)) {
+    return null;
   }
+  const id = message.id;
+  return typeof id === "string" && id.trim() ? id.trim() : null;
+}
 
-  const text = payloadText(event);
-  let displayText = bundle.displayText;
-  if (event.eventType === "turn_text" && text) {
-    displayText =
-      displayText === pendingAssistantText ? text : `${displayText}${text}`;
-  } else if (event.eventType === "turn_complete" && text) {
-    displayText = text;
+function modelCallIdFromEvent(event: AgentReplStreamEvent): string | null {
+  return modelCallIdFromRawJson(event.payload.raw_json);
+}
+
+function isAssistantBundleStartEvent(event: AgentReplStreamEvent): boolean {
+  if (event.eventType !== "turn_text" && event.eventType !== "tool_call") {
+    return false;
   }
+  const rawJson = event.payload.raw_json;
+  return isRecord(rawJson) && rawJson.type === "assistant" && Boolean(modelCallIdFromRawJson(rawJson));
+}
 
-  const completed =
-    bundle.completed ||
+function isBundleCompletionEvent(event: AgentReplStreamEvent): boolean {
+  return (
     event.eventType === "turn_complete" ||
     event.eventType === "error" ||
     event.eventType === "interrupt" ||
-    event.eventType === "process_exit";
+    event.eventType === "process_exit"
+  );
+}
+
+function resolveRuntimeBundleEvent(
+  event: AgentReplStreamEvent,
+  currentBundleBySession: Record<string, string | null>,
+): ResolvedRuntimeBundleEvent {
+  const modelCallId = modelCallIdFromEvent(event);
+  const previousBundleId = currentBundleBySession[event.sessionId] ?? null;
+  let bundleId = previousBundleId;
+  let createsBundle = false;
+
+  if (isAssistantBundleStartEvent(event) && modelCallId) {
+    if (!bundleId || bundleId.startsWith("assistant-pending-")) {
+      bundleId = modelCallId;
+      createsBundle = true;
+      currentBundleBySession[event.sessionId] = bundleId;
+    }
+  }
+
+  const completesBundle = isBundleCompletionEvent(event);
+  if (completesBundle) {
+    currentBundleBySession[event.sessionId] = null;
+  }
 
   return {
-    ...current,
-    [messageId]: {
-      ...bundle,
-      displayText,
-      completed,
-      updatedAt: debugEvent.receivedAt,
-      events: [...bundle.events, debugEvent].slice(-300),
+    event,
+    bundleId,
+    previousBundleId: previousBundleId !== bundleId ? previousBundleId : null,
+    modelCallId,
+    createsBundle,
+    completesBundle,
+  };
+}
+
+function rekeyAssistantBundle(
+  current: Record<string, AssistantMessageDebugBundle>,
+  previousBundleId: string | null,
+  bundleId: string,
+): Record<string, AssistantMessageDebugBundle> {
+  if (!previousBundleId || previousBundleId === bundleId || !current[previousBundleId]) {
+    return current;
+  }
+
+  const { [previousBundleId]: previous, ...rest } = current;
+  return {
+    ...rest,
+    [bundleId]: {
+      ...previous,
+      messageId: bundleId,
+      modelCallIds: addUniqueString(previous.modelCallIds ?? [], bundleId),
     },
   };
 }
+
+function applyRuntimeDebugEventToBundle(
+  current: Record<string, AssistantMessageDebugBundle>,
+  resolved: ResolvedRuntimeBundleEvent,
+  debugEvent: DebugStreamEvent,
+): Record<string, AssistantMessageDebugBundle> {
+  const { event, bundleId, previousBundleId, modelCallId, completesBundle } = resolved;
+  if (!bundleId) {
+    return current;
+  }
+
+  const rekeyed = rekeyAssistantBundle(current, previousBundleId, bundleId);
+  const existing = rekeyed[bundleId];
+
+  const text = payloadText(event);
+  const displayText =
+    event.eventType === "turn_complete" && text
+      ? text
+      : event.eventType === "turn_text" && text
+        ? existing?.displayText && existing.displayText !== pendingAssistantText
+          ? `${existing.displayText}${text}`
+          : text
+        : existing?.displayText ?? pendingAssistantText;
+
+  const nextBundle: AssistantMessageDebugBundle = {
+    messageId: bundleId,
+    modelCallIds: addUniqueString(existing?.modelCallIds ?? [bundleId], modelCallId),
+    sessionId: existing?.sessionId ?? event.sessionId,
+    root: existing?.root ?? event.root,
+    userMessage: existing?.userMessage,
+    transportMessage: existing?.transportMessage,
+    fileReferences: existing?.fileReferences,
+    displayText,
+    startedAt: existing?.startedAt ?? debugEvent.receivedAt,
+    updatedAt: debugEvent.receivedAt,
+    completed: existing?.completed === true || completesBundle,
+    events: [...(existing?.events ?? []), debugEvent].slice(-300),
+  };
+
+  return {
+    ...rekeyed,
+    [bundleId]: nextBundle,
+  };
+}
+
+function rekeyAssistantStreamItem(
+  items: StreamItem[],
+  previousBundleId: string | null,
+  bundleId: string | null,
+): StreamItem[] {
+  if (!previousBundleId || !bundleId || previousBundleId === bundleId) {
+    return items;
+  }
+  return items.map((item) =>
+    item.kind === "message" && item.role === "assistant" && item.id === previousBundleId
+      ? { ...item, id: bundleId }
+      : item,
+  );
+}
+
+
 
 function rekeyAssistantDebugBundles(
   current: Record<string, AssistantMessageDebugBundle>,
@@ -1582,6 +1687,7 @@ function runtimeSessionToArtifacts(
         id: string;
         text: string;
         progressText?: string;
+        modelCallIds: string[];
         events: DebugStreamEvent[];
         startedAt: number;
         updatedAt: number;
@@ -1609,6 +1715,7 @@ function runtimeSessionToArtifacts(
       });
       bundles[pendingAssistant.id] = {
         messageId: pendingAssistant.id,
+        modelCallIds: pendingAssistant.modelCallIds,
         sessionId: detail.id,
         root,
         userMessage: currentUserText,
@@ -1672,10 +1779,18 @@ function runtimeSessionToArtifacts(
       ];
       pendingTurnEvents = [];
 
+      const modelCallId = modelCallIdFromRawJson(rawJsonFromRuntimeMessage(message));
+
       if (!pendingAssistant) {
+        if (!modelCallId) {
+          pendingTurnEvents = [...pendingTurnEvents, ...eventBatch].slice(-300);
+          continue;
+        }
+
         pendingAssistant = {
-          id: message.id,
+          id: modelCallId,
           text,
+          modelCallIds: [modelCallId],
           events: eventBatch,
           startedAt: eventBatch[0]?.receivedAt ?? detail.updated_at_ms + index,
           updatedAt: eventBatch.length > 0 ? eventBatch[eventBatch.length - 1].receivedAt : detail.updated_at_ms + index,
@@ -1683,12 +1798,16 @@ function runtimeSessionToArtifacts(
         continue;
       }
 
+      pendingAssistant.modelCallIds = addUniqueString(
+        pendingAssistant.modelCallIds,
+        modelCallId,
+      );
+
       if (text) {
         pendingAssistant.progressText = mergeProgressText(
           pendingAssistant.progressText,
           pendingAssistant.text,
         );
-        pendingAssistant.id = message.id;
         pendingAssistant.text = text;
       }
       pendingAssistant.events = [
@@ -2066,7 +2185,7 @@ function compareUsageTurnRows(left: UsageRecordRow, right: UsageRecordRow): numb
 }
 
 type AssistantUsageTimelinePoint = {
-  assistantMessageId: string;
+  assistantBundleId: string;
   summary: UsageAssistantSummaryRow;
   occurAtMs: number | null;
   firstTurnIndex: number | null;
@@ -2086,11 +2205,11 @@ function buildAssistantUsageTimelinePoints(
 ): AssistantUsageTimelinePoint[] {
   return assistantSummaries
     .map((summary) => {
-      const assistantMessageId = String(usageCell(summary, "assistant_message_id") ?? "").trim();
-      if (!assistantMessageId) return null;
+      const assistantBundleId = String(usageCell(summary, "assistant_message_id") ?? "").trim();
+      if (!assistantBundleId) return null;
 
       return {
-        assistantMessageId,
+        assistantBundleId,
         summary,
         occurAtMs: usageNumberValue(usageCell(summary, "created_at_ms")),
         firstTurnIndex: usageNumberValue(usageCell(summary, "first_turn_index")),
@@ -2123,13 +2242,13 @@ function assistantPointOccurTime(point: AssistantUsageTimelinePoint): string {
 function UsageTimelineChart({
   assistantSummaries,
   metricKey,
-  selectedAssistantMessageId,
+  selectedAssistantBundleId,
   onAssistantDoubleClick,
 }: {
   assistantSummaries: UsageAssistantSummaryRow[];
   metricKey: UsageMetricKey;
-  selectedAssistantMessageId?: string | null;
-  onAssistantDoubleClick?: (assistantMessageId: string) => void;
+  selectedAssistantBundleId?: string | null;
+  onAssistantDoubleClick?: (assistantBundleId: string) => void;
 }) {
   const points = buildAssistantUsageTimelinePoints(assistantSummaries, metricKey);
 
@@ -2185,23 +2304,23 @@ function UsageTimelineChart({
           const y = yForValue(value);
           const occurTime = assistantPointOccurTime(point);
           const valueLabel = usageFormatValue(value, metricKey);
-          const isSelected = selectedAssistantMessageId === point.assistantMessageId;
+          const isSelected = selectedAssistantBundleId === point.assistantBundleId;
 
           return (
             <circle
-              key={point.assistantMessageId}
+              key={point.assistantBundleId}
               className={`usage-timeline-point${isSelected ? " selected" : ""}`}
               cx={x}
               cy={y}
               r={isSelected ? "5.5" : "3.5"}
               tabIndex={0}
               role="button"
-              aria-label={`Assistant ${usageShortId(point.assistantMessageId)} ${occurTime} ${usageMetricLabel(metricKey)} ${valueLabel}`}
-              onClick={() => onAssistantDoubleClick?.(point.assistantMessageId)}
-              onDoubleClick={() => onAssistantDoubleClick?.(point.assistantMessageId)}
+              aria-label={`Assistant ${usageShortId(point.assistantBundleId)} ${occurTime} ${usageMetricLabel(metricKey)} ${valueLabel}`}
+              onClick={() => onAssistantDoubleClick?.(point.assistantBundleId)}
+              onDoubleClick={() => onAssistantDoubleClick?.(point.assistantBundleId)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
-                  onAssistantDoubleClick?.(point.assistantMessageId);
+                  onAssistantDoubleClick?.(point.assistantBundleId);
                 }
               }}
             >
@@ -2228,13 +2347,13 @@ function UsageTimelineChart({
 function SessionUsageAssistantMessageDetail({
   records,
   assistantSummaries,
-  assistantMessageId,
+  assistantBundleId,
 }: {
   records: UsageRecordRow[];
   assistantSummaries: UsageAssistantSummaryRow[];
-  assistantMessageId: string | null;
+  assistantBundleId: string | null;
 }) {
-  if (!assistantMessageId) {
+  if (!assistantBundleId) {
     return (
       <div className="usage-table-card">
         <div className="debug-empty">Click an assistant point to inspect that assistant message.</div>
@@ -2243,17 +2362,17 @@ function SessionUsageAssistantMessageDetail({
   }
 
   const assistantSummary = assistantSummaries.find(
-    (row) => String(usageCell(row, "assistant_message_id") ?? "") === assistantMessageId,
+    (row) => String(usageCell(row, "assistant_message_id") ?? "") === assistantBundleId,
   );
   const assistantRecords = records
-    .filter((row) => String(usageCell(row, "assistant_message_id") ?? "") === assistantMessageId)
+    .filter((row) => String(usageCell(row, "assistant_message_id") ?? "") === assistantBundleId)
     .sort(compareUsageTurnRows);
 
   if (!assistantSummary && assistantRecords.length === 0) {
     return (
       <div className="usage-table-card">
         <strong>Assistant message detail</strong>
-        <div className="debug-empty">No usage found for {usageShortId(assistantMessageId)}.</div>
+        <div className="debug-empty">No usage found for {usageShortId(assistantBundleId)}.</div>
       </div>
     );
   }
@@ -2276,7 +2395,7 @@ function SessionUsageAssistantMessageDetail({
         <form className="usage-detail-form">
           <label>
             <span>Assistant</span>
-            <input readOnly value={usageShortId(assistantMessageId)} title={assistantMessageId} />
+            <input readOnly value={usageShortId(assistantBundleId)} title={assistantBundleId} />
           </label>
           <label>
             <span>Occur time</span>
@@ -2328,7 +2447,7 @@ function SessionUsageAssistantMessageDetail({
       <div className="usage-table-card">
         <strong>Turn detail</strong>
         <div className="usage-detail-meta">
-          assistant {usageShortId(assistantMessageId)} · rows {assistantRecords.length}
+          assistant {usageShortId(assistantBundleId)} · rows {assistantRecords.length}
         </div>
         <table className="usage-table">
           <thead>
@@ -2499,11 +2618,11 @@ function upsertCurrentTurnProgressMessage(
   items: StreamItem[],
   sessionId: string,
   text: string,
-  assistantMessageId: string | null | undefined,
+  bundleId: string | null | undefined,
 ): StreamItem[] {
-  const canonicalAssistantMessageId = assistantMessageId?.trim();
-  if (!canonicalAssistantMessageId) {
-    console.warn("[agent-ui][usage] assistant live event missing assistantMessageId; skip transient assistant StreamItem id", {
+  const canonicalBundleId = bundleId?.trim();
+  if (!canonicalBundleId) {
+    console.warn("[agent-ui][bundle] assistant live event has no resolved bundle id; skip transient assistant StreamItem", {
       sessionId,
     });
     return items;
@@ -2526,7 +2645,6 @@ function upsertCurrentTurnProgressMessage(
       );
       return {
         ...item,
-        id: canonicalAssistantMessageId,
         text:
           item.status === "streaming" || item.text === pendingAssistantText
             ? pendingAssistantText
@@ -2541,7 +2659,7 @@ function upsertCurrentTurnProgressMessage(
   return [
     ...items,
     {
-      id: canonicalAssistantMessageId,
+      id: canonicalBundleId,
       kind: "message",
       role: "assistant",
       text: pendingAssistantText,
@@ -2555,11 +2673,11 @@ function completeCurrentTurnAssistantMessage(
   items: StreamItem[],
   sessionId: string,
   text: string,
-  assistantMessageId: string | null | undefined,
+  bundleId: string | null | undefined,
 ): StreamItem[] {
-  const canonicalAssistantMessageId = assistantMessageId?.trim();
-  if (!canonicalAssistantMessageId) {
-    console.warn("[agent-ui][usage] assistant complete event missing assistantMessageId; skip transient assistant StreamItem id", {
+  const canonicalBundleId = bundleId?.trim();
+  if (!canonicalBundleId) {
+    console.warn("[agent-ui][bundle] assistant complete event has no resolved bundle id; skip transient assistant StreamItem", {
       sessionId,
     });
     return items;
@@ -2579,7 +2697,6 @@ function completeCurrentTurnAssistantMessage(
       const progressText = item.progressText?.trim();
       return {
         ...item,
-        id: canonicalAssistantMessageId,
         text: finalText,
         links: extractPreviewLinks(finalText),
         progressText:
@@ -2592,7 +2709,7 @@ function completeCurrentTurnAssistantMessage(
   return [
     ...items,
     {
-      id: canonicalAssistantMessageId,
+      id: canonicalBundleId,
       kind: "message",
       role: "assistant",
       text: finalText,
@@ -2660,41 +2777,47 @@ function collapseAssistantTurns(items: StreamItem[]): StreamItem[] {
 
 function streamEventToItems(
   items: StreamItem[],
-  event: AgentReplStreamEvent,
+  resolved: ResolvedRuntimeBundleEvent,
 ): StreamItem[] {
+  const event = resolved.event;
   if (isPermissionEventName(event.eventType)) {
     return items;
   }
   const baseId = `repl:${event.sessionId}:${Date.now()}`;
+  const bundleItems = rekeyAssistantStreamItem(
+    items,
+    resolved.previousBundleId,
+    resolved.bundleId,
+  );
+
   switch (event.eventType) {
     case "raw_json":
     case "process_status":
-      return items;
+      return bundleItems;
     case "startup":
-      return items;
+      return bundleItems;
     case "turn_text":
       return upsertCurrentTurnProgressMessage(
-        items,
+        bundleItems,
         event.sessionId,
-        payloadText(event), event.assistantMessageId);
+        payloadText(event),
+        resolved.bundleId,
+      );
     case "tool_call":
     case "tool_result":
-      // Tool and command details are attached to the current assistant turn's
-      // folded process panel via the per-message debug bundle. Rendering them
-      // as separate stream items makes one model turn look like many answers.
-      return items;
+      return bundleItems;
     case "turn_complete": {
       const finalText = payloadText(event);
       return finalText
-        ? completeCurrentTurnAssistantMessage(items, event.sessionId, finalText, event.assistantMessageId)
-        : items;
+        ? completeCurrentTurnAssistantMessage(bundleItems, event.sessionId, finalText, resolved.bundleId)
+        : bundleItems;
     }
     case "process_exit":
-      return items;
+      return bundleItems;
     case "stderr":
     case "error":
       return [
-        ...items,
+        ...bundleItems,
         {
           id: baseId,
           kind: "system",
@@ -2704,7 +2827,7 @@ function streamEventToItems(
         },
       ];
     default:
-      return items;
+      return bundleItems;
   }
 }
 
@@ -2735,6 +2858,7 @@ export function App() {
   const [assistantDebugBundles, setAssistantDebugBundles] = useState<
     Record<string, AssistantMessageDebugBundle>
   >(() => loadAssistantDebugBundles());
+  const currentBundleBySessionRef = useRef<Record<string, string | null>>({});
   const [copiedDebugMessageId, setCopiedDebugMessageId] = useState<string | null>(
     null,
   );
@@ -2761,7 +2885,7 @@ export function App() {
     useState<SessionUsagePayload>(emptySessionUsagePayload);
   const [sessionUsageMetricKey, setSessionUsageMetricKey] =
     useState<UsageMetricKey>("total_input_tokens");
-  const [selectedSessionUsageAssistantMessageId, setSelectedSessionUsageAssistantMessageId] =
+  const [selectedSessionUsageAssistantBundleId, setSelectedSessionUsageAssistantBundleId] =
     useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -3169,17 +3293,16 @@ export function App() {
           : null;
 
       const debugEntry = createDebugEvent(event);
+      const resolved = resolveRuntimeBundleEvent(
+        event,
+        currentBundleBySessionRef.current,
+      );
       setSessionDebugEvents((events) => appendDebugEvent(events, debugEntry));
-      setAssistantDebugBundles((bundles) => {
-        const assistantMessageId = latestOpenAssistantDebugBundleId(
-          bundles,
-          event.sessionId,
-        );
-
-        return updateAssistantDebugBundleForEvent(bundles, event, debugEntry);
-      });
+      setAssistantDebugBundles((bundles) =>
+        applyRuntimeDebugEventToBundle(bundles, resolved, debugEntry),
+      );
       updateSessionStream(event.sessionId, (items) =>
-        streamEventToItems(items, event),
+        streamEventToItems(items, resolved),
       );
 
       if (event.eventType === "permission_request" || event.eventType === "control_request") {
@@ -3954,7 +4077,7 @@ export function App() {
         assistantSummaries,
         summary: summaryRows[0] ?? null,
       }));
-      setSelectedSessionUsageAssistantMessageId((current) => {
+      setSelectedSessionUsageAssistantBundleId((current) => {
         if (!current) return current;
         return assistantSummaries.some(
           (row) => String(usageCell(row, "assistant_message_id") ?? "") === current,
@@ -4172,6 +4295,7 @@ export function App() {
       `请阅读这些引用文件：${referencedFiles.map((reference) => `@${reference.path}`).join(", ")}`;
     const pendingId = `assistant-pending-${Date.now()}`;
     const targetSessionId = activeSessionId;
+    currentBundleBySessionRef.current[targetSessionId] = pendingId;
     let inputForClaude = displayPrompt;
     let injectedFileReferences: LocalFileReferenceSummary[] = [];
 
@@ -4196,6 +4320,7 @@ export function App() {
       ...bundles,
       [pendingId]: {
         messageId: pendingId,
+        modelCallIds: [],
         sessionId: targetSessionId,
         root: activeProject.root,
         userMessage: displayPrompt,
@@ -4797,9 +4922,9 @@ export function App() {
                     <UsageTimelineChart
                       assistantSummaries={sessionUsagePayload.assistantSummaries}
                       metricKey={sessionUsageMetricKey}
-                      selectedAssistantMessageId={selectedSessionUsageAssistantMessageId}
-                      onAssistantDoubleClick={(assistantMessageId) =>
-                        setSelectedSessionUsageAssistantMessageId(assistantMessageId)
+                      selectedAssistantBundleId={selectedSessionUsageAssistantBundleId}
+                      onAssistantDoubleClick={(assistantBundleId) =>
+                        setSelectedSessionUsageAssistantBundleId(assistantBundleId)
                       }
                     />
                     <div className="usage-note">
@@ -4811,7 +4936,7 @@ export function App() {
                     <SessionUsageAssistantMessageDetail
                       records={sessionUsagePayload.records}
                       assistantSummaries={sessionUsagePayload.assistantSummaries}
-                      assistantMessageId={selectedSessionUsageAssistantMessageId}
+                      assistantBundleId={selectedSessionUsageAssistantBundleId}
                     />
                   </article>
 
