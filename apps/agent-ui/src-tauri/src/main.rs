@@ -1,6 +1,6 @@
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -12,7 +12,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
 mod sqlite;
-use sqlite::{sqlite_database_info, sqlite_execute, sqlite_query};
+use sqlite::{
+    sqlite_database_info, sqlite_debug_events, sqlite_execute, sqlite_query,
+    sqlite_rebuild_usage_records_from_debug_events, sqlite_usage_day_splits,
+    sqlite_usage_read_source, sqlite_usage_records, sqlite_usage_assistant_summaries, sqlite_usage_session_summary,
+};
 
 #[derive(Debug, Serialize)]
 struct WorkspaceState {
@@ -32,7 +36,6 @@ struct WorkspaceRegistryEntry {
 struct WorkspaceRegistry {
     workspaces: Vec<WorkspaceRegistryEntry>,
 }
-
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -207,7 +210,6 @@ struct AgentReplProcessStatus {
     pid: Option<u32>,
 }
 
-
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct AgentReplCapabilityItem {
@@ -264,7 +266,6 @@ struct ClawProcess {
     child: Child,
 }
 
-
 struct ControlResponseRegistry {
     responses: Mutex<HashMap<String, Value>>,
     condvar: Condvar,
@@ -276,7 +277,6 @@ static CONTROL_RESPONSES: OnceLock<ControlResponseRegistry> = OnceLock::new();
 fn claw_processes() -> &'static Mutex<HashMap<String, ClawProcess>> {
     CLAW_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
-
 
 fn control_responses() -> &'static ControlResponseRegistry {
     CONTROL_RESPONSES.get_or_init(|| ControlResponseRegistry {
@@ -334,7 +334,9 @@ fn wait_for_control_response(request_id: &str, timeout: Duration) -> Result<Valu
 
         let now = Instant::now();
         if now >= deadline {
-            return Err(format!("Timed out waiting for control response {request_id}"));
+            return Err(format!(
+                "Timed out waiting for control response {request_id}"
+            ));
         }
 
         let wait_for = deadline.saturating_duration_since(now);
@@ -345,12 +347,17 @@ fn wait_for_control_response(request_id: &str, timeout: Duration) -> Result<Valu
         responses = next_responses;
 
         if wait_result.timed_out() {
-            return Err(format!("Timed out waiting for control response {request_id}"));
+            return Err(format!(
+                "Timed out waiting for control response {request_id}"
+            ));
         }
     }
 }
 
-fn capability_item_from_value(value: &Value, fallback_kind: &str) -> Option<AgentReplCapabilityItem> {
+fn capability_item_from_value(
+    value: &Value,
+    fallback_kind: &str,
+) -> Option<AgentReplCapabilityItem> {
     if let Some(name) = value.as_str() {
         let name = name.trim();
         if name.is_empty() {
@@ -399,7 +406,10 @@ fn capability_item_from_value(value: &Value, fallback_kind: &str) -> Option<Agen
     })
 }
 
-fn capability_items_from_value(value: Option<&Value>, fallback_kind: &str) -> Vec<AgentReplCapabilityItem> {
+fn capability_items_from_value(
+    value: Option<&Value>,
+    fallback_kind: &str,
+) -> Vec<AgentReplCapabilityItem> {
     value
         .and_then(|v| v.as_array())
         .map(|items| {
@@ -467,7 +477,9 @@ fn is_existing_claude_session_id(session_id: &str) -> bool {
         && parts[2].len() == 4
         && parts[3].len() == 4
         && parts[4].len() == 12
-        && session_id.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-')
+        && session_id
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() || ch == '-')
 }
 
 fn claude_session_file_exists(root_path: &Path, session_id: &str) -> bool {
@@ -531,18 +543,20 @@ fn emit_process_status(
     pid: Option<u32>,
     reason: &str,
 ) {
-    let _ = app.emit("agent-repl-event", json!({
-        "sessionId": session_id,
-        "root": root,
-        "eventType": "process_status",
-        "payload": {
-            "running": running,
-            "pid": pid,
-            "reason": reason
-        }
-    }));
+    let _ = app.emit(
+        "agent-repl-event",
+        json!({
+            "sessionId": session_id,
+            "root": root,
+            "eventType": "process_status",
+            "payload": {
+                "running": running,
+                "pid": pid,
+                "reason": reason
+            }
+        }),
+    );
 }
-
 
 #[tauri::command]
 fn default_workspace() -> Result<WorkspaceState, String> {
@@ -616,34 +630,43 @@ fn interrupt_agent_turn(
             let line = serde_json::to_string(&request).map_err(error_to_string)?;
             writeln!(proc_state.stdin, "{line}").map_err(error_to_string)?;
             proc_state.stdin.flush().map_err(error_to_string)?;
-            let _ = app.emit("agent-repl-event", json!({
-                "sessionId": session_id,
-                "root": root,
-                "eventType": "interrupt",
-                "payload": {
-                    "ok": true,
-                    "text": "Interrupt signal sent"
-                }
-            }));
+            let _ = app.emit(
+                "agent-repl-event",
+                json!({
+                    "sessionId": session_id,
+                    "root": root,
+                    "eventType": "interrupt",
+                    "payload": {
+                        "ok": true,
+                        "text": "Interrupt signal sent"
+                    }
+                }),
+            );
             Ok(true)
         }
         None => {
-            let _ = app.emit("agent-repl-event", json!({
-                "sessionId": session_id,
-                "root": root,
-                "eventType": "interrupt",
-                "payload": {
-                    "ok": false,
-                    "text": "No running process to interrupt"
-                }
-            }));
+            let _ = app.emit(
+                "agent-repl-event",
+                json!({
+                    "sessionId": session_id,
+                    "root": root,
+                    "eventType": "interrupt",
+                    "payload": {
+                        "ok": false,
+                        "text": "No running process to interrupt"
+                    }
+                }),
+            );
             Ok(false)
         }
     }
 }
 
 #[tauri::command]
-fn get_agent_repl_process_status(root: String, session_id: String) -> Result<AgentReplProcessStatus, String> {
+fn get_agent_repl_process_status(
+    root: String,
+    session_id: String,
+) -> Result<AgentReplProcessStatus, String> {
     let key = process_key(&root, &session_id);
     let mut processes = claw_processes().lock().map_err(error_to_string)?;
 
@@ -705,7 +728,10 @@ fn respond_agent_permission(
     }
     .ok_or_else(|| "REPL process is not running for permission response".to_string())?;
 
-    eprintln!("[DEBUG] respond_agent_permission: root={}, session={}, request={}, approved={}", root, session_id, request_id, approved);
+    eprintln!(
+        "[DEBUG] respond_agent_permission: root={}, session={}, request={}, approved={}",
+        root, session_id, request_id, approved
+    );
     eprintln!("[DEBUG] response line: {}", line);
     writeln!(proc_state.stdin, "{}", line).map_err(error_to_string)?;
     proc_state.stdin.flush().map_err(error_to_string)?;
@@ -787,7 +813,6 @@ fn normalize_reference_query(value: &str) -> String {
         .to_ascii_lowercase()
         .replace('\\', "/")
 }
-
 
 fn raw_reference_query(value: &str) -> String {
     value
@@ -873,7 +898,10 @@ fn file_reference_from_absolute_path(path: &Path, score: i64) -> Option<Workspac
     })
 }
 
-fn search_absolute_or_home_file_references(query: &str, limit: usize) -> Vec<WorkspaceFileReference> {
+fn search_absolute_or_home_file_references(
+    query: &str,
+    limit: usize,
+) -> Vec<WorkspaceFileReference> {
     let raw_query = raw_reference_query(query);
     if !is_absolute_or_home_reference(&raw_query) {
         return Vec::new();
@@ -1045,7 +1073,11 @@ fn file_reference_score(path: &str, name: &str, query: &str) -> Option<i64> {
     Some(score)
 }
 
-fn workspace_file_reference_from_path(root: &Path, relative_path: &str, query: &str) -> Option<WorkspaceFileReference> {
+fn workspace_file_reference_from_path(
+    root: &Path,
+    relative_path: &str,
+    query: &str,
+) -> Option<WorkspaceFileReference> {
     let normalized_relative = relative_path.trim().replace('\\', "/");
     if normalized_relative.is_empty() || normalized_relative.ends_with('/') {
         return None;
@@ -1121,7 +1153,9 @@ fn collect_workspace_file_references(
         *scanned += 1;
         if let Ok(relative) = path.strip_prefix(root) {
             let relative_string = relative.to_string_lossy().replace('\\', "/");
-            if let Some(reference) = workspace_file_reference_from_path(root, &relative_string, query) {
+            if let Some(reference) =
+                workspace_file_reference_from_path(root, &relative_string, query)
+            {
                 out.push(reference);
             }
         }
@@ -1158,7 +1192,9 @@ fn search_workspace_files(
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
-                if let Some(reference) = workspace_file_reference_from_path(&root_path, line, &normalized_query) {
+                if let Some(reference) =
+                    workspace_file_reference_from_path(&root_path, line, &normalized_query)
+                {
                     references.push(reference);
                 }
             }
@@ -1260,7 +1296,11 @@ fn frontmatter_list(frontmatter: &HashMap<String, Vec<String>>, keys: &[&str]) -
         if let Some(items) = frontmatter.get(&normalize_frontmatter_key(key)) {
             for item in items {
                 let trimmed = item.trim();
-                if !trimmed.is_empty() && !values.iter().any(|value: &String| value.as_str() == trimmed) {
+                if !trimmed.is_empty()
+                    && !values
+                        .iter()
+                        .any(|value: &String| value.as_str() == trimmed)
+                {
                     values.push(trimmed.to_string());
                 }
             }
@@ -1269,7 +1309,11 @@ fn frontmatter_list(frontmatter: &HashMap<String, Vec<String>>, keys: &[&str]) -
     values
 }
 
-fn frontmatter_bool(frontmatter: &HashMap<String, Vec<String>>, keys: &[&str], default: bool) -> bool {
+fn frontmatter_bool(
+    frontmatter: &HashMap<String, Vec<String>>,
+    keys: &[&str],
+    default: bool,
+) -> bool {
     match frontmatter_first(frontmatter, keys)
         .unwrap_or_default()
         .to_ascii_lowercase()
@@ -1322,7 +1366,10 @@ fn capability_for_tool(tool: &str) -> String {
         "Shell".to_string()
     } else if lower.starts_with("read") {
         "File Read".to_string()
-    } else if lower.starts_with("write") || lower.starts_with("edit") || lower.starts_with("multiedit") {
+    } else if lower.starts_with("write")
+        || lower.starts_with("edit")
+        || lower.starts_with("multiedit")
+    {
         "File Write".to_string()
     } else if lower.starts_with("grep") || lower.starts_with("glob") || lower.starts_with("ls") {
         "Search".to_string()
@@ -1333,7 +1380,11 @@ fn capability_for_tool(tool: &str) -> String {
     } else if lower.starts_with("skill") {
         "Skill Invoke".to_string()
     } else {
-        tool.split(['(', ':']).next().unwrap_or(tool).trim().to_string()
+        tool.split(['(', ':'])
+            .next()
+            .unwrap_or(tool)
+            .trim()
+            .to_string()
     }
 }
 
@@ -1348,7 +1399,13 @@ fn capabilities_for_tools(tools: &[String]) -> Vec<String> {
     capabilities
 }
 
-fn build_skill_summary(root_path: &Path, skill_dir: &Path, source_kind: &str, source_label: &str, source_base: &Path) -> serde_json::Value {
+fn build_skill_summary(
+    root_path: &Path,
+    skill_dir: &Path,
+    source_kind: &str,
+    source_label: &str,
+    source_base: &Path,
+) -> serde_json::Value {
     let directory_name = skill_dir
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -1369,22 +1426,35 @@ fn build_skill_summary(root_path: &Path, skill_dir: &Path, source_kind: &str, so
     let description = frontmatter_first(&frontmatter, &["description"]);
     let when_to_use = frontmatter_first(&frontmatter, &["when-to-use", "when_to_use", "whenToUse"]);
     let version = frontmatter_first(&frontmatter, &["version"]);
-    let allowed_tools = frontmatter_list(&frontmatter, &["allowed-tools", "allowed_tools", "allowedTools"]);
+    let allowed_tools = frontmatter_list(
+        &frontmatter,
+        &["allowed-tools", "allowed_tools", "allowedTools"],
+    );
     let paths = frontmatter_list(&frontmatter, &["paths"]);
     let hooks = frontmatter_list(&frontmatter, &["hooks"]);
-    let context = frontmatter_first(&frontmatter, &["context"]).unwrap_or_else(|| "inline".to_string());
+    let context =
+        frontmatter_first(&frontmatter, &["context"]).unwrap_or_else(|| "inline".to_string());
     let agent = frontmatter_first(&frontmatter, &["agent"]);
     let model = frontmatter_first(&frontmatter, &["model"]);
     let effort = frontmatter_first(&frontmatter, &["effort"]);
-    let user_invocable = frontmatter_bool(&frontmatter, &["user-invocable", "user_invocable", "userInvocable"], true);
+    let user_invocable = frontmatter_bool(
+        &frontmatter,
+        &["user-invocable", "user_invocable", "userInvocable"],
+        true,
+    );
     let disable_model_invocation = frontmatter_bool(
         &frontmatter,
-        &["disable-model-invocation", "disable_model_invocation", "disableModelInvocation"],
+        &[
+            "disable-model-invocation",
+            "disable_model_invocation",
+            "disableModelInvocation",
+        ],
         false,
     );
     let model_invocable = !disable_model_invocation;
     let size_bytes = directory_size(skill_dir);
-    let installed_at_ms = modified_epoch_millis(&skill_md).or_else(|| modified_epoch_millis(skill_dir));
+    let installed_at_ms =
+        modified_epoch_millis(&skill_md).or_else(|| modified_epoch_millis(skill_dir));
     let skill_root = relative_path_string(root_path, skill_dir);
     let skill_path = relative_path_string(root_path, &skill_md);
     let capabilities = capabilities_for_tools(&allowed_tools);
@@ -1567,7 +1637,9 @@ fn read_local_image_metadata(root: String, path: String) -> Result<LocalImageMet
     let resolved = resolve_local_reference_path(&root_path, &path)?;
 
     if !is_supported_image_path(&resolved) {
-        return Err("only png, jpg, jpeg, gif, webp, and svg image previews are supported".to_string());
+        return Err(
+            "only png, jpg, jpeg, gif, webp, and svg image previews are supported".to_string(),
+        );
     }
 
     let metadata = fs::metadata(&resolved).map_err(error_to_string)?;
@@ -1588,7 +1660,9 @@ fn read_local_image_preview(root: String, path: String) -> Result<LocalImagePrev
     let resolved = resolve_local_reference_path(&root_path, &path)?;
 
     if !is_supported_image_path(&resolved) {
-        return Err("only png, jpg, jpeg, gif, webp, and svg image previews are supported".to_string());
+        return Err(
+            "only png, jpg, jpeg, gif, webp, and svg image previews are supported".to_string(),
+        );
     }
 
     let metadata = fs::metadata(&resolved).map_err(error_to_string)?;
@@ -1658,7 +1732,11 @@ fn edit_workspace_file(
 }
 
 #[tauri::command]
-fn glob_runtime_search(root: String, pattern: String, path: Option<String>) -> Result<serde_json::Value, String> {
+fn glob_runtime_search(
+    root: String,
+    pattern: String,
+    path: Option<String>,
+) -> Result<serde_json::Value, String> {
     let root_path = canonical_workspace_root(&root)?;
     let base = match path {
         Some(p) if !p.is_empty() => resolve_workspace_path(&root_path, &p)?,
@@ -1680,7 +1758,10 @@ fn glob_runtime_search(root: String, pattern: String, path: Option<String>) -> R
 }
 
 #[tauri::command]
-fn grep_runtime_search(root: String, request: GrepRuntimeRequest) -> Result<serde_json::Value, String> {
+fn grep_runtime_search(
+    root: String,
+    request: GrepRuntimeRequest,
+) -> Result<serde_json::Value, String> {
     let root_path = canonical_workspace_root(&root)?;
     let base = match request.path {
         Some(p) if !p.is_empty() => resolve_workspace_path(&root_path, &p)?,
@@ -1716,7 +1797,10 @@ fn grep_runtime_search(root: String, request: GrepRuntimeRequest) -> Result<serd
 }
 
 #[tauri::command]
-fn execute_runtime_bash(root: String, request: BashRuntimeRequest) -> Result<serde_json::Value, String> {
+fn execute_runtime_bash(
+    root: String,
+    request: BashRuntimeRequest,
+) -> Result<serde_json::Value, String> {
     let root_path = canonical_workspace_root(&root)?;
     let output = Command::new("bash")
         .arg("-lc")
@@ -1751,7 +1835,9 @@ fn list_runtime_sessions(root: String) -> Result<Vec<RuntimeSessionSummary>, Str
 fn load_runtime_session(root: String, reference: String) -> Result<serde_json::Value, String> {
     let root_path = canonical_workspace_root(&root)?;
     let sessions = list_runtime_sessions(root)?;
-    let found = sessions.into_iter().find(|s| s.id == reference || s.path == reference);
+    let found = sessions
+        .into_iter()
+        .find(|s| s.id == reference || s.path == reference);
 
     if let Some(summary) = found {
         let content = fs::read_to_string(&summary.path).map_err(error_to_string)?;
@@ -1785,7 +1871,9 @@ fn create_runtime_session(root: String) -> Result<RuntimeSessionSummary, String>
     Ok(RuntimeSessionSummary {
         id,
         title: "New session".to_string(),
-        path: claude_project_sessions_dir(&root_path)?.to_string_lossy().to_string(),
+        path: claude_project_sessions_dir(&root_path)?
+            .to_string_lossy()
+            .to_string(),
         updated_at_ms: now_millis() as u64,
         modified_epoch_millis: now_millis(),
         message_count: 0,
@@ -1804,7 +1892,10 @@ fn read_git_diff(root: String, path: Option<String>) -> Result<GitDiff, String> 
         cmd.arg("--").arg(p);
     }
 
-    let output = cmd.current_dir(&root_path).output().map_err(error_to_string)?;
+    let output = cmd
+        .current_dir(&root_path)
+        .output()
+        .map_err(error_to_string)?;
     let diff = String::from_utf8_lossy(&output.stdout).to_string();
 
     Ok(GitDiff {
@@ -1813,7 +1904,6 @@ fn read_git_diff(root: String, path: Option<String>) -> Result<GitDiff, String> 
         diff,
     })
 }
-
 
 #[tauri::command]
 fn load_model_settings() -> Result<ModelSettings, String> {
@@ -1958,8 +2048,12 @@ fn save_mcp_settings(settings: McpSettings) -> Result<McpSettingsFile, String> {
     let path = astromere_mcp_config_path()?;
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create MCP settings dir {}: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create MCP settings dir {}: {error}",
+                parent.display()
+            )
+        })?;
     }
 
     let raw = serde_json::to_string_pretty(&settings)
@@ -1983,8 +2077,7 @@ fn ensure_agent_repl_process(
     permission_mode: Option<String>,
 ) -> Result<AgentReplProcessState, String> {
     let permission_mode =
-        normalize_permission_mode(permission_mode.as_deref().unwrap_or("default"))?
-            .to_string();
+        normalize_permission_mode(permission_mode.as_deref().unwrap_or("default"))?.to_string();
     let root_path = canonical_workspace_root(&root)?;
     let repo = repo_root()?;
     let settings = load_model_settings().unwrap_or_else(|_| default_model_settings());
@@ -2005,17 +2098,20 @@ fn ensure_agent_repl_process(
         if let Some(proc_state) = processes.get_mut(&key) {
             match proc_state.child.try_wait().map_err(error_to_string)? {
                 None => {
-                    let _ = app.emit("agent-repl-event", json!({
-                        "sessionId": session_id,
-                        "root": root,
-                        "eventType": "startup",
-                        "payload": {
-                            "bridge": "bun-stream-json",
-                            "process": "reused",
-                            "pid": proc_state.pid,
-                            "model": model
-                        }
-                    }));
+                    let _ = app.emit(
+                        "agent-repl-event",
+                        json!({
+                            "sessionId": session_id,
+                            "root": root,
+                            "eventType": "startup",
+                            "payload": {
+                                "bridge": "bun-stream-json",
+                                "process": "reused",
+                                "pid": proc_state.pid,
+                                "model": model
+                            }
+                        }),
+                    );
 
                     emit_process_status(
                         &app,
@@ -2037,17 +2133,20 @@ fn ensure_agent_repl_process(
                     let old_pid = proc_state.pid;
                     processes.remove(&key);
 
-                    let _ = app.emit("agent-repl-event", json!({
-                        "sessionId": session_id,
-                        "root": root,
-                        "eventType": "process_exit",
-                        "payload": {
-                            "running": false,
-                            "pid": old_pid,
-                            "status": status.to_string(),
-                            "reason": "exited_before_ensure"
-                        }
-                    }));
+                    let _ = app.emit(
+                        "agent-repl-event",
+                        json!({
+                            "sessionId": session_id,
+                            "root": root,
+                            "eventType": "process_exit",
+                            "payload": {
+                                "running": false,
+                                "pid": old_pid,
+                                "status": status.to_string(),
+                                "reason": "exited_before_ensure"
+                            }
+                        }),
+                    );
 
                     emit_process_status(
                         &app,
@@ -2162,7 +2261,10 @@ fn ensure_agent_repl_process(
 }
 
 #[tauri::command]
-fn kill_agent_repl_process(root: String, session_id: String) -> Result<AgentReplProcessStatus, String> {
+fn kill_agent_repl_process(
+    root: String,
+    session_id: String,
+) -> Result<AgentReplProcessStatus, String> {
     let key = process_key(&root, &session_id);
     let mut processes = claw_processes().lock().map_err(error_to_string)?;
 
@@ -2216,9 +2318,11 @@ fn send_agent_repl_input(
     Ok(AgentReplSendResult { accepted: true })
 }
 
-
 #[tauri::command]
-fn get_agent_repl_capabilities(root: String, session_id: String) -> Result<AgentReplCapabilities, String> {
+fn get_agent_repl_capabilities(
+    root: String,
+    session_id: String,
+) -> Result<AgentReplCapabilities, String> {
     let request_id = format!("agent-ui-capabilities-{}", now_millis());
     let request = json!({
         "type": "control_request",
@@ -2252,7 +2356,11 @@ fn get_agent_repl_capabilities(root: String, session_id: String) -> Result<Agent
 }
 
 #[tauri::command]
-fn run_agent_turn(root: String, session_id: String, prompt: String) -> Result<AgentTurnResponse, String> {
+fn run_agent_turn(
+    root: String,
+    session_id: String,
+    prompt: String,
+) -> Result<AgentTurnResponse, String> {
     let root_path = canonical_workspace_root(&root)?;
     let repo = repo_root()?;
     let settings = load_model_settings().unwrap_or_else(|_| default_model_settings());
@@ -2289,7 +2397,12 @@ fn run_agent_turn(root: String, session_id: String, prompt: String) -> Result<Ag
         .as_ref()
         .and_then(|v| v.get("result"))
         .and_then(|v| v.as_str())
-        .or_else(|| raw_json.as_ref().and_then(|v| v.get("message")).and_then(|v| v.as_str()))
+        .or_else(|| {
+            raw_json
+                .as_ref()
+                .and_then(|v| v.get("message"))
+                .and_then(|v| v.as_str())
+        })
         .map(|s| s.to_string())
         .unwrap_or_else(|| {
             if stdout.trim().is_empty() {
@@ -2314,10 +2427,13 @@ fn run_agent_turn(root: String, session_id: String, prompt: String) -> Result<Ag
             .and_then(|v| v.get("total_cost_usd").or_else(|| v.get("cost_usd")))
             .map(|v| v.to_string()),
         raw_json,
-        stderr: if stderr.trim().is_empty() { None } else { Some(stderr) },
+        stderr: if stderr.trim().is_empty() {
+            None
+        } else {
+            Some(stderr)
+        },
     })
 }
-
 
 fn spawn_repl_stdout_reader(
     app: tauri::AppHandle,
@@ -2327,6 +2443,9 @@ fn spawn_repl_stdout_reader(
 ) {
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
+        let mut current_message_id_by_session: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
         let mut saw_text = false;
 
         for line in reader.lines() {
@@ -2334,14 +2453,17 @@ fn spawn_repl_stdout_reader(
             let line = match line {
                 Ok(line) => line,
                 Err(error) => {
-                    let _ = app.emit("agent-repl-event", json!({
-                        "sessionId": event_session_id,
-                        "root": root,
-                        "eventType": "error",
-                        "payload": {
-                            "text": error.to_string()
-                        }
-                    }));
+                    let _ = app.emit(
+                        "agent-repl-event",
+                        json!({
+                            "sessionId": event_session_id,
+                            "root": root,
+                            "eventType": "error",
+                            "payload": {
+                                "text": error.to_string()
+                            }
+                        }),
+                    );
                     break;
                 }
             };
@@ -2353,65 +2475,136 @@ fn spawn_repl_stdout_reader(
             let value: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(value) => value,
                 Err(_) => {
-                    let _ = app.emit("agent-repl-event", json!({
-                        "sessionId": event_session_id,
-                        "root": root,
-                        "eventType": "stderr",
-                        "payload": {
-                            "text": line
-                        }
-                    }));
+                    let _ = app.emit(
+                        "agent-repl-event",
+                        json!({
+                            "sessionId": event_session_id,
+                            "root": root,
+                            "eventType": "stderr",
+                            "payload": {
+                                "text": line
+                            }
+                        }),
+                    );
                     continue;
                 }
             };
 
             remember_control_response(&value);
 
-            let _ = app.emit("agent-repl-event", json!({
-                "sessionId": event_session_id,
-                "root": root,
-                "eventType": "raw_json",
-                "payload": {
-                    "raw_json": value.clone()
-                }
-            }));
+            let _ = app.emit(
+                "agent-repl-event",
+                json!({
+                    "sessionId": event_session_id,
+                    "root": root,
+                    "eventType": "raw_json",
+                    "payload": {
+                        "raw_json": value.clone()
+                    }
+                }),
+            );
 
             match value.get("type").and_then(|v| v.as_str()) {
                 Some("system") => {
                     let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
-                    let event_type = if subtype == "init" { "startup" } else { "system" };
-                    let _ = app.emit("agent-repl-event", json!({
-                        "sessionId": event_session_id,
-                        "root": root,
-                        "eventType": event_type,
-                        "payload": value
-                    }));
-                }
-                Some("assistant") => {
-                    for tool in extract_tool_uses(&value) {
-                        let _ = app.emit("agent-repl-event", json!({
+                    let event_type = if subtype == "init" {
+                        "startup"
+                    } else {
+                        "system"
+                    };
+                    let _ = app.emit(
+                        "agent-repl-event",
+                        json!({
                             "sessionId": event_session_id,
                             "root": root,
-                            "eventType": "tool_call",
-                            "payload": {
-                                "tool": tool,
-                                "raw_json": value
-                            }
-                        }));
+                            "eventType": event_type,
+                            "payload": value
+                        }),
+                    );
+                }
+                Some("assistant") => {
+                    let assistant_message_id = value
+                        .get("message")
+                        .and_then(|message| message.get("id"))
+                        .and_then(|id| id.as_str())
+                        .map(|id| id.to_string());
+
+                    if let Some(assistant_message_id) = assistant_message_id.as_deref() {
+                        current_message_id_by_session
+                            .insert(event_session_id.clone(), assistant_message_id.to_string());
+                        eprintln!(
+                            "[usage] current assistant_message_id set session_id={} assistant_message_id={}",
+                            event_session_id,
+                            assistant_message_id
+                        );
+                    } else {
+                        eprintln!(
+                            "[usage][warn] assistant event missing raw_json.message.id session_id={}",
+                            event_session_id
+                        );
+                    }
+
+                    let usage_debug_payload = json!({
+                        "event_type": "turn_text",
+                        "raw_json": value.clone()
+                    });
+                    let usage_raw_assistant_message_id_for_debug_event = value
+                        .get("message")
+                        .and_then(|message| message.get("id"))
+                        .and_then(|id| id.as_str());
+
+                    if let Err(error) = crate::sqlite::sqlite_persist_debug_event_from_stdout(
+                        &event_session_id,
+                        usage_raw_assistant_message_id_for_debug_event,
+                        "turn_text",
+                        &usage_debug_payload,
+                    ) {
+                        eprintln!(
+                            "[usage][warn] failed to persist debug_event turn_text: {}",
+                            error
+                        );
+                    }
+
+                    for tool in extract_tool_uses(&value) {
+                        let _ = app.emit(
+                            "agent-repl-event",
+                            json!({
+                                "sessionId": event_session_id,
+                                "root": root,
+                                "eventType": "tool_call",
+                                "payload": {
+                                    "tool": tool,
+                                    "raw_json": value
+                                }
+                            }),
+                        );
                     }
 
                     let text = extract_assistant_text(&value);
                     if !text.trim().is_empty() {
                         saw_text = true;
-                        let _ = app.emit("agent-repl-event", json!({
-                            "sessionId": event_session_id,
-                            "root": root,
-                            "eventType": "turn_text",
-                            "payload": {
-                                "text": text,
-                                "raw_json": value
-                            }
-                        }));
+                        let assistant_message_id_for_emit =
+                            assistant_message_id.map(|id| id.to_string());
+                        let assistant_bind_status_for_emit =
+                            if assistant_message_id_for_emit.is_some() {
+                                "ok"
+                            } else {
+                                "missing_assistant_message_id"
+                            };
+                        let _ = app.emit(
+                            "agent-repl-event",
+                            json!({
+                                "sessionId": event_session_id,
+                                "root": root,
+                                "eventType": "turn_text",
+                                "assistantMessageId": assistant_message_id_for_emit,
+                                "bindStatus": assistant_bind_status_for_emit,
+                                "payload": {
+                                    "text": text,
+                                    "raw_json": value
+                                }
+                            }),
+                        );
                     }
                 }
                 Some("result") => {
@@ -2430,16 +2623,87 @@ fn spawn_repl_stdout_reader(
                     let mut process_pid = None;
                     if let Some(real_session_id) = real_session_id.as_deref() {
                         if real_session_id != event_session_id {
-                            process_pid = rekey_process_session(&root, &event_session_id, real_session_id);
+                            process_pid =
+                                rekey_process_session(&root, &event_session_id, real_session_id);
                             set_shared_session_id(&shared_session, real_session_id);
-                            emit_process_status(&app, &root, real_session_id, true, process_pid, "rekeyed");
+                            emit_process_status(
+                                &app,
+                                &root,
+                                real_session_id,
+                                true,
+                                process_pid,
+                                "rekeyed",
+                            );
                         }
                     }
+
+                    let usage_binding_session_id = real_session_id
+                        .as_deref()
+                        .unwrap_or(event_session_id.as_str())
+                        .to_string();
+
+                    if usage_binding_session_id != event_session_id {
+                        if let Some(current_message_id) = current_message_id_by_session
+                            .get(&event_session_id)
+                            .cloned()
+                        {
+                            current_message_id_by_session
+                                .insert(usage_binding_session_id.clone(), current_message_id);
+                        }
+                    }
+
+                    if let Some(current_message_id) =
+                        current_message_id_by_session.get(&usage_binding_session_id)
+                    {
+                        eprintln!(
+                            "[usage] turn_complete bound session_id={} assistant_message_id={}",
+                            usage_binding_session_id, current_message_id
+                        );
+                    } else {
+                        eprintln!(
+                            "[usage][warn] turn_complete missing current assistant_message_id session_id={} event_session_id={}",
+                            usage_binding_session_id,
+                            event_session_id
+                        );
+                    }
+
+                    let usage_bound_assistant_message_id = current_message_id_by_session
+                        .get(&usage_binding_session_id)
+                        .map(|message_id| message_id.as_str());
+                    let usage_debug_payload = json!({
+                        "event_type": "turn_complete",
+                        "realSessionId": real_session_id.clone(),
+                        "raw_json": value.clone()
+                    });
+                    if let Err(error) = crate::sqlite::sqlite_persist_debug_event_from_stdout(
+                        &usage_binding_session_id,
+                        current_message_id_by_session
+                            .get(&usage_binding_session_id)
+                            .map(|value| value.as_str()),
+                        "turn_complete",
+                        &usage_debug_payload,
+                    ) {
+                        eprintln!(
+                            "[usage][warn] failed to persist debug_event turn_complete: {}",
+                            error
+                        );
+                    }
+
+                    let usage_bound_assistant_message_id_for_emit =
+                        usage_bound_assistant_message_id.map(|id| id.to_string());
+                    let usage_bind_status_for_emit =
+                        if usage_bound_assistant_message_id_for_emit.is_some() {
+                            "ok"
+                        } else {
+                            "missing_assistant_message_id"
+                        };
 
                     let _ = app.emit("agent-repl-event", json!({
                         "sessionId": event_session_id,
                         "root": root,
                         "eventType": "turn_complete",
+                        "assistantMessageId": usage_bound_assistant_message_id_for_emit,
+                        "bindStatus": usage_bind_status_for_emit,
                         "payload": {
                             "ok": value.get("is_error").and_then(|v| v.as_bool()).map(|v| !v).unwrap_or(true),
                             "text": result_text,
@@ -2472,57 +2736,82 @@ fn spawn_repl_stdout_reader(
                     let input = request.get("input").cloned().unwrap_or_else(|| json!({}));
                     let prompt = format!("{} requests permission to use {}", subtype, tool_name);
 
-                    let _ = app.emit("agent-repl-event", json!({
-                        "sessionId": event_session_id,
-                        "root": root,
-                        "eventType": "permission_request",
-                        "payload": {
-                            "requestId": request_id,
-                            "subtype": subtype,
-                            "toolName": tool_name,
-                            "input": input,
-                            "prompt": prompt,
-                            "raw_json": value
-                        }
-                    }));
+                    let _ = app.emit(
+                        "agent-repl-event",
+                        json!({
+                            "sessionId": event_session_id,
+                            "root": root,
+                            "eventType": "permission_request",
+                            "payload": {
+                                "requestId": request_id,
+                                "subtype": subtype,
+                                "toolName": tool_name,
+                                "input": input,
+                                "prompt": prompt,
+                                "raw_json": value
+                            }
+                        }),
+                    );
                 }
                 Some("streamlined_text") => {
                     let text = value.get("text").and_then(|v| v.as_str()).unwrap_or("");
                     if !text.is_empty() {
                         saw_text = true;
-                        let _ = app.emit("agent-repl-event", json!({
-                            "sessionId": event_session_id,
-                            "root": root,
-                            "eventType": "turn_text",
-                            "payload": {
-                                "text": text,
-                                "raw_json": value
-                            }
-                        }));
+                        let assistant_message_id_for_emit = value
+                            .get("message")
+                            .and_then(|message| message.get("id"))
+                            .and_then(|id| id.as_str())
+                            .map(|id| id.to_string());
+                        let assistant_bind_status_for_emit =
+                            if assistant_message_id_for_emit.is_some() {
+                                "ok"
+                            } else {
+                                "missing_assistant_message_id"
+                            };
+                        let _ = app.emit(
+                            "agent-repl-event",
+                            json!({
+                                "sessionId": event_session_id,
+                                "root": root,
+                                "eventType": "turn_text",
+                                "assistantMessageId": assistant_message_id_for_emit,
+                                "bindStatus": assistant_bind_status_for_emit,
+                                "payload": {
+                                    "text": text,
+                                    "raw_json": value
+                                }
+                            }),
+                        );
                     }
                 }
                 _ => {
-                    let _ = app.emit("agent-repl-event", json!({
-                        "sessionId": event_session_id,
-                        "root": root,
-                        "eventType": "raw",
-                        "payload": value
-                    }));
+                    let _ = app.emit(
+                        "agent-repl-event",
+                        json!({
+                            "sessionId": event_session_id,
+                            "root": root,
+                            "eventType": "raw",
+                            "payload": value
+                        }),
+                    );
                 }
             }
         }
 
         let final_session_id = shared_session_id(&shared_session);
         remove_process_session(&root, &final_session_id);
-        let _ = app.emit("agent-repl-event", json!({
-            "sessionId": final_session_id,
-            "root": root,
-            "eventType": "process_exit",
-            "payload": {
-                "running": false,
-                "reason": "stdout_closed"
-            }
-        }));
+        let _ = app.emit(
+            "agent-repl-event",
+            json!({
+                "sessionId": final_session_id,
+                "root": root,
+                "eventType": "process_exit",
+                "payload": {
+                    "running": false,
+                    "reason": "stdout_closed"
+                }
+            }),
+        );
         emit_process_status(&app, &root, &final_session_id, false, None, "stdout_closed");
     });
 }
@@ -2540,14 +2829,17 @@ fn spawn_repl_stderr_reader(
                 continue;
             }
             let event_session_id = shared_session_id(&shared_session);
-            let _ = app.emit("agent-repl-event", json!({
-                "sessionId": event_session_id,
-                "root": root,
-                "eventType": "stderr",
-                "payload": {
-                    "text": line
-                }
-            }));
+            let _ = app.emit(
+                "agent-repl-event",
+                json!({
+                    "sessionId": event_session_id,
+                    "root": root,
+                    "eventType": "stderr",
+                    "payload": {
+                        "text": line
+                    }
+                }),
+            );
         }
     });
 }
@@ -2647,10 +2939,7 @@ fn default_model_settings() -> ModelSettings {
                 name: "DeepSeek".to_string(),
                 provider: ModelProvider::DeepSeek,
                 model: Some("deepseek-chat".to_string()),
-                support_models: vec![
-                    "deepseek-chat".to_string(),
-                    "deepseek-reasoner".to_string(),
-                ],
+                support_models: vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()],
                 api_key: std::env::var("DEEPSEEK_API_KEY")
                     .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
                     .unwrap_or_default(),
@@ -2680,7 +2969,6 @@ fn default_model_settings() -> ModelSettings {
     }
 }
 
-
 fn default_deepseek_pricing() -> DeepSeekPricingConfig {
     DeepSeekPricingConfig {
         source: "builtin".to_string(),
@@ -2690,17 +2978,35 @@ fn default_deepseek_pricing() -> DeepSeekPricingConfig {
             DeepSeekPricingModel {
                 model: "deepseek-v4-flash".to_string(),
                 items: vec![
-                    DeepSeekPricingItem { item: "cache_hit_input".to_string(), price_per_m_tokens: 0.0028 },
-                    DeepSeekPricingItem { item: "cache_miss_input".to_string(), price_per_m_tokens: 0.14 },
-                    DeepSeekPricingItem { item: "output".to_string(), price_per_m_tokens: 0.28 },
+                    DeepSeekPricingItem {
+                        item: "cache_hit_input".to_string(),
+                        price_per_m_tokens: 0.0028,
+                    },
+                    DeepSeekPricingItem {
+                        item: "cache_miss_input".to_string(),
+                        price_per_m_tokens: 0.14,
+                    },
+                    DeepSeekPricingItem {
+                        item: "output".to_string(),
+                        price_per_m_tokens: 0.28,
+                    },
                 ],
             },
             DeepSeekPricingModel {
                 model: "deepseek-v4-pro".to_string(),
                 items: vec![
-                    DeepSeekPricingItem { item: "cache_hit_input".to_string(), price_per_m_tokens: 0.003625 },
-                    DeepSeekPricingItem { item: "cache_miss_input".to_string(), price_per_m_tokens: 0.435 },
-                    DeepSeekPricingItem { item: "output".to_string(), price_per_m_tokens: 0.87 },
+                    DeepSeekPricingItem {
+                        item: "cache_hit_input".to_string(),
+                        price_per_m_tokens: 0.003625,
+                    },
+                    DeepSeekPricingItem {
+                        item: "cache_miss_input".to_string(),
+                        price_per_m_tokens: 0.435,
+                    },
+                    DeepSeekPricingItem {
+                        item: "output".to_string(),
+                        price_per_m_tokens: 0.87,
+                    },
                 ],
             },
         ],
@@ -2733,6 +3039,10 @@ fn refresh_deepseek_pricing_on_startup() -> Result<(), String> {
 
     if output.status.success() {
         eprintln!("[deepseek-pricing] refreshed on startup");
+        eprintln!(
+            "[usage-v2-read] enabled={}",
+            true
+        );
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).to_string())
@@ -2744,7 +3054,11 @@ fn normalize_model_settings(settings: &mut ModelSettings) -> Result<(), String> 
         return Err("至少需要一个模型配置".to_string());
     }
 
-    if !settings.models.iter().any(|m| m.id == settings.active_model_id) {
+    if !settings
+        .models
+        .iter()
+        .any(|m| m.id == settings.active_model_id)
+    {
         settings.active_model_id = settings.models[0].id.clone();
     }
 
@@ -2761,13 +3075,15 @@ fn active_model_config(settings: &ModelSettings) -> Result<&ModelEndpointConfig,
 }
 
 fn resolve_model_for_provider(config: &ModelEndpointConfig) -> String {
-    config.model.clone().unwrap_or_else(|| match config.provider {
-        ModelProvider::DeepSeek => "deepseek-chat".to_string(),
-        ModelProvider::OpenAI => "gpt-4o".to_string(),
-        ModelProvider::Anthropic => "claude-sonnet-4-5-20250929".to_string(),
-    })
+    config
+        .model
+        .clone()
+        .unwrap_or_else(|| match config.provider {
+            ModelProvider::DeepSeek => "deepseek-chat".to_string(),
+            ModelProvider::OpenAI => "gpt-4o".to_string(),
+            ModelProvider::Anthropic => "claude-sonnet-4-5-20250929".to_string(),
+        })
 }
-
 
 fn apply_agent_ui_env(
     command: &mut Command,
@@ -2782,16 +3098,26 @@ fn apply_agent_ui_env(
 
     let output_dir = root_path.join(".agent-ui").join(effective_session_id);
 
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|error| format!("failed to create agent-ui output dir {}: {error}", output_dir.display()))?;
+    std::fs::create_dir_all(&output_dir).map_err(|error| {
+        format!(
+            "failed to create agent-ui output dir {}: {error}",
+            output_dir.display()
+        )
+    })?;
 
     fs::create_dir_all(&output_dir).map_err(error_to_string)?;
 
     command.env("AGENT_UI_SESSION_ID", effective_session_id);
-    command.env("AGENT_UI_OUTPUT_DIR", output_dir.to_string_lossy().to_string());
+    command.env(
+        "AGENT_UI_OUTPUT_DIR",
+        output_dir.to_string_lossy().to_string(),
+    );
 
     if let Ok(mcp_config_path) = astromere_mcp_config_path() {
-        command.env("ASTROMERE_MCP_CONFIG", mcp_config_path.to_string_lossy().to_string());
+        command.env(
+            "ASTROMERE_MCP_CONFIG",
+            mcp_config_path.to_string_lossy().to_string(),
+        );
     }
 
     if let Ok(home) = std::env::var("HOME") {
@@ -2895,7 +3221,6 @@ fn claude_project_sessions_dir(root: &Path) -> Result<PathBuf, String> {
         .join(sanitize_claude_project_path(root)))
 }
 
-
 fn canonical_workspace_root(root: &str) -> Result<PathBuf, String> {
     let path = Path::new(root).canonicalize().map_err(error_to_string)?;
 
@@ -2962,7 +3287,13 @@ fn resolve_local_reference_path(root: &Path, path: &str) -> Result<PathBuf, Stri
 }
 
 fn image_mime_for_path(path: &Path) -> &'static str {
-    match path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -2974,7 +3305,11 @@ fn image_mime_for_path(path: &Path) -> &'static str {
 
 fn is_supported_image_path(path: &Path) -> bool {
     matches!(
-        path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase().as_str(),
+        path.extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
     )
 }
@@ -3042,7 +3377,8 @@ fn collect_session_files(dir: &Path, out: &mut Vec<RuntimeSessionSummary>) -> Re
 
         out.push(RuntimeSessionSummary {
             id: id.clone(),
-            title: first_user_title_from_jsonl(&content).unwrap_or_else(|| session_title(&id, message_count)),
+            title: first_user_title_from_jsonl(&content)
+                .unwrap_or_else(|| session_title(&id, message_count)),
             path: path.to_string_lossy().to_string(),
             updated_at_ms: modified_ms as u64,
             modified_epoch_millis: modified_ms,
@@ -3055,12 +3391,15 @@ fn collect_session_files(dir: &Path, out: &mut Vec<RuntimeSessionSummary>) -> Re
     Ok(())
 }
 
-
 fn first_user_title_from_jsonl(content: &str) -> Option<String> {
     for line in content.lines() {
         let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
 
-        if value.get("isMeta").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if value
+            .get("isMeta")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             continue;
         }
 
@@ -3104,7 +3443,8 @@ fn first_user_title_from_jsonl(content: &str) -> Option<String> {
 
 fn looks_like_real_user_title(title: &str) -> bool {
     let trimmed = title.trim();
-    if trimmed.is_empty() || trimmed.starts_with('<') || trimmed.starts_with("[Request interrupted") {
+    if trimmed.is_empty() || trimmed.starts_with('<') || trimmed.starts_with("[Request interrupted")
+    {
         return false;
     }
 
@@ -3123,7 +3463,9 @@ fn looks_like_real_user_title(title: &str) -> bool {
         "auto context",
     ];
 
-    !skipped_prefixes.iter().any(|prefix| lower.starts_with(prefix))
+    !skipped_prefixes
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
 }
 
 fn extract_text_from_json_value(value: &serde_json::Value) -> String {
@@ -3175,10 +3517,22 @@ fn json_value_contains_type(value: &serde_json::Value, expected_type: &str) -> b
     }
 
     match value {
-        serde_json::Value::Array(items) => items.iter().any(|item| json_value_contains_type(item, expected_type)),
-        serde_json::Value::Object(map) => map.values().any(|item| json_value_contains_type(item, expected_type)),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .any(|item| json_value_contains_type(item, expected_type)),
+        serde_json::Value::Object(map) => map
+            .values()
+            .any(|item| json_value_contains_type(item, expected_type)),
         _ => false,
     }
+}
+
+fn canonical_message_id_from_raw_json(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("message")
+        .and_then(|message| message.get("id"))
+        .and_then(|id| id.as_str())
+        .filter(|id| !id.trim().is_empty())
 }
 
 fn parse_jsonl_messages(content: &str) -> Vec<serde_json::Value> {
@@ -3188,7 +3542,11 @@ fn parse_jsonl_messages(content: &str) -> Vec<serde_json::Value> {
         .filter_map(|(index, line)| {
             let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
 
-            if value.get("isMeta").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if value
+                .get("isMeta")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 return None;
             }
 
@@ -3233,18 +3591,35 @@ fn parse_jsonl_messages(content: &str) -> Vec<serde_json::Value> {
 
             let has_tool_use = extract_tool_uses(&value).len() > 0;
             let keep_for_debug = has_tool_use
-                || matches!(event_type.as_str(), "assistant" | "result" | "tool_result" | "user")
+                || matches!(
+                    event_type.as_str(),
+                    "assistant" | "result" | "tool_result" | "user"
+                )
                 || normalized_role == "tool";
 
             if text.is_empty() && !keep_for_debug {
                 return None;
             }
 
+            let message_id = canonical_message_id_from_raw_json(&value);
+            let bind_status = if message_id.is_some() {
+                "ok"
+            } else {
+                eprintln!(
+                    "[runtime][warn] jsonl history message missing raw_json.message.id index={} event_type={} role={}",
+                    index, event_type, normalized_role
+                );
+                "missing_message_id"
+            };
+
             Some(json!({
-                "id": format!("msg-{index}"),
+                "id": message_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| format!("missing-message-id-{index}")),
                 "role": normalized_role,
                 "text": text,
                 "event_type": event_type,
+                "bind_status": bind_status,
                 "raw_json": value
             }))
         })
@@ -3252,7 +3627,11 @@ fn parse_jsonl_messages(content: &str) -> Vec<serde_json::Value> {
 }
 
 fn language_for_path(path: &str) -> String {
-    match Path::new(path).extension().and_then(|s| s.to_str()).unwrap_or("") {
+    match Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+    {
         "rs" => "rust",
         "ts" | "tsx" => "typescript",
         "js" | "jsx" => "javascript",
@@ -3301,6 +3680,13 @@ fn main() {
             sqlite_query,
             sqlite_execute,
             sqlite_database_info,
+            sqlite_debug_events,
+            sqlite_rebuild_usage_records_from_debug_events,
+            sqlite_usage_read_source,
+            sqlite_usage_records,
+            sqlite_usage_assistant_summaries,
+            sqlite_usage_session_summary,
+            sqlite_usage_day_splits,
             default_workspace,
             open_workspace,
             load_workspace_registry,

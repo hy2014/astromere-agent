@@ -67,20 +67,6 @@ export function sqliteDatabaseInfo(): Promise<SqliteDatabaseInfo> {
   return invoke("sqlite_database_info");
 }
 
-export function sqliteExecute(
-  sql: string,
-  params?: SqliteValue[],
-): Promise<SqliteExecuteResult> {
-  return invoke("sqlite_execute", { sql, params });
-}
-
-export function sqliteQuery(
-  sql: string,
-  params?: SqliteValue[],
-): Promise<SqliteQueryRow[]> {
-  return invoke("sqlite_query", { sql, params });
-}
-
 export function listProjectEntries(root: string): Promise<ProjectEntry[]> {
   return invoke("list_project_entries", { root });
 }
@@ -249,3 +235,63 @@ export function runAgentTurn(
 ): Promise<AgentTurnResponse> {
   return invoke("run_agent_turn", { root, sessionId, prompt });
 }
+
+export type UsageRebuildResult = {
+  inserted_count: number;
+  updated_count: number;
+  skipped_count: number;
+  candidate_count: number;
+  bad_payload_json_count: number;
+  missing_assistant_message_id_count: number;
+  no_usage_count: number;
+  unavailable_cost_count: number;
+  scanned_event_count: number;
+  extracted_turn_count: number;
+};
+
+export type UsageRecordRow = Record<string, unknown>;
+export type UsageSummaryRow = Record<string, unknown>;
+export type UsageAssistantSummaryRow = Record<string, unknown>;
+export type UsageDaySplitRow = Record<string, unknown>;
+export type UsageReadSource = "runtime" | string;
+
+export function loadUsageReadSource(): Promise<UsageReadSource> {
+  return invoke("sqlite_usage_read_source");
+}
+
+export type DebugEventRow = Record<string, unknown>;
+
+export function loadDebugEventRows(args: {
+  sessionId?: string;
+  assistantMessageId?: string;
+  limit?: number;
+}): Promise<DebugEventRow[]> {
+  return invoke("sqlite_debug_events", { args });
+}
+
+export function rebuildUsageRecordsFromDebugEvents(
+  sessionId: string,
+): Promise<UsageRebuildResult> {
+  return invoke("sqlite_rebuild_usage_records_from_debug_events", { sessionId });
+}
+
+export async function loadUsageRecords(sessionId: string): Promise<UsageRecordRow[]> {
+  const source = await loadUsageReadSource();
+  return invoke("sqlite_usage_records", { sessionId, source });
+}
+
+export async function loadUsageAssistantSummaries(
+  sessionId: string,
+): Promise<UsageAssistantSummaryRow[]> {
+  const source = await loadUsageReadSource();
+  return invoke("sqlite_usage_assistant_summaries", { sessionId, source });
+}
+
+export function loadUsageSessionSummary(sessionId: string): Promise<UsageSummaryRow[]> {
+  return invoke("sqlite_usage_session_summary", { sessionId });
+}
+
+export function loadUsageDaySplits(sessionId: string): Promise<UsageDaySplitRow[]> {
+  return invoke("sqlite_usage_day_splits", { sessionId });
+}
+
