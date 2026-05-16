@@ -1,5 +1,11 @@
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  open as openDialog } from "@tauri-apps/plugin-dialog";
+import { FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState } from "react";
 import {
   addWorkspaceRegistryEntry,
   ensureAgentReplProcess,
@@ -38,19 +44,13 @@ import {
   upsertRemoteProfile,
   useLocalRuntime,
   useRemoteRuntime,
-} from "../runtime";
-import type { AgentReplCapabilityItem, RemoteProfile } from "../runtime";
+  } from "../runtime";
+import type { AgentReplCapabilityItem,
+  RemoteProfile } from "../runtime";
 import "./App.css";
 import {
-  debugEventsFromSqliteRows,
-  debugEventsSqliteReadEnabled,
-  initDebugEventsSqlite,
   loadDebugEventsFromSqlite,
-  migrateAssistantDebugBundlesToSqlite,
-  persistDebugEventToSqlite,
-  rekeyDebugEventsInSqlite,
-} from "../debugEventsSqlite";
-import { sqliteDatabaseInfo } from "../sqlite";
+} from "../debugEvents";
 import type {
   AgentPermissionState,
   AgentReplStreamEvent,
@@ -69,9 +69,18 @@ import type {
   StreamItem,
   StreamLink,
   WorkspaceFileReference,
-} from "../types";
-
-
+  } from "../types";
+import {
+  rebuildUsageRecordsFromDebugEvents,
+  loadUsageRecords,
+  loadUsageAssistantSummaries,
+  loadUsageSessionSummary,
+  type UsageRecordRow,
+  type UsageAssistantSummaryRow,
+  type UsageRebuildResult,
+  type UsageSummaryRow,
+  sqliteDatabaseInfo,
+} from "../tauri";
 
 type LocalImageMetadata = {
   path?: string;
@@ -199,7 +208,6 @@ const slashRootItems: SlashRootItem[] = [
   { id: "workflows", label: "Workflows", description: "Run workflow templates, coming soon", disabled: true },
 ];
 
-
 const maxReferencedFileBytes = 48 * 1024;
 const maxReferencedFilesTotalBytes = 160 * 1024;
 
@@ -212,7 +220,6 @@ type SettingsViewProps = {
 
 type AppView = "workspace" | "skills" | "mcp" | "settings";
 
-
 function loadActiveRemoteProfileSnapshot(): RemoteProfile | null {
   try {
     const activeProfileId = getActiveRemoteProfileId();
@@ -222,8 +229,6 @@ function loadActiveRemoteProfileSnapshot(): RemoteProfile | null {
     return null;
   }
 }
-
-
 
 const hiddenSessionsStorageKey = "agent-ui.hiddenSessions.v1";
 const assistantDebugBundlesStorageKey = "agent-ui.assistantDebugBundles.v1";
@@ -661,8 +666,6 @@ function detectFileMention(value: string, cursor: number): FileMentionState {
   };
 }
 
-
-
 function renderPromptHighlightedText(value: string) {
   const parts: Array<string | JSX.Element> = [];
   const tokenRegex = /(^|\s)(\/[A-Za-z0-9:_-]+|@(?:"[^"]+"|[^\s]+))/g;
@@ -835,7 +838,6 @@ type LocalFileReferenceBuildResult = {
   prompt: string;
   fileReferences: LocalFileReferenceSummary[];
 };
-
 
 function isImageReferencePath(path: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg)$/i.test(path.trim());
@@ -1894,7 +1896,6 @@ function responseToStreamItems(
   return [...items, ...artifactItems];
 }
 
-
 function isPermissionEventName(eventType: string): boolean {
   const normalized = eventType.toLowerCase();
   return (
@@ -1997,6 +1998,474 @@ function payloadText(event: AgentReplStreamEvent): string {
   return "";
 }
 
+type SessionUsagePayload = {
+  rebuildResult: UsageRebuildResult | null;
+  records: UsageRecordRow[];
+  assistantSummaries: UsageAssistantSummaryRow[];
+  summary: UsageSummaryRow | null;
+};
+
+const emptySessionUsagePayload: SessionUsagePayload = {
+  rebuildResult: null,
+  records: [],
+  assistantSummaries: [],
+  summary: null,
+};
+
+type UsageMetricKey =
+  | "total_input_tokens"
+  | "input_tokens"
+  | "output_tokens"
+  | "cache_read_input_tokens"
+  | "cache_creation_input_tokens"
+  | "input_hit_rate"
+  | "cost_usd";
+
+const usageMetricOptions: Array<{ key: UsageMetricKey; label: string }> = [
+  { key: "total_input_tokens", label: "Total input" },
+  { key: "input_tokens", label: "Input" },
+  { key: "output_tokens", label: "Output" },
+  { key: "cache_read_input_tokens", label: "Cache hit input" },
+  { key: "cache_creation_input_tokens", label: "Cache create input" },
+  { key: "input_hit_rate", label: "Hit rate" },
+  { key: "cost_usd", label: "Cost" },
+];
+
+function usageNumberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function usageCell(row: Record<string, unknown> | null | undefined, key: string): unknown {
+  return row?.[key];
+}
+
+function usageFormatValue(value: unknown, key: string): string {
+  const number = usageNumberValue(value);
+  if (number === null) return "—";
+  if (key === "input_hit_rate") return `${(number * 100).toFixed(2)}%`;
+  if (key === "cost_usd") return `$${number.toFixed(8)}`;
+  return Math.round(number).toLocaleString();
+}
+
+function usageShortId(value: unknown): string {
+  const text = typeof value === "string" ? value : "";
+  return text.length > 18 ? `${text.slice(0, 8)}…${text.slice(-6)}` : text || "—";
+}
+
+function usageMetricLabel(key: UsageMetricKey): string {
+  return usageMetricOptions.find((item) => item.key === key)?.label ?? key;
+}
+function usageFormatOccurTime(row: Record<string, unknown> | null | undefined): string {
+  const createdAtMs = usageNumberValue(usageCell(row, "created_at_ms"));
+  if (createdAtMs === null) return "—";
+
+  return new Date(createdAtMs).toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function compareUsageTurnRows(left: UsageRecordRow, right: UsageRecordRow): number {
+  const leftTurn = usageNumberValue(usageCell(left, "turn_index")) ?? Number.MAX_SAFE_INTEGER;
+  const rightTurn = usageNumberValue(usageCell(right, "turn_index")) ?? Number.MAX_SAFE_INTEGER;
+  if (leftTurn !== rightTurn) return leftTurn - rightTurn;
+
+  const leftTime = usageNumberValue(usageCell(left, "created_at_ms")) ?? 0;
+  const rightTime = usageNumberValue(usageCell(right, "created_at_ms")) ?? 0;
+  return leftTime - rightTime;
+}
+
+type AssistantUsageTimelinePoint = {
+  assistantMessageId: string;
+  summary: UsageAssistantSummaryRow;
+  occurAtMs: number | null;
+  firstTurnIndex: number | null;
+  value: number | null;
+};
+
+function assistantUsageSummaryMetricValue(
+  summary: UsageAssistantSummaryRow | null | undefined,
+  metricKey: UsageMetricKey,
+): number | null {
+  return usageNumberValue(usageCell(summary, metricKey));
+}
+
+function buildAssistantUsageTimelinePoints(
+  assistantSummaries: UsageAssistantSummaryRow[],
+  metricKey: UsageMetricKey,
+): AssistantUsageTimelinePoint[] {
+  return assistantSummaries
+    .map((summary) => {
+      const assistantMessageId = String(usageCell(summary, "assistant_message_id") ?? "").trim();
+      if (!assistantMessageId) return null;
+
+      return {
+        assistantMessageId,
+        summary,
+        occurAtMs: usageNumberValue(usageCell(summary, "created_at_ms")),
+        firstTurnIndex: usageNumberValue(usageCell(summary, "first_turn_index")),
+        value: assistantUsageSummaryMetricValue(summary, metricKey),
+      };
+    })
+    .filter((point): point is AssistantUsageTimelinePoint => point !== null && point.value !== null)
+    .sort((left, right) => {
+      const leftTurn = left.firstTurnIndex ?? Number.MAX_SAFE_INTEGER;
+      const rightTurn = right.firstTurnIndex ?? Number.MAX_SAFE_INTEGER;
+      if (leftTurn !== rightTurn) return leftTurn - rightTurn;
+
+      const leftTime = left.occurAtMs ?? 0;
+      const rightTime = right.occurAtMs ?? 0;
+      return leftTime - rightTime;
+    });
+}
+
+function assistantPointOccurTime(point: AssistantUsageTimelinePoint): string {
+  if (point.occurAtMs === null) return "—";
+  return new Date(point.occurAtMs).toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+
+function UsageTimelineChart({
+  assistantSummaries,
+  metricKey,
+  selectedAssistantMessageId,
+  onAssistantDoubleClick,
+}: {
+  assistantSummaries: UsageAssistantSummaryRow[];
+  metricKey: UsageMetricKey;
+  selectedAssistantMessageId?: string | null;
+  onAssistantDoubleClick?: (assistantMessageId: string) => void;
+}) {
+  const points = buildAssistantUsageTimelinePoints(assistantSummaries, metricKey);
+
+  if (points.length === 0) {
+    return <div className="debug-empty">No usage points for {usageMetricLabel(metricKey)}.</div>;
+  }
+
+  const width = 720;
+  const height = 220;
+  const padding = 44;
+  const plotBottom = height - padding;
+  const plotHeight = Math.max(plotBottom - padding, 1);
+  const values = points.map((point) => point.value ?? 0);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+
+  const xForIndex = (index: number) =>
+    points.length === 1
+      ? width / 2
+      : padding + (index / (points.length - 1)) * (width - padding * 2);
+  const yForValue = (value: number) =>
+    plotBottom - ((value - min) / span) * plotHeight;
+
+  const path = points
+    .map((point, index) => {
+      const x = xForIndex(index);
+      const y = yForValue(point.value ?? 0);
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+
+  return (
+    <div className="usage-timeline-wrap">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={`${usageMetricLabel(metricKey)} timeline by assistant message`}
+      >
+        <path
+          className="usage-timeline-path"
+          d={path}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity="0.7"
+        />
+        {points.map((point, index) => {
+          const value = point.value ?? 0;
+          const x = xForIndex(index);
+          const y = yForValue(value);
+          const occurTime = assistantPointOccurTime(point);
+          const valueLabel = usageFormatValue(value, metricKey);
+          const isSelected = selectedAssistantMessageId === point.assistantMessageId;
+
+          return (
+            <circle
+              key={point.assistantMessageId}
+              className={`usage-timeline-point${isSelected ? " selected" : ""}`}
+              cx={x}
+              cy={y}
+              r={isSelected ? "5.5" : "3.5"}
+              tabIndex={0}
+              role="button"
+              aria-label={`Assistant ${usageShortId(point.assistantMessageId)} ${occurTime} ${usageMetricLabel(metricKey)} ${valueLabel}`}
+              onClick={() => onAssistantDoubleClick?.(point.assistantMessageId)}
+              onDoubleClick={() => onAssistantDoubleClick?.(point.assistantMessageId)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  onAssistantDoubleClick?.(point.assistantMessageId);
+                }
+              }}
+            >
+              <title>{`${occurTime} · ${usageMetricLabel(metricKey)} ${valueLabel}`}</title>
+            </circle>
+          );
+        })}
+        <text x={padding} y={22} fontSize="11">
+          max {usageFormatValue(max, metricKey)}
+        </text>
+        <text x={padding} y={plotBottom + 28} fontSize="11">
+          min {usageFormatValue(min, metricKey)}
+        </text>
+      </svg>
+      <div className="usage-timeline-hint">
+        Click an assistant point to show message detail and its turns below.
+      </div>
+    </div>
+  );
+}
+
+
+
+function SessionUsageAssistantMessageDetail({
+  records,
+  assistantSummaries,
+  assistantMessageId,
+}: {
+  records: UsageRecordRow[];
+  assistantSummaries: UsageAssistantSummaryRow[];
+  assistantMessageId: string | null;
+}) {
+  if (!assistantMessageId) {
+    return (
+      <div className="usage-table-card">
+        <div className="debug-empty">Click an assistant point to inspect that assistant message.</div>
+      </div>
+    );
+  }
+
+  const assistantSummary = assistantSummaries.find(
+    (row) => String(usageCell(row, "assistant_message_id") ?? "") === assistantMessageId,
+  );
+  const assistantRecords = records
+    .filter((row) => String(usageCell(row, "assistant_message_id") ?? "") === assistantMessageId)
+    .sort(compareUsageTurnRows);
+
+  if (!assistantSummary && assistantRecords.length === 0) {
+    return (
+      <div className="usage-table-card">
+        <strong>Assistant message detail</strong>
+        <div className="debug-empty">No usage found for {usageShortId(assistantMessageId)}.</div>
+      </div>
+    );
+  }
+
+  const occurAtMs = usageNumberValue(usageCell(assistantSummary, "created_at_ms"));
+  const occurTime =
+    occurAtMs === null
+      ? "—"
+      : new Date(occurAtMs).toLocaleString(undefined, {
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+
+  return (
+    <>
+      <div className="usage-table-card">
+        <strong>Assistant message detail</strong>
+        <form className="usage-detail-form">
+          <label>
+            <span>Assistant</span>
+            <input readOnly value={usageShortId(assistantMessageId)} title={assistantMessageId} />
+          </label>
+          <label>
+            <span>Occur time</span>
+            <input readOnly value={occurTime} />
+          </label>
+          <label>
+            <span>Turns</span>
+            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "turn_count"), "turn_count")} />
+          </label>
+          <label>
+            <span>Model</span>
+            <input readOnly value={String(usageCell(assistantSummary, "model") ?? "—")} />
+          </label>
+          <label>
+            <span>Total input</span>
+            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "total_input_tokens"), "total_input_tokens")} />
+          </label>
+          <label>
+            <span>Input</span>
+            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "input_tokens"), "input_tokens")} />
+          </label>
+          <label>
+            <span>Output</span>
+            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "output_tokens"), "output_tokens")} />
+          </label>
+          <label>
+            <span>Cache hit</span>
+            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "cache_read_input_tokens"), "cache_read_input_tokens")} />
+          </label>
+          <label>
+            <span>Cache create</span>
+            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "cache_creation_input_tokens"), "cache_creation_input_tokens")} />
+          </label>
+          <label>
+            <span>Hit rate</span>
+            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "input_hit_rate"), "input_hit_rate")} />
+          </label>
+          <label>
+            <span>Cost</span>
+            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "cost_usd"), "cost_usd")} />
+          </label>
+          <label className="usage-detail-form-wide">
+            <span>Cost source</span>
+            <textarea readOnly value={String(usageCell(assistantSummary, "cost_source") ?? "—")} rows={2} />
+          </label>
+        </form>
+      </div>
+
+      <div className="usage-table-card">
+        <strong>Turn detail</strong>
+        <div className="usage-detail-meta">
+          assistant {usageShortId(assistantMessageId)} · rows {assistantRecords.length}
+        </div>
+        <table className="usage-table">
+          <thead>
+            <tr>
+              <th>Turn</th>
+              <th>Occur time</th>
+              <th>Model</th>
+              <th>Total input</th>
+              <th>Input</th>
+              <th>Output</th>
+              <th>Cache hit</th>
+              <th>Cache create</th>
+              <th>Hit rate</th>
+              <th>Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {assistantRecords.map((row) => (
+              <tr
+                key={String(usageCell(row, "turn_key") ?? `${usageCell(row, "session_id")}:${usageCell(row, "assistant_message_id")}:${usageCell(row, "turn_index")}`)}
+              >
+                <td>{usageFormatValue(usageCell(row, "turn_index"), "turn_index")}</td>
+                <td>{usageFormatOccurTime(row)}</td>
+                <td>{String(usageCell(row, "model") ?? "—")}</td>
+                <td>{usageFormatValue(usageCell(row, "total_input_tokens"), "total_input_tokens")}</td>
+                <td>{usageFormatValue(usageCell(row, "input_tokens"), "input_tokens")}</td>
+                <td>{usageFormatValue(usageCell(row, "output_tokens"), "output_tokens")}</td>
+                <td>{usageFormatValue(usageCell(row, "cache_read_input_tokens"), "cache_read_input_tokens")}</td>
+                <td>{usageFormatValue(usageCell(row, "cache_creation_input_tokens"), "cache_creation_input_tokens")}</td>
+                <td>{usageFormatValue(usageCell(row, "input_hit_rate"), "input_hit_rate")}</td>
+                <td>{usageFormatValue(usageCell(row, "cost_usd"), "cost_usd")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+
+
+function AssistantUsageMiniOverlay({
+  messageId,
+  state,
+  loading,
+  error,
+  onClose,
+}: {
+  messageId: string;
+  state: SessionUsagePayload;
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+}) {
+  const current = state.assistantSummaries.find(
+    (row) => String(usageCell(row, "assistant_message_id") ?? "") === messageId,
+  );
+
+  return (
+    <div className="assistant-usage-mini-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="assistant-usage-mini-panel"
+        aria-label="Assistant usage"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          className="usage-overlay-close"
+          type="button"
+          onClick={onClose}
+          aria-label="Close assistant usage"
+        >
+          ×
+        </button>
+
+        <header className="assistant-usage-mini-header">
+          <strong>Assistant Usage</strong>
+          <span>{usageShortId(messageId)}</span>
+        </header>
+
+        {loading ? <div className="debug-empty">Loading usage…</div> : null}
+        {error ? <div className="debug-empty">{error}</div> : null}
+
+        {!loading && !error && !current ? (
+          <div className="debug-empty">No usage record for this assistant message yet.</div>
+        ) : null}
+
+        {current ? (
+          <>
+            <div className="usage-grid">
+              {[
+                ["turn_count", "Turn count"],
+                ["total_input_tokens", "Total input"],
+                ["input_tokens", "Input"],
+                ["output_tokens", "Output"],
+                ["cache_read_input_tokens", "Cache hit input"],
+                ["cache_creation_input_tokens", "Cache create input"],
+                ["input_hit_rate", "Hit rate"],
+                ["cost_usd", "Cost"],
+              ].map(([key, label]) => (
+                <div className="usage-card" key={key}>
+                  <span>{label}</span>
+                  <strong>{usageFormatValue(usageCell(current, key), key)}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="usage-note">
+              turns={String(usageCell(current, "turn_count") ?? "—")} ·
+              range={String(usageCell(current, "first_turn_index") ?? "—")}-{String(usageCell(current, "last_turn_index") ?? "—")} ·
+              model={String(usageCell(current, "model") ?? "—")} ·
+              cost_source={String(usageCell(current, "cost_source") ?? "—")} ·
+              price={String(usageCell(current, "price_model_key") ?? "—")}
+            </div>
+          </>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
 const pendingAssistantText = "Waiting for JSON REPL events...";
 
 function lastMessageIndexByRole(
@@ -2047,7 +2516,16 @@ function upsertCurrentTurnProgressMessage(
   items: StreamItem[],
   sessionId: string,
   text: string,
+  assistantMessageId: string | null | undefined,
 ): StreamItem[] {
+  const canonicalAssistantMessageId = assistantMessageId?.trim();
+  if (!canonicalAssistantMessageId) {
+    console.warn("[agent-ui][usage] assistant live event missing assistantMessageId; skip transient assistant StreamItem id", {
+      sessionId,
+    });
+    return items;
+  }
+
   const progressText = text.trim();
   if (!progressText) {
     return items;
@@ -2065,6 +2543,7 @@ function upsertCurrentTurnProgressMessage(
       );
       return {
         ...item,
+        id: canonicalAssistantMessageId,
         text:
           item.status === "streaming" || item.text === pendingAssistantText
             ? pendingAssistantText
@@ -2079,7 +2558,7 @@ function upsertCurrentTurnProgressMessage(
   return [
     ...items,
     {
-      id: `assistant-stream:${sessionId}:${Date.now()}`,
+      id: canonicalAssistantMessageId,
       kind: "message",
       role: "assistant",
       text: pendingAssistantText,
@@ -2093,7 +2572,16 @@ function completeCurrentTurnAssistantMessage(
   items: StreamItem[],
   sessionId: string,
   text: string,
+  assistantMessageId: string | null | undefined,
 ): StreamItem[] {
+  const canonicalAssistantMessageId = assistantMessageId?.trim();
+  if (!canonicalAssistantMessageId) {
+    console.warn("[agent-ui][usage] assistant complete event missing assistantMessageId; skip transient assistant StreamItem id", {
+      sessionId,
+    });
+    return items;
+  }
+
   const finalText = text.trim();
   if (!finalText) {
     return items;
@@ -2108,6 +2596,7 @@ function completeCurrentTurnAssistantMessage(
       const progressText = item.progressText?.trim();
       return {
         ...item,
+        id: canonicalAssistantMessageId,
         text: finalText,
         links: extractPreviewLinks(finalText),
         progressText:
@@ -2120,7 +2609,7 @@ function completeCurrentTurnAssistantMessage(
   return [
     ...items,
     {
-      id: `assistant-result:${sessionId}:${Date.now()}`,
+      id: canonicalAssistantMessageId,
       kind: "message",
       role: "assistant",
       text: finalText,
@@ -2204,8 +2693,7 @@ function streamEventToItems(
       return upsertCurrentTurnProgressMessage(
         items,
         event.sessionId,
-        payloadText(event),
-      );
+        payloadText(event), event.assistantMessageId);
     case "tool_call":
     case "tool_result":
       // Tool and command details are attached to the current assistant turn's
@@ -2215,7 +2703,7 @@ function streamEventToItems(
     case "turn_complete": {
       const finalText = payloadText(event);
       return finalText
-        ? completeCurrentTurnAssistantMessage(items, event.sessionId, finalText)
+        ? completeCurrentTurnAssistantMessage(items, event.sessionId, finalText, event.assistantMessageId)
         : items;
     }
     case "process_exit":
@@ -2239,14 +2727,7 @@ function streamEventToItems(
 
 export function App() {
   useEffect(() => {
-    void initDebugEventsSqlite()
-      .then(() => migrateAssistantDebugBundlesToSqlite(assistantDebugBundles))
-      .then((result) => {
-        console.info("[debug-events-sqlite] localStorage migration", result);
-      })
-      .catch((reason) => {
-        console.warn("[debug-events-sqlite] schema/migration failed", reason);
-      });
+
   }, []);
 
   useEffect(() => {
@@ -2276,6 +2757,8 @@ export function App() {
   );
   const [openAssistantDebugMessageId, setOpenAssistantDebugMessageId] =
     useState<string | null>(null);
+  const [openAssistantUsageMessageId, setOpenAssistantUsageMessageId] =
+    useState<string | null>(null);
   const [openProcessMessageIds, setOpenProcessMessageIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -2289,6 +2772,14 @@ export function App() {
     sessionId: string;
   } | null>(null);
   const [isDebugOpen, setIsDebugOpen] = useState(false);
+  const [sessionUsageLoading, setSessionUsageLoading] = useState(false);
+  const [sessionUsageError, setSessionUsageError] = useState<string | null>(null);
+  const [sessionUsagePayload, setSessionUsagePayload] =
+    useState<SessionUsagePayload>(emptySessionUsagePayload);
+  const [sessionUsageMetricKey, setSessionUsageMetricKey] =
+    useState<UsageMetricKey>("total_input_tokens");
+  const [selectedSessionUsageAssistantMessageId, setSelectedSessionUsageAssistantMessageId] =
+    useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const promptHighlightRef = useRef<HTMLDivElement | null>(null);
@@ -2578,8 +3069,6 @@ export function App() {
     };
   }, []);
 
-
-
   // Load slash commands and skills from the current runtime process.
   useEffect(() => {
     if (
@@ -2690,7 +3179,7 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!debugEventsSqliteReadEnabled || !activeSessionId) {
+    if (!activeSessionId) {
       return;
     }
 
@@ -2699,7 +3188,7 @@ export function App() {
       .then((rows) => {
         if (cancelled) return;
 
-        const loadedEvents = debugEventsFromSqliteRows(rows);
+        const loadedEvents = (rows as any[]);
         setSessionDebugEvents((events) => ({
           ...events,
           [activeSessionId]: loadedEvents,
@@ -2724,7 +3213,7 @@ export function App() {
             next[messageId] = {
               ...bundle,
               events: sqliteEvents,
-              updatedAt: sqliteEvents.at(-1)?.receivedAt ?? bundle.updatedAt,
+              updatedAt: sqliteEvents[sqliteEvents.length - 1]?.receivedAt ?? bundle.updatedAt,
             };
           }
 
@@ -2746,7 +3235,6 @@ export function App() {
     };
   }, [activeSessionId]);
 
-
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
@@ -2763,15 +3251,7 @@ export function App() {
           bundles,
           event.sessionId,
         );
-        void persistDebugEventToSqlite({
-          event: debugEntry,
-          sessionId: event.sessionId,
-          projectRoot: activeProject?.path ?? null,
-          assistantMessageId,
-          source: "runtime",
-        }).catch((reason) => {
-          console.warn("[debug-events-sqlite] write failed", reason);
-        });
+
         return updateAssistantDebugBundleForEvent(bundles, event, debugEntry);
       });
       updateSessionStream(event.sessionId, (items) =>
@@ -2840,11 +3320,6 @@ export function App() {
         );
         setAssistantDebugBundles((bundles) =>
           rekeyAssistantDebugBundles(bundles, event.sessionId, realSessionId),
-        );
-        void rekeyDebugEventsInSqlite(event.sessionId, realSessionId).catch(
-          (reason) => {
-            console.warn("[debug-events-sqlite] rekey failed", reason);
-          },
         );
 
         const pid =
@@ -3140,7 +3615,6 @@ export function App() {
     setError(null);
   }
 
-
   async function killSessionProcessBestEffort(root: string, sessionId: string) {
     try {
       await killAgentReplProcess(root, sessionId);
@@ -3318,7 +3792,6 @@ export function App() {
       return;
     }
 
-
     if (shouldReadAsLocalReference(link)) {
       try {
         const file = await readLocalReferenceFile(activeProject.root, link.path);
@@ -3411,6 +3884,76 @@ export function App() {
       }
       return next;
     });
+  }
+
+  async function loadSessionUsageForPanel(sessionId: string) {
+    setSessionUsageLoading(true);
+    setSessionUsageError(null);
+
+    try {
+      const [records, assistantSummaries, summaryRows] = await Promise.all([
+        loadUsageRecords(sessionId),
+        loadUsageAssistantSummaries(sessionId),
+        loadUsageSessionSummary(sessionId),
+      ]);
+
+      setSessionUsagePayload((current) => ({
+        ...current,
+        records,
+        assistantSummaries,
+        summary: summaryRows[0] ?? null,
+      }));
+      setSelectedSessionUsageAssistantMessageId((current) => {
+        if (!current) return current;
+        return assistantSummaries.some(
+          (row) => String(usageCell(row, "assistant_message_id") ?? "") === current,
+        )
+          ? current
+          : null;
+      });
+    } catch (reason) {
+      setSessionUsageError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSessionUsageLoading(false);
+    }
+  }
+
+  function rebuildUsageRecordsAfterTurnComplete(sessionId: string, eventType: string) {
+    if (eventType !== "turn_complete") return;
+
+    void rebuildUsageRecordsFromDebugEvents(sessionId)
+      .then((rebuildResult) => {
+        setSessionUsagePayload((current) => ({
+          ...current,
+          rebuildResult,
+        }));
+      })
+      .catch((reason) => {
+        console.warn("[usage-records] rebuild failed", {
+          sessionId,
+          reason,
+        });
+      });
+  }
+
+  function handleToggleSessionUsage() {
+    if (!activeSessionId) return;
+
+    setIsDebugOpen((current) => {
+      const next = !current;
+      if (next) {
+        void loadSessionUsageForPanel(activeSessionId);
+      }
+      return next;
+    });
+  }
+
+  function handleViewAssistantUsage(messageId: string) {
+    if (!activeSessionId) return;
+    setOpenAssistantDebugMessageId(null);
+    setIsDebugOpen(false);
+    setOpenAssistantUsageMessageId(messageId);
+    void loadSessionUsageForPanel(activeSessionId);
   }
 
   function handleViewAssistantDebug(messageId: string) {
@@ -3531,7 +4074,6 @@ export function App() {
       textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
     });
   }
-
 
   function addFileReference(reference: WorkspaceFileReference) {
     setFileReferences((current) => {
@@ -4109,10 +4651,10 @@ export function App() {
               <button
                 className={`debug-toggle ${isDebugOpen ? "active" : ""}`}
                 type="button"
-                onClick={() => setIsDebugOpen((value) => !value)}
+                onClick={handleToggleSessionUsage}
                 disabled={!activeSessionId}
               >
-                Debug JSON <span>{debugEvents.length}</span>
+                Usage <span>{sessionUsagePayload.assistantSummaries.length}</span>
               </button>
             </div>
             <input
@@ -4128,26 +4670,116 @@ export function App() {
             </div>
           ) : null}
 
+          {openAssistantUsageMessageId ? (
+            <AssistantUsageMiniOverlay
+              messageId={openAssistantUsageMessageId}
+              state={sessionUsagePayload}
+              loading={sessionUsageLoading}
+              error={sessionUsageError}
+              onClose={() => setOpenAssistantUsageMessageId(null)}
+            />
+          ) : null}
+
           {activeSessionId && isDebugOpen ? (
-            <section className="debug-panel" aria-label="Debug JSON events">
-              {debugEvents.length === 0 ? (
-                <div className="debug-empty">
-                  No stream-json events received yet.
-                </div>
-              ) : (
-                debugEvents.map((event) => (
-                  <article className="debug-event" key={event.id}>
+            <div
+              className="usage-overlay-backdrop"
+              role="presentation"
+              onClick={() => setIsDebugOpen(false)}
+            >
+              <section
+                className="debug-panel usage-overlay-panel"
+                aria-label="Usage metrics"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  className="usage-overlay-close"
+                  type="button"
+                  onClick={() => setIsDebugOpen(false)}
+                  aria-label="Close usage panel"
+                >
+                  ×
+                </button>
+              {sessionUsageLoading ? (
+                <div className="debug-empty">Loading usage…</div>
+              ) : null}
+              {sessionUsageError ? (
+                <div className="debug-empty">{sessionUsageError}</div>
+              ) : null}
+              {!sessionUsageLoading && !sessionUsageError ? (
+                <>
+                  <article className="debug-event">
                     <header>
-                      <strong>{event.eventType}</strong>
+                      <strong>Session total</strong>
                       <span>
-                        {formatDebugTime(event.receivedAt)} · {debugStorageSource(event)}
+                        turns {usageFormatValue(usageCell(sessionUsagePayload.summary, "turn_count"), "turn_count")}
                       </span>
                     </header>
-                    <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+                    <div className="usage-grid">
+                      {[
+                        ["total_input_tokens", "Total input"],
+                        ["input_tokens", "Input"],
+                        ["output_tokens", "Output"],
+                        ["cache_read_input_tokens", "Cache hit input"],
+                        ["cache_creation_input_tokens", "Cache create input"],
+                        ["input_hit_rate", "Hit rate"],
+                        ["cost_usd", "Cost"],
+                      ].map(([key, label]) => (
+                        <div className="usage-card" key={key}>
+                          <span>{label}</span>
+                          <strong>{usageFormatValue(usageCell(sessionUsagePayload.summary, key), key)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                    {sessionUsagePayload.rebuildResult ? (
+                      <div className="usage-note">
+                        scanned={sessionUsagePayload.rebuildResult.scanned_event_count} ·
+                        extracted={sessionUsagePayload.rebuildResult.extracted_turn_count} ·
+                        unavailable_cost={sessionUsagePayload.rebuildResult.unavailable_cost_count}
+                      </div>
+                    ) : null}
                   </article>
-                ))
-              )}
-            </section>
+
+                  <article className="debug-event">
+                    <header>
+                      <strong>Timeline</strong>
+                      <select
+                        value={sessionUsageMetricKey}
+                        onChange={(event) =>
+                          setSessionUsageMetricKey(event.target.value as UsageMetricKey)
+                        }
+                      >
+                        {usageMetricOptions.map((item) => (
+                          <option key={item.key} value={item.key}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                    </header>
+                    <UsageTimelineChart
+                      assistantSummaries={sessionUsagePayload.assistantSummaries}
+                      metricKey={sessionUsageMetricKey}
+                      selectedAssistantMessageId={selectedSessionUsageAssistantMessageId}
+                      onAssistantDoubleClick={(assistantMessageId) =>
+                        setSelectedSessionUsageAssistantMessageId(assistantMessageId)
+                      }
+                    />
+                    <div className="usage-note">
+                      {usageMetricLabel(sessionUsageMetricKey)} by assistant message
+                    </div>
+                  </article>
+
+                  <article className="debug-event">
+                    <SessionUsageAssistantMessageDetail
+                      records={sessionUsagePayload.records}
+                      assistantSummaries={sessionUsagePayload.assistantSummaries}
+                      assistantMessageId={selectedSessionUsageAssistantMessageId}
+                    />
+                  </article>
+
+                </>
+              ) : null}
+              </section>
+            </div>
           ) : null}
 
           {error ? <div className="error-banner">{error}</div> : null}
@@ -4217,6 +4849,7 @@ export function App() {
                               {displayRole(item.role)}
                             </div>
                             {item.role === "assistant" ? (
+                              <>
                               <button
                                 className={`message-debug-button ${copiedDebugMessageId === item.id ? "copied" : ""} ${isAssistantDebugOpen ? "active" : ""}`}
                                 type="button"
@@ -4228,6 +4861,15 @@ export function App() {
                                   ? "已复制"
                                   : `Debug${assistantDebugBundle?.events.length ? ` ${assistantDebugBundle.events.length}` : ""}`}
                               </button>
+                              <button
+                                className="message-debug-button"
+                                type="button"
+                                onClick={() => handleViewAssistantUsage(item.id)}
+                                title="查看 Usage"
+                              >
+                                Usage
+                              </button>
+                              </>
                             ) : null}
                           </div>
                           {item.role === "assistant" &&
@@ -4871,7 +5513,6 @@ export function App() {
   );
 }
 
-
 type SkillsViewProps = {
   activeProject?: ProjectFolder;
 };
@@ -5230,7 +5871,6 @@ function SkillsView({ activeProject }: SkillsViewProps) {
     </section>
   );
 }
-
 
 const DEFAULT_MCP_SETTINGS_TEXT = JSON.stringify(
   {
@@ -6287,8 +6927,6 @@ function SettingsView({ hiddenSessions, onRestoreSession }: SettingsViewProps) {
   );
 }
 
-
-
 function RemoteSettingsPanel() {
   const [profiles, setProfiles] = useState<RemoteProfile[]>(() => loadRemoteProfiles());
   const [activeProfileId, setActiveProfileIdState] = useState<string | null>(() =>
@@ -6523,7 +7161,6 @@ function RemoteSettingsPanel() {
   );
 }
 
-
 function SessionsSettingsPanel({
   hiddenSessions,
   onRestoreSession,
@@ -6582,7 +7219,6 @@ function SessionsSettingsPanel({
     </>
   );
 }
-
 
 function formatPreviewBytes(sizeBytes: number): string {
   if (sizeBytes < 1024) {
@@ -6863,7 +7499,6 @@ function ImageReferencePanel({ link, root }: { link: StreamLink; root: string })
   );
 }
 
-
 function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
   let current = "";
@@ -6923,7 +7558,6 @@ function parseCsvPreview(content: string, maxRows = 120, maxColumns = 28): {
     truncatedColumns,
   };
 }
-
 
 function isHtmlFilePath(path: string, language?: string) {
   const lowerPath = path.toLowerCase();
@@ -6989,7 +7623,6 @@ function CsvDataPreview({ file }: { file: FileView }) {
   );
 }
 
-
 function HtmlRichPreview({
   content,
   title,
@@ -7020,7 +7653,6 @@ function CodePreview({ content }: { content: string }) {
     </div>
   );
 }
-
 
 type RichMarkdownBlock =
   | { kind: "paragraph"; text: string }
