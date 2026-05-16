@@ -13,9 +13,9 @@ use tauri::Emitter;
 
 mod sqlite;
 use sqlite::{
-    sqlite_database_info, sqlite_debug_events, sqlite_execute, sqlite_query,
-    sqlite_rebuild_usage_records_from_debug_events, sqlite_usage_day_splits,
-    sqlite_usage_read_source, sqlite_usage_records, sqlite_usage_assistant_summaries, sqlite_usage_session_summary,
+    sqlite_database_info, sqlite_execute, sqlite_query, sqlite_usage_assistant_summaries,
+    sqlite_usage_day_splits, sqlite_usage_read_source, sqlite_usage_records,
+    sqlite_usage_session_summary,
 };
 
 #[derive(Debug, Serialize)]
@@ -158,6 +158,8 @@ struct DeepSeekPricingConfig {
     source: String,
     fetched_at: String,
     url: String,
+    currency: String,
+    unit: String,
     models: Vec<DeepSeekPricingModel>,
 }
 
@@ -166,7 +168,7 @@ struct DeepSeekPricingConfig {
 struct ModelSettings {
     active_model_id: String,
     models: Vec<ModelEndpointConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     deepseek_pricing: Option<DeepSeekPricingConfig>,
 }
 
@@ -1916,14 +1918,12 @@ fn load_model_settings() -> Result<ModelSettings, String> {
         default_model_settings()
     };
 
-    ensure_deepseek_pricing(&mut settings);
     Ok(settings)
 }
 
 #[tauri::command]
 fn save_model_settings(mut settings: ModelSettings) -> Result<ModelSettings, String> {
     normalize_model_settings(&mut settings)?;
-    ensure_deepseek_pricing(&mut settings);
 
     let path = model_settings_path()?;
     if let Some(parent) = path.parent() {
@@ -2544,26 +2544,6 @@ fn spawn_repl_stdout_reader(
                         );
                     }
 
-                    let usage_debug_payload = json!({
-                        "event_type": "turn_text",
-                        "raw_json": value.clone()
-                    });
-                    let usage_raw_assistant_message_id_for_debug_event = value
-                        .get("message")
-                        .and_then(|message| message.get("id"))
-                        .and_then(|id| id.as_str());
-
-                    if let Err(error) = crate::sqlite::sqlite_persist_debug_event_from_stdout(
-                        &event_session_id,
-                        usage_raw_assistant_message_id_for_debug_event,
-                        "turn_text",
-                        &usage_debug_payload,
-                    ) {
-                        eprintln!(
-                            "[usage][warn] failed to persist debug_event turn_text: {}",
-                            error
-                        );
-                    }
 
                     for tool in extract_tool_uses(&value) {
                         let _ = app.emit(
@@ -2670,24 +2650,6 @@ fn spawn_repl_stdout_reader(
                     let usage_bound_assistant_message_id = current_message_id_by_session
                         .get(&usage_binding_session_id)
                         .map(|message_id| message_id.as_str());
-                    let usage_debug_payload = json!({
-                        "event_type": "turn_complete",
-                        "realSessionId": real_session_id.clone(),
-                        "raw_json": value.clone()
-                    });
-                    if let Err(error) = crate::sqlite::sqlite_persist_debug_event_from_stdout(
-                        &usage_binding_session_id,
-                        current_message_id_by_session
-                            .get(&usage_binding_session_id)
-                            .map(|value| value.as_str()),
-                        "turn_complete",
-                        &usage_debug_payload,
-                    ) {
-                        eprintln!(
-                            "[usage][warn] failed to persist debug_event turn_complete: {}",
-                            error
-                        );
-                    }
 
                     let usage_bound_assistant_message_id_for_emit =
                         usage_bound_assistant_message_id.map(|id| id.to_string());
@@ -2965,57 +2927,7 @@ fn default_model_settings() -> ModelSettings {
                 enabled: true,
             },
         ],
-        deepseek_pricing: Some(default_deepseek_pricing()),
-    }
-}
-
-fn default_deepseek_pricing() -> DeepSeekPricingConfig {
-    DeepSeekPricingConfig {
-        source: "builtin".to_string(),
-        fetched_at: format!("unix-ms:{}", now_millis()),
-        url: "https://api-docs.deepseek.com/quick_start/pricing".to_string(),
-        models: vec![
-            DeepSeekPricingModel {
-                model: "deepseek-v4-flash".to_string(),
-                items: vec![
-                    DeepSeekPricingItem {
-                        item: "cache_hit_input".to_string(),
-                        price_per_m_tokens: 0.0028,
-                    },
-                    DeepSeekPricingItem {
-                        item: "cache_miss_input".to_string(),
-                        price_per_m_tokens: 0.14,
-                    },
-                    DeepSeekPricingItem {
-                        item: "output".to_string(),
-                        price_per_m_tokens: 0.28,
-                    },
-                ],
-            },
-            DeepSeekPricingModel {
-                model: "deepseek-v4-pro".to_string(),
-                items: vec![
-                    DeepSeekPricingItem {
-                        item: "cache_hit_input".to_string(),
-                        price_per_m_tokens: 0.003625,
-                    },
-                    DeepSeekPricingItem {
-                        item: "cache_miss_input".to_string(),
-                        price_per_m_tokens: 0.435,
-                    },
-                    DeepSeekPricingItem {
-                        item: "output".to_string(),
-                        price_per_m_tokens: 0.87,
-                    },
-                ],
-            },
-        ],
-    }
-}
-
-fn ensure_deepseek_pricing(settings: &mut ModelSettings) {
-    if settings.deepseek_pricing.is_none() {
-        settings.deepseek_pricing = Some(default_deepseek_pricing());
+        deepseek_pricing: None,
     }
 }
 
@@ -3680,8 +3592,6 @@ fn main() {
             sqlite_query,
             sqlite_execute,
             sqlite_database_info,
-            sqlite_debug_events,
-            sqlite_rebuild_usage_records_from_debug_events,
             sqlite_usage_read_source,
             sqlite_usage_records,
             sqlite_usage_assistant_summaries,

@@ -48,9 +48,6 @@ import {
 import type { AgentReplCapabilityItem,
   RemoteProfile } from "../runtime";
 import "./App.css";
-import {
-  loadDebugEventsFromSqlite,
-} from "../debugEvents";
 import type {
   AgentPermissionState,
   AgentReplStreamEvent,
@@ -71,13 +68,11 @@ import type {
   WorkspaceFileReference,
   } from "../types";
 import {
-  rebuildUsageRecordsFromDebugEvents,
   loadUsageRecords,
   loadUsageAssistantSummaries,
   loadUsageSessionSummary,
   type UsageRecordRow,
   type UsageAssistantSummaryRow,
-  type UsageRebuildResult,
   type UsageSummaryRow,
   sqliteDatabaseInfo,
 } from "../tauri";
@@ -151,7 +146,7 @@ type DebugStreamEvent = {
   eventType: string;
   receivedAt: number;
   payload: Record<string, unknown>;
-  debugStorageSource?: string;
+  debugStorageSource: string;
 };
 
 type AssistantMessageDebugBundle = {
@@ -231,7 +226,6 @@ function loadActiveRemoteProfileSnapshot(): RemoteProfile | null {
 }
 
 const hiddenSessionsStorageKey = "agent-ui.hiddenSessions.v1";
-const assistantDebugBundlesStorageKey = "agent-ui.assistantDebugBundles.v1";
 
 const previewablePathPattern =
   /(?:^|[\s([`"'])((?:(?:~|～)\/|\/|[A-Za-z0-9_.@-]+\/)[^\n`"'<>|]*?\.(?:ck|rs|ts|tsx|js|jsx|json|toml|md|markdown|txt|csv|pdf|png|jpg|jpeg|gif|webp|svg|html|css|py|go|java|kt|swift|c|cc|cpp|h|hpp|yaml|yml|sql|sh|zsh|fish|rb|php|vue|svelte))(?:$|[\s)\]，。,.!?;:'"`])/gi;
@@ -351,91 +345,8 @@ function loadHiddenSessions(): HiddenSession[] {
 }
 
 function loadAssistantDebugBundles(): Record<string, AssistantMessageDebugBundle> {
-  if (typeof window === "undefined") {
-    return {};
-  }
-
-  try {
-    const value = window.localStorage.getItem(assistantDebugBundlesStorageKey);
-    if (!value) {
-      return {};
-    }
-    const parsed = JSON.parse(value) as Record<string, AssistantMessageDebugBundle>;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {};
-    }
-
-    const next: Record<string, AssistantMessageDebugBundle> = {};
-    for (const [messageId, bundle] of Object.entries(parsed)) {
-      if (
-        typeof bundle?.messageId !== "string" ||
-        typeof bundle?.sessionId !== "string" ||
-        typeof bundle?.root !== "string" ||
-        !Array.isArray(bundle?.events)
-      ) {
-        continue;
-      }
-      next[messageId] = {
-        messageId,
-        sessionId: bundle.sessionId,
-        root: bundle.root,
-        userMessage:
-          typeof bundle.userMessage === "string" ? bundle.userMessage : undefined,
-        displayText:
-          typeof bundle.displayText === "string" ? bundle.displayText : "",
-        startedAt:
-          typeof bundle.startedAt === "number" ? bundle.startedAt : Date.now(),
-        updatedAt:
-          typeof bundle.updatedAt === "number" ? bundle.updatedAt : Date.now(),
-        completed: bundle.completed === true,
-        events: bundle.events
-          .filter(
-            (event) =>
-              typeof event?.id === "string" &&
-              typeof event?.sessionId === "string" &&
-              typeof event?.root === "string" &&
-              typeof event?.eventType === "string" &&
-              typeof event?.receivedAt === "number" &&
-              event?.payload &&
-              typeof event.payload === "object",
-          )
-          .slice(-300),
-      };
-    }
-    return next;
-  } catch {
-    return {};
-  }
+  return {};
 }
-
-function persistAssistantDebugBundles(
-  bundles: Record<string, AssistantMessageDebugBundle>,
-) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const compactEntries = Object.entries(bundles)
-    .sort(([, a], [, b]) => b.updatedAt - a.updatedAt)
-    .slice(0, 120)
-    .map(([messageId, bundle]) => [
-      messageId,
-      {
-        ...bundle,
-        events: bundle.events.slice(-220),
-      },
-    ]);
-
-  try {
-    window.localStorage.setItem(
-      assistantDebugBundlesStorageKey,
-      JSON.stringify(Object.fromEntries(compactEntries)),
-    );
-  } catch {
-    // The debug cache is a convenience. Ignore quota/serialization failures.
-  }
-}
-
 function uniqueHiddenSessions(sessions: HiddenSession[]): HiddenSession[] {
   const seen = new Set<string>();
   const unique: HiddenSession[] = [];
@@ -1017,16 +928,30 @@ function rekeyDebugEvents(
   };
 }
 
+function formatDateTimeNoLocale(timestampMs: number): string {
+  if (!Number.isFinite(timestampMs)) {
+    window.alert(`[datetime] invalid timestamp: ${String(timestampMs)}`);
+    throw new Error(`[datetime] invalid timestamp: ${String(timestampMs)}`);
+  }
+  const date = new Date(timestampMs);
+  const pad2 = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+}
+
 function formatDebugTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return formatDateTimeNoLocale(timestamp);
 }
 
 function debugStorageSource(event: Pick<DebugStreamEvent, "debugStorageSource">): string {
-  return event.debugStorageSource || "sqlite-missing-source";
+  const source = event.debugStorageSource;
+  if (typeof source !== "string" || !source.trim()) {
+    const message = "ERROR: debug event missing required debugStorageSource/source. No fallback is allowed.";
+    if (typeof window !== "undefined") {
+      window.alert(message);
+    }
+    throw new Error(message);
+  }
+  return source.trim();
 }
 
 function debugStorageSourceCounts(
@@ -1081,6 +1006,65 @@ function rawJsonFromDebugEvent(event: DebugStreamEvent): Record<string, unknown>
   }
   return isRecord(event.payload) ? event.payload : null;
 }
+
+function assistantOutputTimestampMsFromBundle(
+  bundle: AssistantMessageDebugBundle | null | undefined,
+): number | null {
+  const events = bundle?.events ?? [];
+  if (events.length === 0) {
+    return null;
+  }
+
+  let sawAssistantEvent = false;
+  for (const event of events) {
+    if (event.eventType !== "turn_text" && event.eventType !== "assistant_tool_use") {
+      continue;
+    }
+    const rawJson = rawJsonFromDebugEvent(event);
+    const rawType = rawJson?.type;
+    const payloadEventType = event.payload.event_type;
+    if (rawType !== "assistant" && payloadEventType !== "assistant") {
+      continue;
+    }
+    sawAssistantEvent = true;
+    const timestamp = rawJson?.timestamp;
+    if (typeof timestamp !== "string" || !timestamp.trim()) {
+      window.alert("[assistant-output-time] missing payload.raw_json.timestamp on assistant event");
+      throw new Error("[assistant-output-time] missing payload.raw_json.timestamp on assistant event");
+    }
+    const parsed = Date.parse(timestamp);
+    if (!Number.isFinite(parsed)) {
+      window.alert(`[assistant-output-time] invalid payload.raw_json.timestamp: ${timestamp}`);
+      throw new Error(`[assistant-output-time] invalid payload.raw_json.timestamp: ${timestamp}`);
+    }
+    return parsed;
+  }
+
+  if (sawAssistantEvent) {
+    window.alert("[assistant-output-time] assistant event timestamp extraction failed");
+    throw new Error("[assistant-output-time] assistant event timestamp extraction failed");
+  }
+  return null;
+}
+
+function assistantUsageOutputDateTimeFromBundle(
+  bundle: AssistantMessageDebugBundle | null | undefined,
+): string | null {
+  const timestampMs = assistantOutputTimestampMsFromBundle(bundle);
+  if (timestampMs === null) {
+    return null;
+  }
+  return formatDateTimeNoLocale(timestampMs);
+}
+
+function assistantUsageButtonTitle(
+  bundle: AssistantMessageDebugBundle | null | undefined,
+): string {
+  const outputDateTime = assistantUsageOutputDateTimeFromBundle(bundle);
+  return outputDateTime ? `输出时间 ${outputDateTime}` : "查看 Usage";
+}
+
+
 
 function jsonContainsTypedBlock(value: unknown, expectedType: string): boolean {
   if (Array.isArray(value)) {
@@ -1206,6 +1190,7 @@ function createHistoricalDebugEvent(
     root,
     eventType: debugEventTypeForRuntimeMessage(message),
     receivedAt: detail.updated_at_ms + index,
+    debugStorageSource: "runtime",
     payload: {
       historical: true,
       text: message.text,
@@ -1999,14 +1984,12 @@ function payloadText(event: AgentReplStreamEvent): string {
 }
 
 type SessionUsagePayload = {
-  rebuildResult: UsageRebuildResult | null;
   records: UsageRecordRow[];
   assistantSummaries: UsageAssistantSummaryRow[];
   summary: UsageSummaryRow | null;
 };
 
 const emptySessionUsagePayload: SessionUsagePayload = {
-  rebuildResult: null,
   records: [],
   assistantSummaries: [],
   summary: null,
@@ -2048,7 +2031,7 @@ function usageFormatValue(value: unknown, key: string): string {
   const number = usageNumberValue(value);
   if (number === null) return "—";
   if (key === "input_hit_rate") return `${(number * 100).toFixed(2)}%`;
-  if (key === "cost_usd") return `$${number.toFixed(8)}`;
+  if (key === "cost_usd") return `¥${number.toFixed(8)}`;
   return Math.round(number).toLocaleString();
 }
 
@@ -2963,9 +2946,6 @@ export function App() {
     );
   }, [hiddenSessions]);
 
-  useEffect(() => {
-    persistAssistantDebugBundles(assistantDebugBundles);
-  }, [assistantDebugBundles]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3178,62 +3158,6 @@ export function App() {
     }));
   }
 
-  useEffect(() => {
-    if (!activeSessionId) {
-      return;
-    }
-
-    let cancelled = false;
-    loadDebugEventsFromSqlite({ sessionId: activeSessionId, limit: 600 })
-      .then((rows) => {
-        if (cancelled) return;
-
-        const loadedEvents = (rows as any[]);
-        setSessionDebugEvents((events) => ({
-          ...events,
-          [activeSessionId]: loadedEvents,
-        }));
-
-        setAssistantDebugBundles((bundles) => {
-          const grouped = new Map<string, typeof loadedEvents>();
-          for (const event of loadedEvents) {
-            if (!event.assistantMessageId) continue;
-            grouped.set(event.assistantMessageId, [
-              ...(grouped.get(event.assistantMessageId) ?? []),
-              event,
-            ]);
-          }
-
-          let changed = false;
-          const next = { ...bundles };
-          for (const [messageId, bundle] of Object.entries(next)) {
-            if (bundle.sessionId !== activeSessionId) continue;
-            const sqliteEvents = grouped.get(messageId) ?? [];
-            changed = true;
-            next[messageId] = {
-              ...bundle,
-              events: sqliteEvents,
-              updatedAt: sqliteEvents[sqliteEvents.length - 1]?.receivedAt ?? bundle.updatedAt,
-            };
-          }
-
-          return changed ? next : bundles;
-        });
-
-        console.info("[debug-events-sqlite] loaded", {
-          sessionId: activeSessionId,
-          rows: rows.length,
-          fallback: false,
-        });
-      })
-      .catch((reason) => {
-        console.warn("[debug-events-sqlite] read failed", reason);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSessionId]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -3874,6 +3798,133 @@ export function App() {
     };
   }
 
+
+  // TEMP_USAGE_DIAGNOSTIC_ALERT_START
+  function showUsageDebugAlert(
+    source: "usage-button" | "debug-button" | "global-usage-button",
+    messageId?: string,
+  ) {
+    const records = sessionUsagePayload.records ?? [];
+    const assistantSummaries = Array.isArray((sessionUsagePayload as any).assistantSummaries)
+      ? ((sessionUsagePayload as any).assistantSummaries as Array<Record<string, unknown>>)
+      : [];
+    const summary = sessionUsagePayload.summary as Record<string, unknown> | null;
+    const messageKey = String(messageId ?? "");
+    const matchingRecords = messageKey
+      ? records.filter(
+          (row) => String(usageCell(row, "assistant_message_id") ?? "") === messageKey,
+        )
+      : [];
+    const matchingSummaries = messageKey
+      ? assistantSummaries.filter(
+          (row) => String(usageCell(row, "assistant_message_id") ?? "") === messageKey,
+        )
+      : [];
+    const bundle = messageKey ? assistantDebugBundles[messageKey] : null;
+    const recordCost = matchingRecords.reduce(
+      (total, row) => total + (usageNumberValue(usageCell(row, "cost_usd")) ?? 0),
+      0,
+    );
+    const recordTotalInput = matchingRecords.reduce(
+      (total, row) => total + (usageNumberValue(usageCell(row, "total_input_tokens")) ?? 0),
+      0,
+    );
+    const recordOutput = matchingRecords.reduce(
+      (total, row) => total + (usageNumberValue(usageCell(row, "output_tokens")) ?? 0),
+      0,
+    );
+    const recordTurnIndexes = matchingRecords
+      .map((row) => usageCell(row, "turn_index"))
+      .filter((value) => value !== null && value !== undefined)
+      .map((value) => String(value));
+    const recordSessions = Array.from(
+      new Set(
+        matchingRecords
+          .map((row) => String(usageCell(row, "session_id") ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+    const summaryLines = matchingSummaries.slice(0, 5).map((row, index) => {
+      return [
+        `#${index + 1}`,
+        `session=${String(usageCell(row, "session_id") ?? "—")}`,
+        `assistant=${usageShortId(usageCell(row, "assistant_message_id"))}`,
+        `turn_count=${String(usageCell(row, "turn_count") ?? "—")}`,
+        `range=${String(usageCell(row, "first_turn_index") ?? "—")}-${String(usageCell(row, "last_turn_index") ?? "—")}`,
+        `cost=${usageFormatValue(usageCell(row, "cost_usd"), "cost_usd")}`,
+      ].join(" | ");
+    });
+    const debugEventSessions = Array.from(
+      new Set(
+        (bundle?.events ?? [])
+          .flatMap((event) => {
+            const payload = event.payload as Record<string, unknown> | null;
+            const rawJson =
+              payload && typeof payload === "object"
+                ? ((payload.raw_json ?? payload) as Record<string, unknown> | null)
+                : null;
+            const rawMessage =
+              rawJson && typeof rawJson === "object"
+                ? ((rawJson.message ?? null) as Record<string, unknown> | null)
+                : null;
+            return [
+              event.sessionId,
+              payload && typeof payload === "object" ? payload.session_id : null,
+              payload && typeof payload === "object" ? payload.sessionId : null,
+              rawJson && typeof rawJson === "object" ? rawJson.session_id : null,
+              rawJson && typeof rawJson === "object" ? rawJson.sessionId : null,
+              rawMessage && typeof rawMessage === "object" ? rawMessage.session_id : null,
+              rawMessage && typeof rawMessage === "object" ? rawMessage.sessionId : null,
+            ];
+          })
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+    const debugSourceCounts = bundle ? debugStorageSourceCounts(bundle.events) : {};
+    const firstEvent = bundle?.events[0] ?? null;
+    const lastEvent = bundle?.events[bundle.events.length - 1] ?? null;
+
+    window.alert(
+      [
+        "USAGE/DEBUG CLICK DIAGNOSTIC",
+        `source=${source}`,
+        `activeSessionId=${activeSessionId ?? "—"}`,
+        `messageId=${messageKey || "—"}`,
+        `messageShort=${messageKey ? usageShortId(messageKey) : "—"}`,
+        "",
+        "loaded usage state:",
+        `records.length=${records.length}`,
+        `assistantSummaries.length=${assistantSummaries.length}`,
+        `session summary turn_count=${String(usageCell(summary, "turn_count") ?? "—")}`,
+        `session summary cost=${usageFormatValue(usageCell(summary, "cost_usd"), "cost_usd")}`,
+        "",
+        "match by assistant_message_id:",
+        `raw usage record matches=${matchingRecords.length}`,
+        `assistant summary matches=${matchingSummaries.length}`,
+        `raw record sessions=${recordSessions.join(", ") || "—"}`,
+        `raw turn indexes=${recordTurnIndexes.join(", ") || "—"}`,
+        `raw aggregate total_input=${usageFormatValue(recordTotalInput, "total_input_tokens")}`,
+        `raw aggregate output=${usageFormatValue(recordOutput, "output_tokens")}`,
+        `raw aggregate cost=${usageFormatValue(recordCost, "cost_usd")}`,
+        "",
+        "assistant summary rows:",
+        summaryLines.length ? summaryLines.join("\n") : "—",
+        "",
+        "debug bundle:",
+        `bundle exists=${bundle ? "yes" : "no"}`,
+        `bundle.sessionId=${bundle?.sessionId ?? "—"}`,
+        `bundle.root=${bundle?.root ?? "—"}`,
+        `bundle.events.length=${bundle?.events.length ?? 0}`,
+        `debug source counts=${JSON.stringify(debugSourceCounts)}`,
+        `debug event sessions=${debugEventSessions.join(", ") || "—"}`,
+        `first event=${firstEvent ? `${firstEvent.eventType}@${new Date(firstEvent.receivedAt).toISOString()}` : "—"}`,
+        `last event=${lastEvent ? `${lastEvent.eventType}@${new Date(lastEvent.receivedAt).toISOString()}` : "—"}`,
+      ].join("\n"),
+    );
+  }
+  // TEMP_USAGE_DIAGNOSTIC_ALERT_END
+
   function handleToggleAssistantProcess(messageId: string) {
     setOpenProcessMessageIds((current) => {
       const next = new Set(current);
@@ -3918,45 +3969,40 @@ export function App() {
     }
   }
 
-  function rebuildUsageRecordsAfterTurnComplete(sessionId: string, eventType: string) {
-    if (eventType !== "turn_complete") return;
-
-    void rebuildUsageRecordsFromDebugEvents(sessionId)
-      .then((rebuildResult) => {
-        setSessionUsagePayload((current) => ({
-          ...current,
-          rebuildResult,
-        }));
-      })
-      .catch((reason) => {
-        console.warn("[usage-records] rebuild failed", {
-          sessionId,
-          reason,
-        });
-      });
-  }
 
   function handleToggleSessionUsage() {
     if (!activeSessionId) return;
+    const sessionId = activeSessionId;
 
     setIsDebugOpen((current) => {
       const next = !current;
       if (next) {
-        void loadSessionUsageForPanel(activeSessionId);
+        void loadSessionUsageForPanel(sessionId).then(() => {
+          window.setTimeout(() => {
+            showUsageDebugAlert("global-usage-button");
+          }, 0);
+        });
       }
       return next;
     });
   }
 
-  function handleViewAssistantUsage(messageId: string) {
+  async function handleViewAssistantUsage(messageId: string) {
     if (!activeSessionId) return;
+    const sessionId = activeSessionId;
+
     setOpenAssistantDebugMessageId(null);
     setIsDebugOpen(false);
     setOpenAssistantUsageMessageId(messageId);
-    void loadSessionUsageForPanel(activeSessionId);
+
+    await loadSessionUsageForPanel(sessionId);
+    window.setTimeout(() => {
+      showUsageDebugAlert("usage-button", messageId);
+    }, 0);
   }
 
   function handleViewAssistantDebug(messageId: string) {
+    showUsageDebugAlert("debug-button", messageId);
     if (assistantDebugClickTimer.current !== null) {
       window.clearTimeout(assistantDebugClickTimer.current);
     }
@@ -4730,13 +4776,6 @@ export function App() {
                         </div>
                       ))}
                     </div>
-                    {sessionUsagePayload.rebuildResult ? (
-                      <div className="usage-note">
-                        scanned={sessionUsagePayload.rebuildResult.scanned_event_count} ·
-                        extracted={sessionUsagePayload.rebuildResult.extracted_turn_count} ·
-                        unavailable_cost={sessionUsagePayload.rebuildResult.unavailable_cost_count}
-                      </div>
-                    ) : null}
                   </article>
 
                   <article className="debug-event">
@@ -4867,8 +4906,19 @@ export function App() {
                                 onClick={() => handleViewAssistantUsage(item.id)}
                                 title="查看 Usage"
                               >
-                                Usage
+                                <span>Usage</span>
                               </button>
+                              {(() => {
+                                const outputDateTime = assistantUsageOutputDateTimeFromBundle(assistantDebugBundle);
+                                return outputDateTime ? (
+                                  <span
+                                    className="message-output-time"
+                                    title={assistantUsageButtonTitle(assistantDebugBundle)}
+                                  >
+                                    {outputDateTime}
+                                  </span>
+                                ) : null;
+                              })()}
                               </>
                             ) : null}
                           </div>
@@ -6841,12 +6891,12 @@ function SettingsView({ hiddenSessions, onRestoreSession }: SettingsViewProps) {
                     <section className="settings-row">
                       <div>
                         <h4>DeepSeek Pricing</h4>
-                        <p>Fetched on desktop startup and used for local cost estimates.</p>
+                        <p>Fetched from DeepSeek official Chinese pricing page and used for local RMB cost estimates.</p>
                       </div>
                       <div className="deepseek-pricing-card">
                         <div className="deepseek-pricing-meta">
-                          <span>Source: {draftSettings?.deepseekPricing?.source ?? "not loaded"}</span>
-                          <span>Fetched: {draftSettings?.deepseekPricing?.fetchedAt ?? "—"}</span>
+                          <span>Source: {draftSettings?.deepseekPricing?.source}</span>
+                          <span>Fetched: {draftSettings?.deepseekPricing?.fetchedAt}</span>
                         </div>
                         {(draftSettings?.deepseekPricing?.models ?? []).length > 0 ? (
                           <table className="deepseek-pricing-table">
@@ -6854,7 +6904,7 @@ function SettingsView({ hiddenSessions, onRestoreSession }: SettingsViewProps) {
                               <tr>
                                 <th>Model</th>
                                 <th>Item</th>
-                                <th>USD / 1M tokens</th>
+                                <th>RMB / 1M tokens</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -6863,7 +6913,7 @@ function SettingsView({ hiddenSessions, onRestoreSession }: SettingsViewProps) {
                                   <tr key={`${model.model}:${item.item}`}>
                                     <td>{model.model}</td>
                                     <td>{item.item}</td>
-                                    <td>${item.pricePerMTokens}</td>
+                                    <td>¥{item.pricePerMTokens}</td>
                                   </tr>
                                 )),
                               )}
