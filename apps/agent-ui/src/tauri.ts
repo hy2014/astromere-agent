@@ -240,29 +240,26 @@ export type UsageRecordRow = Record<string, unknown>;
 export type UsageSummaryRow = Record<string, unknown>;
 export type UsageAssistantSummaryRow = Record<string, unknown>;
 export type UsageDaySplitRow = Record<string, unknown>;
-export type UsageReadSource = "runtime" | string;
+export type UsageReadSource = "disabled" | string;
 
 export function loadUsageReadSource(): Promise<UsageReadSource> {
-  return invoke("sqlite_usage_read_source");
+  return Promise.resolve("disabled");
 }
 
-export async function loadUsageRecords(sessionId: string): Promise<UsageRecordRow[]> {
-  const source = await loadUsageReadSource();
-  return invoke("sqlite_usage_records", { sessionId, source });
+export function loadUsageRecords(_sessionId: string): Promise<UsageRecordRow[]> {
+  return Promise.resolve([]);
 }
 
-export async function loadUsageAssistantSummaries(
-  sessionId: string,
+export function loadUsageAssistantSummaries(
+  _sessionId: string,
 ): Promise<UsageAssistantSummaryRow[]> {
-  const source = await loadUsageReadSource();
-  return invoke("sqlite_usage_assistant_summaries", { sessionId, source });
+  return Promise.resolve([]);
 }
 
-export function loadUsageSessionSummary(sessionId: string): Promise<UsageSummaryRow[]> {
-  return invoke("sqlite_usage_session_summary", { sessionId });
+export function loadUsageSessionSummary(_sessionId: string): Promise<UsageSummaryRow[]> {
+  return Promise.resolve([]);
 }
 
-export function loadUsageDaySplits(sessionId: string): Promise<UsageDaySplitRow[]> {
-  return invoke("sqlite_usage_day_splits", { sessionId });
+export function loadUsageDaySplits(_sessionId: string): Promise<UsageDaySplitRow[]> {
+  return Promise.resolve([]);
 }
-
