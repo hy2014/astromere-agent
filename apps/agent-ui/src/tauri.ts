@@ -236,19 +236,6 @@ export function runAgentTurn(
   return invoke("run_agent_turn", { root, sessionId, prompt });
 }
 
-export type UsageRebuildResult = {
-  inserted_count: number;
-  updated_count: number;
-  skipped_count: number;
-  candidate_count: number;
-  bad_payload_json_count: number;
-  missing_assistant_message_id_count: number;
-  no_usage_count: number;
-  unavailable_cost_count: number;
-  scanned_event_count: number;
-  extracted_turn_count: number;
-};
-
 export type UsageRecordRow = Record<string, unknown>;
 export type UsageSummaryRow = Record<string, unknown>;
 export type UsageAssistantSummaryRow = Record<string, unknown>;
@@ -257,22 +244,6 @@ export type UsageReadSource = "runtime" | string;
 
 export function loadUsageReadSource(): Promise<UsageReadSource> {
   return invoke("sqlite_usage_read_source");
-}
-
-export type DebugEventRow = Record<string, unknown>;
-
-export function loadDebugEventRows(args: {
-  sessionId?: string;
-  assistantMessageId?: string;
-  limit?: number;
-}): Promise<DebugEventRow[]> {
-  return invoke("sqlite_debug_events", { args });
-}
-
-export function rebuildUsageRecordsFromDebugEvents(
-  sessionId: string,
-): Promise<UsageRebuildResult> {
-  return invoke("sqlite_rebuild_usage_records_from_debug_events", { sessionId });
 }
 
 export async function loadUsageRecords(sessionId: string): Promise<UsageRecordRow[]> {

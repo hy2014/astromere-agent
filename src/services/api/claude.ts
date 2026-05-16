@@ -2521,6 +2521,7 @@ async function* queryModel(
   }
 
   const newMessages: AssistantMessage[] = []
+  const pendingAssistantMessages: AssistantMessage[] = []
   let ttftMs = 0
   let partialMessage: BetaMessage | undefined = undefined
   const contentBlocks: (BetaContentBlock | ConnectorTextBlock)[] = []
@@ -2620,6 +2621,7 @@ async function* queryModel(
 
     // reset state
     newMessages.length = 0
+    pendingAssistantMessages.length = 0
     ttftMs = 0
     partialMessage = undefined
     contentBlocks.length = 0
@@ -2969,7 +2971,7 @@ async function* queryModel(
               ...(advisorModel && { advisorModel }),
             }
             newMessages.push(m)
-            yield m
+            pendingAssistantMessages.push(m)
             break
           }
           case 'message_delta': {
@@ -2988,25 +2990,18 @@ async function* queryModel(
               }
             }
 
-            // Write final usage and stop_reason back to the last yielded
-            // message. Messages are created at content_block_stop from
-            // partialMessage, which was set at message_start before any tokens
-            // were generated (output_tokens: 0, stop_reason: null).
-            // message_delta arrives after content_block_stop with the real
-            // values.
-            //
-            // IMPORTANT: Use direct property mutation, not object replacement.
-            // The transcript write queue holds a reference to message.message
-            // and serializes it lazily (100ms flush interval). Object
-            // replacement ({ ...lastMsg.message, usage }) would disconnect
-            // the queued reference; direct mutation ensures the transcript
-            // captures the final values.
+            // Final usage and stop_reason arrive after content_block_stop.
+            // Do not yield assistant messages before this point, otherwise
+            // stream-json consumers receive output_tokens: 0 and never see the
+            // later in-memory mutation.
             stopReason = part.delta.stop_reason
 
-            const lastMsg = newMessages.at(-1)
-            if (lastMsg) {
-              lastMsg.message.usage = usage
-              lastMsg.message.stop_reason = stopReason
+            for (const msg of pendingAssistantMessages) {
+              msg.message.usage = usage
+              msg.message.stop_reason = stopReason
+            }
+            for (const msg of pendingAssistantMessages.splice(0)) {
+              yield msg
             }
 
             // Update cost
@@ -3055,6 +3050,13 @@ async function* queryModel(
             break
           }
           case 'message_stop':
+            for (const msg of pendingAssistantMessages) {
+              msg.message.usage = usage
+              msg.message.stop_reason = stopReason
+            }
+            for (const msg of pendingAssistantMessages.splice(0)) {
+              yield msg
+            }
             break
         }
 

@@ -254,9 +254,11 @@ export type DeepSeekPricingModel = {
 };
 
 export type DeepSeekPricingConfig = {
-  source: "official" | "builtin" | "failed" | string;
+  source: "official" | string;
   fetchedAt: string;
   url: string;
+  currency: "CNY" | string;
+  unit: "CNY_PER_1M_TOKENS" | string;
   models: DeepSeekPricingModel[];
 };
 
