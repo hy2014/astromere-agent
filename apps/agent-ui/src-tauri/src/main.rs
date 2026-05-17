@@ -13,7 +13,10 @@ use tauri::Emitter;
 
 mod sqlite;
 use sqlite::{
-    sqlite_database_info, sqlite_execute, sqlite_query
+    sqlite_database_info, sqlite_execute, sqlite_query,
+    save_bundle_usage_snapshot,
+    load_bundle_usage_snapshot,
+    load_bundle_usage_snapshots_for_session,
 };
 
 #[derive(Debug, Serialize)]
@@ -3621,8 +3624,11 @@ fn main() {
             ensure_agent_repl_process,
             get_agent_repl_capabilities,
             send_agent_repl_input,
-            run_agent_turn
-        ])
+            run_agent_turn,
+                    save_bundle_usage_snapshot,
+            load_bundle_usage_snapshot,
+            load_bundle_usage_snapshots_for_session,
+])
         .run(tauri::generate_context!())
         .expect("failed to run Claw Agent UI");
 }
