@@ -75,6 +75,11 @@ import {
   type UsageAssistantSummaryRow,
   type UsageSummaryRow,
   sqliteDatabaseInfo,
+  saveBundleUsageSnapshot,
+  loadBundleUsageSnapshotsForSession,
+  type BundleUsageSnapshot,
+  type BundleUsageTotals,
+  type ModelCallUsageSnapshot,
 } from "../tauri";
 
 type LocalImageMetadata = {
@@ -490,6 +495,377 @@ function modelCallIdFromEvent(event: AgentReplStreamEvent): string | null {
   return modelCallIdFromRawJson(event.payload.raw_json);
 }
 
+type ModelCallUsageCandidate = {
+  modelCallId: string;
+  model?: string | null;
+  stopReason?: string | null;
+  usage: Record<string, unknown>;
+  eventIndex: number;
+  terminal: boolean;
+  completenessScore: number;
+};
+
+const terminalStopReasons = new Set([
+  "tool_use",
+  "end_turn",
+  "stop_sequence",
+  "max_tokens",
+  "pause_turn",
+  "refusal",
+]);
+
+function bundleUsageStorageKey(sessionId: string, bundleId: string): string {
+  return `${sessionId}\n${bundleId}`;
+}
+
+function usageNumericValue(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
+  }
+  return 0;
+}
+
+function usagePickNumber(usage: Record<string, unknown>, names: string[]): number {
+  for (const name of names) {
+    const value = usageNumericValue(usage[name]);
+    if (value > 0) {
+      return value;
+    }
+  }
+  return 0;
+}
+
+function usageTotalsFromUsage(usage: Record<string, unknown>): BundleUsageTotals {
+  const inputTokens = usagePickNumber(usage, [
+    "input_tokens",
+    "inputTokens",
+    "cache_miss_input_tokens",
+    "cacheMissInputTokens",
+    "prompt_cache_miss_tokens",
+    "promptCacheMissTokens",
+  ]);
+  const outputTokens = usagePickNumber(usage, [
+    "output_tokens",
+    "outputTokens",
+    "completion_tokens",
+    "completionTokens",
+  ]);
+  const cacheReadInputTokens = usagePickNumber(usage, [
+    "cache_read_input_tokens",
+    "cacheReadInputTokens",
+    "prompt_cache_hit_tokens",
+    "promptCacheHitTokens",
+    "cache_hit_input_tokens",
+    "cacheHitInputTokens",
+  ]);
+  const cacheCreationInputTokens = usagePickNumber(usage, [
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+    "cache_write_input_tokens",
+    "cacheWriteInputTokens",
+  ]);
+  const explicitTotalInput = usagePickNumber(usage, [
+    "total_input_tokens",
+    "totalInputTokens",
+    "prompt_tokens",
+    "promptTokens",
+  ]);
+
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    totalInputTokens:
+      explicitTotalInput > 0
+        ? explicitTotalInput
+        : inputTokens + cacheReadInputTokens + cacheCreationInputTokens,
+  };
+}
+
+function addUsageTotals(left: BundleUsageTotals, right: BundleUsageTotals): BundleUsageTotals {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    cacheReadInputTokens: left.cacheReadInputTokens + right.cacheReadInputTokens,
+    cacheCreationInputTokens: left.cacheCreationInputTokens + right.cacheCreationInputTokens,
+    totalInputTokens: left.totalInputTokens + right.totalInputTokens,
+  };
+}
+
+function usageCompletenessScore(usage: Record<string, unknown>): number {
+  let numericKeyCount = 0;
+  for (const value of Object.values(usage)) {
+    if (usageNumericValue(value) > 0) {
+      numericKeyCount += 1;
+    }
+  }
+  const totals = usageTotalsFromUsage(usage);
+  return (
+    numericKeyCount * 1_000_000 +
+    totals.inputTokens +
+    totals.outputTokens +
+    totals.cacheReadInputTokens +
+    totals.cacheCreationInputTokens +
+    totals.totalInputTokens
+  );
+}
+
+function modelCallUsageCandidateFromDebugEvent(
+  event: DebugStreamEvent,
+  eventIndex: number,
+): ModelCallUsageCandidate | null {
+  const rawJson = rawJsonFromDebugEvent(event);
+  if (!isRecord(rawJson) || rawJson.type !== "assistant") {
+    return null;
+  }
+
+  const message = rawJson.message;
+  if (!isRecord(message)) {
+    return null;
+  }
+
+  const modelCallId = modelCallIdFromRawJson(rawJson);
+  if (!modelCallId) {
+    return null;
+  }
+
+  const usage = message.usage;
+  if (!isRecord(usage)) {
+    return null;
+  }
+
+  const stopReason =
+    typeof message.stop_reason === "string" && message.stop_reason.trim()
+      ? message.stop_reason.trim()
+      : null;
+
+  return {
+    modelCallId,
+    model: typeof message.model === "string" ? message.model : null,
+    stopReason,
+    usage: usage as Record<string, unknown>,
+    eventIndex,
+    terminal: Boolean(stopReason && terminalStopReasons.has(stopReason)),
+    completenessScore: usageCompletenessScore(usage as Record<string, unknown>),
+  };
+}
+
+function selectBestModelCallUsageCandidate(
+  candidates: ModelCallUsageCandidate[],
+): ModelCallUsageCandidate {
+  return candidates.reduce((best, candidate) => {
+    const bestRank = [
+      best.terminal ? 1 : 0,
+      best.completenessScore,
+      best.eventIndex,
+    ];
+    const candidateRank = [
+      candidate.terminal ? 1 : 0,
+      candidate.completenessScore,
+      candidate.eventIndex,
+    ];
+    return candidateRank[0] > bestRank[0] ||
+      (candidateRank[0] === bestRank[0] && candidateRank[1] > bestRank[1]) ||
+      (candidateRank[0] === bestRank[0] &&
+        candidateRank[1] === bestRank[1] &&
+        candidateRank[2] > bestRank[2])
+      ? candidate
+      : best;
+  });
+}
+
+function calculateBundleUsageSnapshot(
+  bundle: AssistantMessageDebugBundle,
+  status: BundleUsageSnapshot["status"],
+  completedAtMs?: number | null,
+): BundleUsageSnapshot {
+  const grouped = new Map<string, ModelCallUsageCandidate[]>();
+
+  for (const [eventIndex, event] of bundle.events.entries()) {
+    const candidate = modelCallUsageCandidateFromDebugEvent(event, eventIndex);
+    if (!candidate) {
+      continue;
+    }
+    grouped.set(candidate.modelCallId, [
+      ...(grouped.get(candidate.modelCallId) ?? []),
+      candidate,
+    ]);
+  }
+
+  const orderedModelCallIds =
+    bundle.modelCallIds.length > 0 ? bundle.modelCallIds : Array.from(grouped.keys());
+
+  let totals: BundleUsageTotals = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    totalInputTokens: 0,
+  };
+  const modelCallUsages: ModelCallUsageSnapshot[] = [];
+
+  for (const modelCallId of orderedModelCallIds) {
+    const candidates = grouped.get(modelCallId) ?? [];
+    if (candidates.length === 0) {
+      continue;
+    }
+    const best = selectBestModelCallUsageCandidate(candidates);
+    totals = addUsageTotals(totals, usageTotalsFromUsage(best.usage));
+    modelCallUsages.push({
+      modelCallId,
+      model: best.model,
+      stopReason: best.stopReason,
+      selectedReason: best.terminal ? "terminal" : "latest_non_terminal",
+      usage: best.usage,
+    });
+  }
+
+  return {
+    sessionId: bundle.sessionId,
+    bundleId: bundle.messageId,
+    root: bundle.root,
+    source: "stream",
+    status,
+    startedAtMs: bundle.startedAt,
+    completedAtMs: completedAtMs ?? null,
+    updatedAtMs: Date.now(),
+    modelCallIds: orderedModelCallIds,
+    modelCallUsages,
+    usage: totals,
+  };
+}
+
+function bundleUsageStatusFromEvent(event: AgentReplStreamEvent): BundleUsageSnapshot["status"] {
+  switch (event.eventType) {
+    case "turn_complete":
+      return "complete";
+    case "interrupt":
+      return "interrupted";
+    case "error":
+      return "error";
+    case "process_exit":
+      return "process_exit";
+    default:
+      return "streaming";
+  }
+}
+
+function bundleUsageButtonLabel(snapshot: BundleUsageSnapshot | null | undefined): string {
+  if (!snapshot || snapshot.modelCallUsages.length === 0) {
+    return "Usage";
+  }
+  const totalTokens = snapshot.usage.totalInputTokens + snapshot.usage.outputTokens;
+  return totalTokens > 0 ? `Usage ${totalTokens}` : "Usage";
+}
+
+function bundleUsageDecimalValue(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function bundleUsageCostAmount(snapshot: BundleUsageSnapshot | null | undefined): number | null {
+  if (!snapshot) return null;
+  const value = snapshot as BundleUsageSnapshot & {
+    cost?: {
+      costAmount?: unknown;
+      costUsd?: unknown;
+      cost_amount?: unknown;
+    } | null;
+    costAmount?: unknown;
+    costUsd?: unknown;
+    cost_amount?: unknown;
+    cost_usd?: unknown;
+  };
+
+  const candidates = [
+    value.cost?.costAmount,
+    value.cost?.cost_amount,
+    value.cost?.costUsd,
+    value.costAmount,
+    value.cost_amount,
+    value.costUsd,
+    value.cost_usd,
+  ];
+
+  for (const candidate of candidates) {
+    const amount = bundleUsageDecimalValue(candidate);
+    if (amount > 0) return amount;
+  }
+
+  return null;
+}
+
+function bundleUsageCurrency(snapshot: BundleUsageSnapshot | null | undefined): string {
+  const value = snapshot as (BundleUsageSnapshot & {
+    cost?: { currency?: unknown };
+    costCurrency?: unknown;
+  }) | null | undefined;
+
+  const nested = value?.cost?.currency;
+  if (typeof nested === "string" && nested.trim()) {
+    return nested.trim().toUpperCase();
+  }
+
+  const direct = value?.costCurrency;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim().toUpperCase();
+  }
+
+  return "CNY";
+}
+
+function formatBundleUsageCost(snapshot: BundleUsageSnapshot | null | undefined): string {
+  const amount = bundleUsageCostAmount(snapshot);
+  if (amount == null) {
+    return "unavailable";
+  }
+
+  const currency = bundleUsageCurrency(snapshot);
+  const symbol =
+    currency === "CNY" || currency === "RMB"
+      ? "¥"
+      : currency === "USD"
+        ? "$"
+        : `${currency} `;
+
+  return `${symbol}${amount.toFixed(4)}`;
+}
+
+function bundleUsageHitRate(snapshot: BundleUsageSnapshot | null | undefined): number | null {
+  const usage = snapshot?.usage;
+  if (!usage) {
+    return null;
+  }
+
+  const totalInput =
+    usage.totalInputTokens ||
+    usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens;
+
+  if (!totalInput || totalInput <= 0) {
+    return null;
+  }
+
+  return usage.cacheReadInputTokens / totalInput;
+}
+
+function formatBundleUsageHitRate(snapshot: BundleUsageSnapshot | null | undefined): string {
+  const hitRate = bundleUsageHitRate(snapshot);
+  return hitRate == null ? "unavailable" : `${(hitRate * 100).toFixed(2)}%`;
+}
+
+
+
 function isAssistantBundleStartEvent(event: AgentReplStreamEvent): boolean {
   if (event.eventType !== "turn_text" && event.eventType !== "tool_call") {
     return false;
@@ -558,6 +934,189 @@ function rekeyAssistantBundle(
     },
   };
 }
+
+const pendingAssistantText = "Assistant is thinking…";
+
+function mergeProgressText(
+  previous: string | undefined,
+  next: string | undefined,
+): string | undefined {
+  const previousText = previous?.trim();
+  const nextText = next?.trim();
+
+  if (!previousText) return nextText || undefined;
+  if (!nextText) return previousText;
+
+  if (previousText === nextText) return previousText;
+  if (nextText.startsWith(previousText)) return nextText;
+  if (previousText.endsWith(nextText)) return previousText;
+
+  return `${previousText}${nextText}`;
+}
+
+function currentTurnAssistantMessageIndex(items: StreamItem[]): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "message" && item.role === "assistant") {
+      if (item.status === "streaming" || item.text === pendingAssistantText) {
+        return index;
+      }
+      break;
+    }
+    if (item.kind === "message" && item.role === "user") {
+      break;
+    }
+  }
+  return -1;
+}
+
+function collapseAssistantTurns(items: StreamItem[]): StreamItem[] {
+  const collapsed: StreamItem[] = [];
+
+  for (const item of items) {
+    const previous = collapsed[collapsed.length - 1];
+
+    if (
+      previous &&
+      previous.kind === "message" &&
+      previous.role === "assistant" &&
+      item.kind === "message" &&
+      item.role === "assistant"
+    ) {
+      const previousProgress = previous.progressText?.trim();
+      const itemProgress = item.progressText?.trim();
+      const mergedProgress =
+        previousProgress || itemProgress
+          ? mergeProgressText(previousProgress, itemProgress)
+          : undefined;
+
+      collapsed[collapsed.length - 1] = {
+        ...previous,
+        text: item.text && item.text !== pendingAssistantText ? item.text : previous.text,
+        links: item.links?.length ? item.links : previous.links,
+        progressText: mergedProgress,
+        status:
+          item.status === "complete" || previous.status === "complete"
+            ? "complete"
+            : previous.status ?? item.status,
+      };
+      continue;
+    }
+
+    collapsed.push(item);
+  }
+
+  return collapsed;
+}
+
+function upsertCurrentTurnProgressMessage(
+  items: StreamItem[],
+  sessionId: string,
+  text: string,
+  bundleId: string | null | undefined,
+): StreamItem[] {
+  const canonicalBundleId = bundleId?.trim();
+  if (!canonicalBundleId) {
+    console.warn("[agent-ui][bundle] assistant live event has no resolved bundle id; skip transient assistant StreamItem", {
+      sessionId,
+    });
+    return items;
+  }
+
+  const progressText = text.trim();
+  if (!progressText) {
+    return items;
+  }
+
+  const currentAssistantIndex = currentTurnAssistantMessageIndex(items);
+  if (currentAssistantIndex >= 0) {
+    return items.map((item, itemIndex) => {
+      if (itemIndex !== currentAssistantIndex || item.kind !== "message") {
+        return item;
+      }
+
+      const mergedProgress = mergeProgressText(
+        item.progressText ?? (item.text === pendingAssistantText ? undefined : item.text),
+        progressText,
+      );
+
+      return {
+        ...item,
+        text:
+          item.status === "streaming" || item.text === pendingAssistantText
+            ? pendingAssistantText
+            : item.text,
+        links: item.links,
+        progressText: mergedProgress,
+        status: "streaming",
+      };
+    });
+  }
+
+  return [
+    ...items,
+    {
+      id: canonicalBundleId,
+      kind: "message",
+      role: "assistant",
+      text: pendingAssistantText,
+      progressText,
+      status: "streaming",
+    },
+  ];
+}
+
+function completeCurrentTurnAssistantMessage(
+  items: StreamItem[],
+  sessionId: string,
+  text: string,
+  bundleId: string | null | undefined,
+): StreamItem[] {
+  const canonicalBundleId = bundleId?.trim();
+  if (!canonicalBundleId) {
+    console.warn("[agent-ui][bundle] assistant complete event has no resolved bundle id; skip transient assistant StreamItem", {
+      sessionId,
+    });
+    return items;
+  }
+
+  const finalText = text.trim();
+  if (!finalText) {
+    return items;
+  }
+
+  const currentAssistantIndex = currentTurnAssistantMessageIndex(items);
+  if (currentAssistantIndex >= 0) {
+    return items.map((item, itemIndex) => {
+      if (itemIndex !== currentAssistantIndex || item.kind !== "message") {
+        return item;
+      }
+
+      const progressText = item.progressText?.trim();
+      return {
+        ...item,
+        text: finalText,
+        links: extractPreviewLinks(finalText),
+        progressText:
+          progressText && progressText !== finalText ? progressText : undefined,
+        status: "complete",
+      };
+    });
+  }
+
+  return [
+    ...items,
+    {
+      id: canonicalBundleId,
+      kind: "message",
+      role: "assistant",
+      text: finalText,
+      links: extractPreviewLinks(finalText),
+      status: "complete",
+    },
+  ];
+}
+
 
 function applyRuntimeDebugEventToBundle(
   current: Record<string, AssistantMessageDebugBundle>,
@@ -2491,21 +3050,16 @@ function SessionUsageAssistantMessageDetail({
 
 
 function AssistantUsageMiniOverlay({
-  messageId,
-  state,
-  loading,
-  error,
+  bundleId,
+  snapshot,
   onClose,
 }: {
-  messageId: string;
-  state: SessionUsagePayload;
-  loading: boolean;
-  error: string | null;
+  bundleId: string;
+  snapshot: BundleUsageSnapshot | null;
   onClose: () => void;
 }) {
-  const current = state.assistantSummaries.find(
-    (row) => String(usageCell(row, "assistant_message_id") ?? "") === messageId,
-  );
+  const usage = snapshot?.usage ?? null;
+  const cost = formatBundleUsageCost(snapshot);
 
   return (
     <div className="assistant-usage-mini-backdrop" role="presentation" onClick={onClose}>
@@ -2525,254 +3079,81 @@ function AssistantUsageMiniOverlay({
 
         <header className="assistant-usage-mini-header">
           <strong>Assistant Usage</strong>
-          <span>{usageShortId(messageId)}</span>
+          <span>{usageShortId(bundleId)}</span>
         </header>
 
-        {loading ? <div className="debug-empty">Loading usage…</div> : null}
-        {error ? <div className="debug-empty">{error}</div> : null}
-
-        {!loading && !error && !current ? (
-          <div className="debug-empty">No usage record for this assistant message yet.</div>
+        {!snapshot ? (
+          <div className="debug-empty">
+            Usage snapshot missing for this assistant bundle.
+          </div>
         ) : null}
 
-        {current ? (
+        {snapshot && usage ? (
           <>
             <div className="usage-grid">
               {[
-                ["turn_count", "Turn count"],
-                ["total_input_tokens", "Total input"],
-                ["input_tokens", "Input"],
-                ["output_tokens", "Output"],
-                ["cache_read_input_tokens", "Cache hit input"],
-                ["cache_creation_input_tokens", "Cache create input"],
-                ["input_hit_rate", "Hit rate"],
-                ["cost_usd", "Cost"],
-              ].map(([key, label]) => (
-                <div className="usage-card" key={key}>
+                ["totalInputTokens", "Total input", usage.totalInputTokens],
+                ["inputTokens", "Input", usage.inputTokens],
+                ["outputTokens", "Output", usage.outputTokens],
+                ["cacheReadInputTokens", "Cache hit input", usage.cacheReadInputTokens],
+                ["cacheCreationInputTokens", "Cache create input", usage.cacheCreationInputTokens],
+                ["hitRate", "Hit rate", formatBundleUsageHitRate(snapshot)],
+                ["modelCalls", "Model calls", snapshot.modelCallUsages.length],
+                ["costAmount", "Cost", cost],
+              ].map(([key, label, value]) => (
+                <div className="usage-card" key={String(key)}>
                   <span>{label}</span>
-                  <strong>{usageFormatValue(usageCell(current, key), key)}</strong>
+                  <strong>{String(value ?? 0)}</strong>
                 </div>
               ))}
             </div>
+
             <div className="usage-note">
-              turns={String(usageCell(current, "turn_count") ?? "—")} ·
-              range={String(usageCell(current, "first_turn_index") ?? "—")}-{String(usageCell(current, "last_turn_index") ?? "—")} ·
-              model={String(usageCell(current, "model") ?? "—")} ·
-              cost_source={String(usageCell(current, "cost_source") ?? "—")} ·
-              price={String(usageCell(current, "price_model_key") ?? "—")}
+              source={snapshot.source} · status={snapshot.status} · modelCalls={snapshot.modelCallIds.length}
             </div>
+
+            {snapshot.modelCallUsages.length > 0 ? (
+              <div className="usage-table-wrapper">
+                <table className="usage-table">
+                  <thead>
+                    <tr>
+                      <th>Model call</th>
+                      <th>Model</th>
+                      <th>Stop</th>
+                      <th>Selected</th>
+                      <th>Input</th>
+                      <th>Output</th>
+                      <th>Cache read</th>
+                      <th>Cache create</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {snapshot.modelCallUsages.map((call) => {
+                      const callUsage = usageTotalsFromUsage(call.usage);
+                      return (
+                        <tr key={call.modelCallId}>
+                          <td title={call.modelCallId}>{usageShortId(call.modelCallId)}</td>
+                          <td>{call.model ?? "unknown"}</td>
+                          <td>{call.stopReason ?? "—"}</td>
+                          <td>{call.selectedReason}</td>
+                          <td>{usageFormatValue(callUsage.inputTokens, "input_tokens")}</td>
+                          <td>{usageFormatValue(callUsage.outputTokens, "output_tokens")}</td>
+                          <td>{usageFormatValue(callUsage.cacheReadInputTokens, "cache_read_input_tokens")}</td>
+                          <td>{usageFormatValue(callUsage.cacheCreationInputTokens, "cache_creation_input_tokens")}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="debug-empty">No model-call usage rows for this bundle.</div>
+            )}
           </>
         ) : null}
       </section>
     </div>
   );
-}
-
-const pendingAssistantText = "Waiting for JSON REPL events...";
-
-function lastMessageIndexByRole(
-  items: StreamItem[],
-  role: "user" | "assistant",
-): number {
-  const reverseIndex = [...items]
-    .reverse()
-    .findIndex((item) => item.kind === "message" && item.role === role);
-  return reverseIndex < 0 ? -1 : items.length - 1 - reverseIndex;
-}
-
-function currentTurnAssistantMessageIndex(items: StreamItem[]): number {
-  const lastUserIndex = lastMessageIndexByRole(items, "user");
-
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item.kind !== "message") {
-      continue;
-    }
-    if (item.role === "user") {
-      break;
-    }
-    if (item.role === "assistant" && index > lastUserIndex) {
-      return index;
-    }
-  }
-
-  return -1;
-}
-
-function mergeProgressText(existing: string | undefined, nextText: string): string {
-  const next = nextText.trim();
-  if (!next) {
-    return existing?.trim() ?? "";
-  }
-  const current = existing?.trim();
-  if (!current || current === pendingAssistantText) {
-    return next;
-  }
-  if (current.endsWith(next)) {
-    return current;
-  }
-  return `${current}\n\n${next}`;
-}
-
-function upsertCurrentTurnProgressMessage(
-  items: StreamItem[],
-  sessionId: string,
-  text: string,
-  bundleId: string | null | undefined,
-): StreamItem[] {
-  const canonicalBundleId = bundleId?.trim();
-  if (!canonicalBundleId) {
-    console.warn("[agent-ui][bundle] assistant live event has no resolved bundle id; skip transient assistant StreamItem", {
-      sessionId,
-    });
-    return items;
-  }
-
-  const progressText = text.trim();
-  if (!progressText) {
-    return items;
-  }
-
-  const currentAssistantIndex = currentTurnAssistantMessageIndex(items);
-  if (currentAssistantIndex >= 0) {
-    return items.map((item, itemIndex) => {
-      if (itemIndex !== currentAssistantIndex || item.kind !== "message") {
-        return item;
-      }
-      const mergedProgress = mergeProgressText(
-        item.progressText ?? (item.text === pendingAssistantText ? undefined : item.text),
-        progressText,
-      );
-      return {
-        ...item,
-        text:
-          item.status === "streaming" || item.text === pendingAssistantText
-            ? pendingAssistantText
-            : item.text,
-        links: item.links,
-        progressText: mergedProgress,
-        status: "streaming",
-      };
-    });
-  }
-
-  return [
-    ...items,
-    {
-      id: canonicalBundleId,
-      kind: "message",
-      role: "assistant",
-      text: pendingAssistantText,
-      progressText,
-      status: "streaming",
-    },
-  ];
-}
-
-function completeCurrentTurnAssistantMessage(
-  items: StreamItem[],
-  sessionId: string,
-  text: string,
-  bundleId: string | null | undefined,
-): StreamItem[] {
-  const canonicalBundleId = bundleId?.trim();
-  if (!canonicalBundleId) {
-    console.warn("[agent-ui][bundle] assistant complete event has no resolved bundle id; skip transient assistant StreamItem", {
-      sessionId,
-    });
-    return items;
-  }
-
-  const finalText = text.trim();
-  if (!finalText) {
-    return items;
-  }
-
-  const currentAssistantIndex = currentTurnAssistantMessageIndex(items);
-  if (currentAssistantIndex >= 0) {
-    return items.map((item, itemIndex) => {
-      if (itemIndex !== currentAssistantIndex || item.kind !== "message") {
-        return item;
-      }
-      const progressText = item.progressText?.trim();
-      return {
-        ...item,
-        text: finalText,
-        links: extractPreviewLinks(finalText),
-        progressText:
-          progressText && progressText !== finalText ? progressText : undefined,
-        status: "complete",
-      };
-    });
-  }
-
-  return [
-    ...items,
-    {
-      id: canonicalBundleId,
-      kind: "message",
-      role: "assistant",
-      text: finalText,
-      links: extractPreviewLinks(finalText),
-      status: "complete",
-    },
-  ];
-}
-
-function assistantMessageTextForProgress(
-  item: Extract<StreamItem, { kind: "message" }>,
-): string {
-  return item.text === pendingAssistantText ? "" : item.text.trim();
-}
-
-function collapseAssistantTurns(items: StreamItem[]): StreamItem[] {
-  const collapsed: StreamItem[] = [];
-
-  for (const item of items) {
-    if (item.kind !== "message" || item.role !== "assistant") {
-      collapsed.push(item);
-      continue;
-    }
-
-    const existingIndex = currentTurnAssistantMessageIndex(collapsed);
-    if (existingIndex < 0) {
-      collapsed.push(item);
-      continue;
-    }
-
-    const existing = collapsed[existingIndex];
-    if (existing.kind !== "message" || existing.role !== "assistant") {
-      collapsed.push(item);
-      continue;
-    }
-
-    const existingFinalText = assistantMessageTextForProgress(existing);
-    const incomingFinalText = assistantMessageTextForProgress(item);
-    let progressText = existing.progressText;
-
-    if (existingFinalText && incomingFinalText && existingFinalText !== incomingFinalText) {
-      progressText = mergeProgressText(progressText, existingFinalText);
-    }
-    if (item.progressText) {
-      progressText = mergeProgressText(progressText, item.progressText);
-    }
-
-    const nextText = incomingFinalText || existing.text;
-    const normalizedProgress = progressText?.trim();
-
-    collapsed[existingIndex] = {
-      ...existing,
-      text: nextText,
-      links: incomingFinalText ? extractPreviewLinks(incomingFinalText) : existing.links,
-      progressText:
-        normalizedProgress && normalizedProgress !== nextText
-          ? normalizedProgress
-          : undefined,
-      status: item.status ?? existing.status,
-    };
-  }
-
-  return collapsed;
 }
 
 function streamEventToItems(
@@ -2831,6 +3212,450 @@ function streamEventToItems(
   }
 }
 
+
+type SessionUsageIndicatorKey =
+  | "costAmount"
+  | "totalInputTokens"
+  | "inputTokens"
+  | "outputTokens"
+  | "cacheReadInputTokens"
+  | "cacheCreationInputTokens"
+  | "hitRate"
+  | "modelCallCount";
+
+const sessionUsageIndicatorOptions: Array<{
+  key: SessionUsageIndicatorKey;
+  label: string;
+}> = [
+  { key: "costAmount", label: "Cost" },
+  { key: "totalInputTokens", label: "Total input" },
+  { key: "inputTokens", label: "Input" },
+  { key: "outputTokens", label: "Output" },
+  { key: "cacheReadInputTokens", label: "Cache hit input" },
+  { key: "cacheCreationInputTokens", label: "Cache create input" },
+  { key: "hitRate", label: "Hit rate" },
+  { key: "modelCallCount", label: "Model calls" },
+];
+
+function bundleUsageTimeMs(snapshot: BundleUsageSnapshot): number {
+  return snapshot.startedAtMs ?? snapshot.completedAtMs ?? snapshot.updatedAtMs ?? 0;
+}
+
+function bundleUsageIndicatorValue(
+  snapshot: BundleUsageSnapshot,
+  indicator: SessionUsageIndicatorKey,
+): number {
+  switch (indicator) {
+    case "costAmount":
+      return bundleUsageCostAmount(snapshot) ?? 0;
+    case "totalInputTokens":
+      return snapshot.usage.totalInputTokens;
+    case "inputTokens":
+      return snapshot.usage.inputTokens;
+    case "outputTokens":
+      return snapshot.usage.outputTokens;
+    case "cacheReadInputTokens":
+      return snapshot.usage.cacheReadInputTokens;
+    case "cacheCreationInputTokens":
+      return snapshot.usage.cacheCreationInputTokens;
+    case "hitRate":
+      return bundleUsageHitRate(snapshot) ?? 0;
+    case "modelCallCount":
+      return snapshot.modelCallUsages.length;
+    default:
+      return 0;
+  }
+}
+
+function formatSessionUsageIndicatorValue(
+  value: number,
+  indicator: SessionUsageIndicatorKey,
+  currency: string,
+): string {
+  if (indicator === "hitRate") {
+    return `${(value * 100).toFixed(2)}%`;
+  }
+  if (indicator === "costAmount") {
+    const symbol =
+      currency === "CNY" || currency === "RMB"
+        ? "¥"
+        : currency === "USD"
+          ? "$"
+          : `${currency} `;
+    return `${symbol}${value.toFixed(4)}`;
+  }
+  return usageFormatValue(value, indicator);
+}
+
+function sessionUsageSnapshotsForSession(
+  usageByKey: Record<string, BundleUsageSnapshot>,
+  sessionId: string | null,
+): BundleUsageSnapshot[] {
+  if (!sessionId) return [];
+  return Object.values(usageByKey)
+    .filter((snapshot: BundleUsageSnapshot) => snapshot.sessionId === sessionId)
+    .sort((left: BundleUsageSnapshot, right: BundleUsageSnapshot) => {
+      const leftTime = bundleUsageTimeMs(left);
+      const rightTime = bundleUsageTimeMs(right);
+      if (leftTime !== rightTime) return leftTime - rightTime;
+      return left.bundleId.localeCompare(right.bundleId);
+    });
+}
+
+function sessionUsageTotals(snapshots: BundleUsageSnapshot[]): BundleUsageTotals {
+  return snapshots.reduce<BundleUsageTotals>(
+    (totals: BundleUsageTotals, snapshot: BundleUsageSnapshot) => ({
+      inputTokens: totals.inputTokens + snapshot.usage.inputTokens,
+      outputTokens: totals.outputTokens + snapshot.usage.outputTokens,
+      cacheReadInputTokens:
+        totals.cacheReadInputTokens + snapshot.usage.cacheReadInputTokens,
+      cacheCreationInputTokens:
+        totals.cacheCreationInputTokens + snapshot.usage.cacheCreationInputTokens,
+      totalInputTokens: totals.totalInputTokens + snapshot.usage.totalInputTokens,
+    }),
+    {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      totalInputTokens: 0,
+    },
+  );
+}
+
+function sessionUsageHitRateFromTotals(totals: BundleUsageTotals): number | null {
+  const totalInput =
+    totals.totalInputTokens ||
+    totals.inputTokens + totals.cacheReadInputTokens + totals.cacheCreationInputTokens;
+  if (!totalInput || totalInput <= 0) return null;
+  return totals.cacheReadInputTokens / totalInput;
+}
+
+function sessionUsageCostAmount(snapshots: BundleUsageSnapshot[]): number | null {
+  let hasCost = false;
+  let total = 0;
+
+  for (const snapshot of snapshots) {
+    const amount = bundleUsageCostAmount(snapshot);
+    if (amount != null) {
+      hasCost = true;
+      total += amount;
+    }
+  }
+
+  return hasCost ? total : null;
+}
+
+function sessionUsageCurrency(snapshots: BundleUsageSnapshot[]): string {
+  for (const snapshot of snapshots) {
+    const currency = bundleUsageCurrency(snapshot);
+    if (currency) return currency;
+  }
+  return "CNY";
+}
+
+function sessionUsageModelCostByCallId(
+  snapshot: BundleUsageSnapshot,
+): Map<string, { costAmount?: unknown; costUsd?: unknown; currency?: unknown; reason?: unknown }> {
+  const snapshotWithCost = snapshot as BundleUsageSnapshot & {
+    cost?: { modelCosts?: unknown[] } | null;
+  };
+  const modelCosts = snapshotWithCost.cost?.modelCosts;
+  const map = new Map<string, { costAmount?: unknown; costUsd?: unknown; currency?: unknown; reason?: unknown }>();
+
+  if (!Array.isArray(modelCosts)) {
+    return map;
+  }
+
+  for (const cost of modelCosts) {
+    if (!isRecord(cost)) continue;
+    const modelCallId = cost.modelCallId;
+    if (typeof modelCallId !== "string" || !modelCallId.trim()) continue;
+    map.set(modelCallId, cost as { costAmount?: unknown; costUsd?: unknown; currency?: unknown; reason?: unknown });
+  }
+
+  return map;
+}
+
+function formatModelCallCost(
+  cost:
+    | { costAmount?: unknown; costUsd?: unknown; currency?: unknown; reason?: unknown }
+    | undefined,
+  fallbackCurrency: string,
+): string {
+  if (!cost) return "unavailable";
+
+  const amount =
+    bundleUsageDecimalValue(cost.costAmount) ||
+    bundleUsageDecimalValue(cost.costUsd);
+  if (!amount || amount <= 0) {
+    return typeof cost.reason === "string" && cost.reason
+      ? cost.reason
+      : "unavailable";
+  }
+
+  const currency =
+    typeof cost.currency === "string" && cost.currency.trim()
+      ? cost.currency.trim().toUpperCase()
+      : fallbackCurrency;
+
+  const symbol =
+    currency === "CNY" || currency === "RMB"
+      ? "¥"
+      : currency === "USD"
+        ? "$"
+        : `${currency} `;
+
+  return `${symbol}${amount.toFixed(4)}`;
+}
+
+function SessionUsageDashboard({
+  activeSessionId,
+  usageByKey,
+}: {
+  activeSessionId: string | null;
+  usageByKey: Record<string, BundleUsageSnapshot>;
+}) {
+  const [indicator, setIndicator] = useState<SessionUsageIndicatorKey>("costAmount");
+  const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
+
+  const snapshots = useMemo(
+    () => sessionUsageSnapshotsForSession(usageByKey, activeSessionId),
+    [usageByKey, activeSessionId],
+  );
+
+  useEffect(() => {
+    if (!selectedBundleId && snapshots.length > 0) {
+      setSelectedBundleId(snapshots[snapshots.length - 1]?.bundleId ?? null);
+      return;
+    }
+    if (selectedBundleId && !snapshots.some((snapshot) => snapshot.bundleId === selectedBundleId)) {
+      setSelectedBundleId(snapshots[snapshots.length - 1]?.bundleId ?? null);
+    }
+  }, [selectedBundleId, snapshots]);
+
+  const totals = useMemo(() => sessionUsageTotals(snapshots), [snapshots]);
+  const currency = sessionUsageCurrency(snapshots);
+  const costAmount = sessionUsageCostAmount(snapshots);
+  const hitRate = sessionUsageHitRateFromTotals(totals);
+  const selectedSnapshot =
+    selectedBundleId && activeSessionId
+      ? usageByKey[bundleUsageStorageKey(activeSessionId, selectedBundleId)] ?? null
+      : null;
+
+  const maxValue = Math.max(
+    0,
+    ...snapshots.map((snapshot) => bundleUsageIndicatorValue(snapshot, indicator)),
+  );
+  const chartWidth = 720;
+  const chartHeight = 180;
+  const paddingX = 32;
+  const paddingY = 22;
+  const usableWidth = chartWidth - paddingX * 2;
+  const usableHeight = chartHeight - paddingY * 2;
+  const points = snapshots.map((snapshot, index) => {
+    const x =
+      snapshots.length <= 1
+        ? chartWidth / 2
+        : paddingX + (index / (snapshots.length - 1)) * usableWidth;
+    const value = bundleUsageIndicatorValue(snapshot, indicator);
+    const y =
+      maxValue <= 0
+        ? chartHeight - paddingY
+        : chartHeight - paddingY - (value / maxValue) * usableHeight;
+    return { snapshot, value, x, y };
+  });
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
+
+  if (!activeSessionId) {
+    return <div className="debug-empty">No active session selected.</div>;
+  }
+
+  if (snapshots.length === 0) {
+    return (
+      <div className="debug-empty">
+        No usage snapshots found for this session. Run history usage backfill or complete a stream turn first.
+      </div>
+    );
+  }
+
+  return (
+    <section className="session-usage-dashboard">
+      <div className="usage-grid">
+        {[
+          ["totalInputTokens", "Total input", usageFormatValue(totals.totalInputTokens, "total_input_tokens")],
+          ["inputTokens", "Input", usageFormatValue(totals.inputTokens, "input_tokens")],
+          ["outputTokens", "Output", usageFormatValue(totals.outputTokens, "output_tokens")],
+          ["cacheReadInputTokens", "Cache hit input", usageFormatValue(totals.cacheReadInputTokens, "cache_read_input_tokens")],
+          ["cacheCreationInputTokens", "Cache create input", usageFormatValue(totals.cacheCreationInputTokens, "cache_creation_input_tokens")],
+          ["hitRate", "Hit rate", hitRate == null ? "unavailable" : `${(hitRate * 100).toFixed(2)}%`],
+          ["modelCalls", "Model calls", String(snapshots.reduce((sum, snapshot) => sum + snapshot.modelCallUsages.length, 0))],
+          [
+            "cost",
+            "Cost",
+            costAmount == null
+              ? "unavailable"
+              : formatSessionUsageIndicatorValue(costAmount, "costAmount", currency),
+          ],
+        ].map(([key, label, value]) => (
+          <div className="usage-card" key={String(key)}>
+            <span>{label}</span>
+            <strong>{String(value)}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="usage-toolbar">
+        <label>
+          <span>Indicator</span>
+          <select
+            value={indicator}
+            onChange={(event) => setIndicator(event.target.value as SessionUsageIndicatorKey)}
+          >
+            {sessionUsageIndicatorOptions.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="usage-chart-card">
+        <svg
+          className="usage-timeline-chart"
+          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+          role="img"
+          aria-label="Session usage timeline"
+        >
+          <line
+            className="usage-timeline-axis"
+            x1={paddingX}
+            y1={chartHeight - paddingY}
+            x2={chartWidth - paddingX}
+            y2={chartHeight - paddingY}
+          />
+          <line
+            className="usage-timeline-grid"
+            x1={paddingX}
+            y1={paddingY}
+            x2={chartWidth - paddingX}
+            y2={paddingY}
+          />
+          {points.length > 1 ? <polyline className="usage-timeline-line" points={polyline} /> : null}
+          {points.map((point) => {
+            const isSelected = selectedBundleId === point.snapshot.bundleId;
+            const label = formatSessionUsageIndicatorValue(point.value, indicator, currency);
+            return (
+              <g key={point.snapshot.bundleId}>
+                <circle
+                  className={`usage-timeline-point ${isSelected ? "selected" : ""}`}
+                  cx={point.x}
+                  cy={point.y}
+                  r={isSelected ? 6 : 4}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Bundle ${usageShortId(point.snapshot.bundleId)} ${label}`}
+                  onClick={() => setSelectedBundleId(point.snapshot.bundleId)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedBundleId(point.snapshot.bundleId);
+                    }
+                  }}
+                />
+                <title>
+                  {usageShortId(point.snapshot.bundleId)} · {label}
+                </title>
+              </g>
+            );
+          })}
+        </svg>
+
+        <div className="usage-note">
+          {snapshots.length} bundles · click a point to inspect bundle details
+        </div>
+      </div>
+
+      {selectedSnapshot ? (
+        <section className="usage-bundle-detail">
+          <header className="assistant-usage-mini-header">
+            <strong>Bundle detail</strong>
+            <span>{usageShortId(selectedSnapshot.bundleId)}</span>
+          </header>
+
+          <div className="usage-detail-grid">
+            {[
+              ["Bundle ID", selectedSnapshot.bundleId],
+              ["Session ID", selectedSnapshot.sessionId],
+              ["Source", selectedSnapshot.source],
+              ["Status", selectedSnapshot.status],
+              ["Started", selectedSnapshot.startedAtMs ? new Date(selectedSnapshot.startedAtMs).toLocaleString() : "—"],
+              ["Completed", selectedSnapshot.completedAtMs ? new Date(selectedSnapshot.completedAtMs).toLocaleString() : "—"],
+              ["Updated", selectedSnapshot.updatedAtMs ? new Date(selectedSnapshot.updatedAtMs).toLocaleString() : "—"],
+              ["Cost", formatBundleUsageCost(selectedSnapshot)],
+              ["Hit rate", formatBundleUsageHitRate(selectedSnapshot)],
+            ].map(([label, value]) => (
+              <div className="usage-detail-card" key={label} title={String(value)}>
+                <span>{label}</span>
+                <strong>{String(value)}</strong>
+              </div>
+            ))}
+          </div>
+
+          <div className="usage-table-wrapper">
+            <table className="usage-table">
+              <thead>
+                <tr>
+                  <th>Model call</th>
+                  <th>Model</th>
+                  <th>Stop</th>
+                  <th>Selected</th>
+                  <th>Input</th>
+                  <th>Output</th>
+                  <th>Cache hit</th>
+                  <th>Cache create</th>
+                  <th>Total input</th>
+                  <th>Hit rate</th>
+                  <th>Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedSnapshot.modelCallUsages.map((call) => {
+                  const callUsage = usageTotalsFromUsage(call.usage);
+                  const callHitRate =
+                    callUsage.totalInputTokens > 0
+                      ? callUsage.cacheReadInputTokens / callUsage.totalInputTokens
+                      : null;
+                  const modelCostByCallId = sessionUsageModelCostByCallId(selectedSnapshot);
+                  const cost = modelCostByCallId.get(call.modelCallId);
+                  return (
+                    <tr key={call.modelCallId}>
+                      <td title={call.modelCallId}>{usageShortId(call.modelCallId)}</td>
+                      <td>{call.model ?? "unknown"}</td>
+                      <td>{call.stopReason ?? "—"}</td>
+                      <td>{call.selectedReason}</td>
+                      <td>{usageFormatValue(callUsage.inputTokens, "input_tokens")}</td>
+                      <td>{usageFormatValue(callUsage.outputTokens, "output_tokens")}</td>
+                      <td>{usageFormatValue(callUsage.cacheReadInputTokens, "cache_read_input_tokens")}</td>
+                      <td>{usageFormatValue(callUsage.cacheCreationInputTokens, "cache_creation_input_tokens")}</td>
+                      <td>{usageFormatValue(callUsage.totalInputTokens, "total_input_tokens")}</td>
+                      <td>{callHitRate == null ? "unavailable" : `${(callHitRate * 100).toFixed(2)}%`}</td>
+                      <td>{formatModelCallCost(cost, currency)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : (
+        <div className="debug-empty">Select a bundle to inspect details.</div>
+      )}
+    </section>
+  );
+}
+
 export function App() {
   useEffect(() => {
 
@@ -2858,6 +3683,7 @@ export function App() {
   const [assistantDebugBundles, setAssistantDebugBundles] = useState<
     Record<string, AssistantMessageDebugBundle>
   >(() => loadAssistantDebugBundles());
+  const [streamUsageByBundleKey, setStreamUsageByBundleKey] = useState<Record<string, BundleUsageSnapshot>>({});
   const currentBundleBySessionRef = useRef<Record<string, string | null>>({});
   const [copiedDebugMessageId, setCopiedDebugMessageId] = useState<string | null>(
     null,
@@ -3298,9 +4124,31 @@ export function App() {
         currentBundleBySessionRef.current,
       );
       setSessionDebugEvents((events) => appendDebugEvent(events, debugEntry));
-      setAssistantDebugBundles((bundles) =>
-        applyRuntimeDebugEventToBundle(bundles, resolved, debugEntry),
-      );
+      setAssistantDebugBundles((bundles) => {
+        const nextBundles = applyRuntimeDebugEventToBundle(bundles, resolved, debugEntry);
+        const bundle = resolved.bundleId ? nextBundles[resolved.bundleId] : null;
+        if (bundle) {
+          const snapshot = calculateBundleUsageSnapshot(
+            bundle,
+            bundleUsageStatusFromEvent(event),
+            resolved.completesBundle ? debugEntry.receivedAt : null,
+          );
+          setStreamUsageByBundleKey((current) => ({
+            ...current,
+            [bundleUsageStorageKey(snapshot.sessionId, snapshot.bundleId)]: snapshot,
+          }));
+          if (resolved.completesBundle) {
+            void saveBundleUsageSnapshot(snapshot).catch((reason) => {
+              console.warn("[bundle-usage] failed to save stream bundle usage snapshot", {
+                sessionId: snapshot.sessionId,
+                bundleId: snapshot.bundleId,
+                reason,
+              });
+            });
+          }
+        }
+        return nextBundles;
+      });
       updateSessionStream(event.sessionId, (items) =>
         streamEventToItems(items, resolved),
       );
@@ -3535,6 +4383,23 @@ export function App() {
           return;
         }
         const artifacts = runtimeSessionToArtifacts(detail, activeProject.root);
+
+      void loadBundleUsageSnapshotsForSession(detail.id)
+        .then((snapshots) => {
+          setStreamUsageByBundleKey((current) => {
+            const next = { ...current };
+            for (const snapshot of snapshots) {
+              next[bundleUsageStorageKey(snapshot.sessionId, snapshot.bundleId)] = snapshot;
+            }
+            return next;
+          });
+        })
+        .catch((reason) => {
+          console.warn("[bundle-usage] failed to hydrate history usage snapshots", {
+            sessionId: detail.id,
+            reason,
+          });
+        });
         setAssistantDebugBundles((bundles) => ({
           ...bundles,
           ...artifacts.bundles,
@@ -4101,31 +4966,27 @@ export function App() {
       const next = !current;
       if (next) {
         void loadSessionUsageForPanel(sessionId).then(() => {
-          window.setTimeout(() => {
-            showUsageDebugAlert("global-usage-button");
-          }, 0);
-        });
+});
       }
       return next;
     });
   }
-
-  async function handleViewAssistantUsage(messageId: string) {
+function handleViewAssistantUsage(bundleId: string) {
     if (!activeSessionId) return;
-    const sessionId = activeSessionId;
+    const key = bundleUsageStorageKey(activeSessionId, bundleId);
+    if (!streamUsageByBundleKey[key]) {
+      console.warn("[bundle-usage] snapshot missing when opening assistant usage", {
+        sessionId: activeSessionId,
+        bundleId,
+      });
+    }
 
     setOpenAssistantDebugMessageId(null);
     setIsDebugOpen(false);
-    setOpenAssistantUsageMessageId(messageId);
-
-    await loadSessionUsageForPanel(sessionId);
-    window.setTimeout(() => {
-      showUsageDebugAlert("usage-button", messageId);
-    }, 0);
-  }
+    setOpenAssistantUsageMessageId(bundleId);
+}
 
   function handleViewAssistantDebug(messageId: string) {
-    showUsageDebugAlert("debug-button", messageId);
     if (assistantDebugClickTimer.current !== null) {
       window.clearTimeout(assistantDebugClickTimer.current);
     }
@@ -4825,7 +5686,7 @@ export function App() {
                 onClick={handleToggleSessionUsage}
                 disabled={!activeSessionId}
               >
-                Usage <span>{sessionUsagePayload.assistantSummaries.length}</span>
+                Usage <span>{sessionUsageSnapshotsForSession(streamUsageByBundleKey, activeSessionId).length}</span>
               </button>
             </div>
             <input
@@ -4841,12 +5702,14 @@ export function App() {
             </div>
           ) : null}
 
-          {openAssistantUsageMessageId ? (
+          {openAssistantUsageMessageId && activeSessionId ? (
             <AssistantUsageMiniOverlay
-              messageId={openAssistantUsageMessageId}
-              state={sessionUsagePayload}
-              loading={sessionUsageLoading}
-              error={sessionUsageError}
+              bundleId={openAssistantUsageMessageId}
+              snapshot={
+                streamUsageByBundleKey[
+                  bundleUsageStorageKey(activeSessionId, openAssistantUsageMessageId)
+                ] ?? null
+              }
               onClose={() => setOpenAssistantUsageMessageId(null)}
             />
           ) : null}
@@ -4870,78 +5733,10 @@ export function App() {
                 >
                   ×
                 </button>
-              {sessionUsageLoading ? (
-                <div className="debug-empty">Loading usage…</div>
-              ) : null}
-              {sessionUsageError ? (
-                <div className="debug-empty">{sessionUsageError}</div>
-              ) : null}
-              {!sessionUsageLoading && !sessionUsageError ? (
-                <>
-                  <article className="debug-event">
-                    <header>
-                      <strong>Session total</strong>
-                      <span>
-                        turns {usageFormatValue(usageCell(sessionUsagePayload.summary, "turn_count"), "turn_count")}
-                      </span>
-                    </header>
-                    <div className="usage-grid">
-                      {[
-                        ["total_input_tokens", "Total input"],
-                        ["input_tokens", "Input"],
-                        ["output_tokens", "Output"],
-                        ["cache_read_input_tokens", "Cache hit input"],
-                        ["cache_creation_input_tokens", "Cache create input"],
-                        ["input_hit_rate", "Hit rate"],
-                        ["cost_usd", "Cost"],
-                      ].map(([key, label]) => (
-                        <div className="usage-card" key={key}>
-                          <span>{label}</span>
-                          <strong>{usageFormatValue(usageCell(sessionUsagePayload.summary, key), key)}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  </article>
-
-                  <article className="debug-event">
-                    <header>
-                      <strong>Timeline</strong>
-                      <select
-                        value={sessionUsageMetricKey}
-                        onChange={(event) =>
-                          setSessionUsageMetricKey(event.target.value as UsageMetricKey)
-                        }
-                      >
-                        {usageMetricOptions.map((item) => (
-                          <option key={item.key} value={item.key}>
-                            {item.label}
-                          </option>
-                        ))}
-                      </select>
-                    </header>
-                    <UsageTimelineChart
-                      assistantSummaries={sessionUsagePayload.assistantSummaries}
-                      metricKey={sessionUsageMetricKey}
-                      selectedAssistantBundleId={selectedSessionUsageAssistantBundleId}
-                      onAssistantDoubleClick={(assistantBundleId) =>
-                        setSelectedSessionUsageAssistantBundleId(assistantBundleId)
-                      }
-                    />
-                    <div className="usage-note">
-                      {usageMetricLabel(sessionUsageMetricKey)} by assistant message
-                    </div>
-                  </article>
-
-                  <article className="debug-event">
-                    <SessionUsageAssistantMessageDetail
-                      records={sessionUsagePayload.records}
-                      assistantSummaries={sessionUsagePayload.assistantSummaries}
-                      assistantBundleId={selectedSessionUsageAssistantBundleId}
-                    />
-                  </article>
-
-                </>
-              ) : null}
+                <SessionUsageDashboard
+                  activeSessionId={activeSessionId}
+                  usageByKey={streamUsageByBundleKey}
+                />
               </section>
             </div>
           ) : null}
@@ -4964,6 +5759,10 @@ export function App() {
                     const assistantDebugBundle =
                       item.role === "assistant"
                         ? assistantDebugBundles[item.id]
+                        : null;
+                    const assistantLiveUsage =
+                      item.role === "assistant"
+                        ? streamUsageByBundleKey[bundleUsageStorageKey(activeSessionId, item.id)]
                         : null;
                     const isAssistantDebugOpen =
                       item.role === "assistant" &&
@@ -5031,7 +5830,7 @@ export function App() {
                                 onClick={() => handleViewAssistantUsage(item.id)}
                                 title="查看 Usage"
                               >
-                                <span>Usage</span>
+                                <span>{bundleUsageButtonLabel(assistantLiveUsage)}</span>
                               </button>
                               {(() => {
                                 const outputDateTime = assistantUsageOutputDateTimeFromBundle(assistantDebugBundle);

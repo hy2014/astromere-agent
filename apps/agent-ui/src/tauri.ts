@@ -236,6 +236,65 @@ export function runAgentTurn(
   return invoke("run_agent_turn", { root, sessionId, prompt });
 }
 
+export type BundleUsageTotals = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  totalInputTokens: number;
+};
+
+export type ModelCallUsageSnapshot = {
+  modelCallId: string;
+  model?: string | null;
+  stopReason?: string | null;
+  selectedReason: string;
+  usage: Record<string, unknown>;
+};
+
+export type BundleUsageCost = {
+  pricingMode?: string;
+  currency?: string;
+  unit?: string;
+  costAmount?: number | null;
+  costUsd?: number | null;
+  reason?: string | null;
+  pricedAtMs?: number;
+  modelCosts?: unknown[];
+};
+
+export type BundleUsageSnapshot = {
+  sessionId: string;
+  bundleId: string;
+  root: string;
+  source: "stream" | "history_jsonl" | string;
+  status: "streaming" | "complete" | "interrupted" | "error" | "process_exit" | "history" | string;
+  startedAtMs?: number | null;
+  completedAtMs?: number | null;
+  updatedAtMs: number;
+  modelCallIds: string[];
+  modelCallUsages: ModelCallUsageSnapshot[];
+  usage: BundleUsageTotals;
+  cost?: BundleUsageCost | null;
+};
+
+export function saveBundleUsageSnapshot(snapshot: BundleUsageSnapshot): Promise<void> {
+  return invoke("save_bundle_usage_snapshot", { snapshot });
+}
+
+export function loadBundleUsageSnapshot(
+  sessionId: string,
+  bundleId: string,
+): Promise<BundleUsageSnapshot> {
+  return invoke("load_bundle_usage_snapshot", { sessionId, bundleId });
+}
+
+export function loadBundleUsageSnapshotsForSession(
+  sessionId: string,
+): Promise<BundleUsageSnapshot[]> {
+  return invoke("load_bundle_usage_snapshots_for_session", { sessionId });
+}
+
 export type UsageRecordRow = Record<string, unknown>;
 export type UsageSummaryRow = Record<string, unknown>;
 export type UsageAssistantSummaryRow = Record<string, unknown>;
