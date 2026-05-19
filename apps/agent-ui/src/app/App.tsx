@@ -1691,7 +1691,6 @@ function assistantOutputTimestampMsFromBundle(
     return null;
   }
 
-  let sawAssistantEvent = false;
   for (const event of events) {
     if (event.eventType !== "turn_text" && event.eventType !== "assistant_tool_use") {
       continue;
@@ -1702,24 +1701,9 @@ function assistantOutputTimestampMsFromBundle(
     if (rawType !== "assistant" && payloadEventType !== "assistant") {
       continue;
     }
-    sawAssistantEvent = true;
-    const timestamp = rawJson?.timestamp;
-    if (typeof timestamp !== "string" || !timestamp.trim()) {
-      window.alert("[assistant-output-time] missing payload.raw_json.timestamp on assistant event");
-      throw new Error("[assistant-output-time] missing payload.raw_json.timestamp on assistant event");
-    }
-    const parsed = Date.parse(timestamp);
-    if (!Number.isFinite(parsed)) {
-      window.alert(`[assistant-output-time] invalid payload.raw_json.timestamp: ${timestamp}`);
-      throw new Error(`[assistant-output-time] invalid payload.raw_json.timestamp: ${timestamp}`);
-    }
-    return parsed;
+    return event.receivedAt;
   }
 
-  if (sawAssistantEvent) {
-    window.alert("[assistant-output-time] assistant event timestamp extraction failed");
-    throw new Error("[assistant-output-time] assistant event timestamp extraction failed");
-  }
   return null;
 }
 

@@ -53,6 +53,7 @@ const agentsPlatform =
 import securityReview from './commands/security-review.js'
 import bughunter from './commands/bughunter/index.js'
 import terminalSetup from './commands/terminalSetup/index.js'
+import trace from './commands/trace/index.js'
 import usage from './commands/usage/index.js'
 import theme from './commands/theme/index.js'
 import vim from './commands/vim/index.js'
@@ -310,6 +311,7 @@ const COMMANDS = memoize((): Command[] => [
   rewind,
   securityReview,
   terminalSetup,
+  trace,
   upgrade,
   extraUsage,
   extraUsageNonInteractive,
