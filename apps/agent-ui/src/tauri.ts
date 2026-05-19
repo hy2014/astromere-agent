@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AgentContextUsage,
   AgentPermissionState,
   AgentReplProcessState,
   AgentReplProcessStatus,
@@ -242,6 +243,13 @@ export function getAgentReplCapabilities(
   sessionId: string,
 ): Promise<AgentReplCapabilities> {
   return invoke("get_agent_repl_capabilities", { root, sessionId });
+}
+
+export function getAgentContextUsage(
+  root: string,
+  sessionId: string,
+): Promise<AgentContextUsage> {
+  return invoke("get_agent_context_usage", { root, sessionId });
 }
 
 export function sendAgentReplInput(

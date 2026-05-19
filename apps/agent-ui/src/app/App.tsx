@@ -12,6 +12,7 @@ import {
   ensureAgentReplProcess,
   getAgentPermissionState,
   getAgentReplCapabilities,
+  getAgentContextUsage,
   getAgentReplProcessStatus,
   killAgentReplProcess,
   interruptAgentTurn,
@@ -50,6 +51,7 @@ import type { AgentReplCapabilityItem,
   RemoteProfile } from "../runtime";
 import "./App.css";
 import type {
+  AgentContextUsage,
   AgentPermissionState,
   AgentReplStreamEvent,
   AgentTurnResponse,
@@ -3660,6 +3662,36 @@ function SessionUsageDashboard({
   );
 }
 
+
+const DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD = 256_000;
+
+function formatContextTokens(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "--";
+  }
+  if (value >= 1_000_000) {
+    const text = (value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1);
+    return `${text.replace(/\.0$/, "")}M`;
+  }
+  if (value >= 1_000) {
+    return `${Math.round(value / 1_000)}k`;
+  }
+  return String(Math.round(value));
+}
+
+function contextUsageAutoCompactEnabledLabel(usage: AgentContextUsage | null | undefined): string {
+  const value = usage?.data?.isAutoCompactEnabled;
+  return typeof value === "boolean" ? String(value) : "--";
+}
+
+function contextUsageLabel(usage: AgentContextUsage | null | undefined): string {
+  const current = usage?.data ? formatContextTokens(usage.data.totalTokens) : "--";
+  const threshold = formatContextTokens(
+    usage?.data?.autoCompactThreshold ?? DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD,
+  );
+  return `上下文：${current}/${threshold}(${contextUsageAutoCompactEnabledLabel(usage)})`;
+}
+
 export function App() {
   useEffect(() => {
 
@@ -3772,6 +3804,9 @@ export function App() {
   const [selectedChatModel, setSelectedChatModel] =
     useState<string>("deepseek-v4-flash");
 
+  const [sessionContextUsageById, setSessionContextUsageById] = useState<Record<string, AgentContextUsage>>({});
+  const [contextUsageError, setContextUsageError] = useState<string | null>(null);
+
   const [activeRemoteProfile] = useState<RemoteProfile | null>(
     () => loadActiveRemoteProfileSnapshot(),
   );
@@ -3795,6 +3830,9 @@ export function App() {
     null;
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ?? null;
+  const activeContextUsage = activeSessionId
+    ? sessionContextUsageById[activeSessionId] ?? null
+    : null;
   const streamItems = activeSessionId
     ? collapseAssistantTurns(sessionStreams[activeSessionId] ?? [])
     : [];
@@ -4113,6 +4151,24 @@ export function App() {
   }
 
 
+  async function refreshSessionContextUsage(root: string, sessionId: string) {
+    if (!root || !sessionId || isNewSessionId(sessionId)) {
+      return;
+    }
+
+    try {
+      const usage = await getAgentContextUsage(root, sessionId);
+      setContextUsageError(null);
+      setSessionContextUsageById((current) => ({
+        ...current,
+        [sessionId]: usage,
+        [usage.sessionId || sessionId]: usage,
+      }));
+    } catch (reason) {
+      setContextUsageError(String(reason));
+    }
+  }
+
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
@@ -4220,6 +4276,17 @@ export function App() {
         setAssistantDebugBundles((bundles) =>
           rekeyAssistantDebugBundles(bundles, event.sessionId, realSessionId),
         );
+        setSessionContextUsageById((current) => {
+          const existing = current[event.sessionId];
+          if (!existing || current[realSessionId]) {
+            return current;
+          }
+          const { [event.sessionId]: _oldContextUsage, ...rest } = current;
+          return {
+            ...rest,
+            [realSessionId]: { ...existing, sessionId: realSessionId },
+          };
+        });
 
         const pid =
           typeof event.payload.pid === "number" ? event.payload.pid : undefined;
@@ -4256,6 +4323,11 @@ export function App() {
       ) {
         setIsRunningTurn(false);
         clearPendingPermissionsForSession(event.sessionId);
+
+        if (event.eventType === "turn_complete") {
+          const contextSessionId = realSessionId ?? event.sessionId;
+          void refreshSessionContextUsage(event.root, contextSessionId);
+        }
       }
 
       if (event.eventType === "process_exit") {
@@ -4340,6 +4412,9 @@ export function App() {
     if (!isNewSessionId(sessionId)) {
       getAgentReplProcessStatus(project.root, sessionId)
         .then((status) => {
+          if (status.running) {
+            void refreshSessionContextUsage(project.root, status.sessionId || sessionId);
+          }
           setProjects((folders) =>
             folders.map((folder) =>
               folder.id === project.id
@@ -6498,6 +6573,13 @@ function handleViewAssistantUsage(bundleId: string) {
                     ))}
                   </select>
                 </label>
+
+                <span
+                  className="context-usage-chip"
+                  title={contextUsageError ?? activeContextUsage?.data?.model ?? "Context usage is available after the REPL has produced a response"}
+                >
+                  {contextUsageLabel(activeContextUsage)}
+                </span>
                 <div className="prompt-tools">
                   <button type="button" disabled title="Attach file">
                     upload(todo)
