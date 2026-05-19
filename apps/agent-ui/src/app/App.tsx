@@ -8,6 +8,7 @@ import { FormEvent,
   useState } from "react";
 import {
   addWorkspaceRegistryEntry,
+  createForkRuntimeSession,
   ensureAgentReplProcess,
   getAgentPermissionState,
   getAgentReplCapabilities,
@@ -1663,6 +1664,17 @@ function rawJsonFromRuntimeMessage(
   return isRecord(message.raw_json) ? message.raw_json : null;
 }
 
+function checkpointUuidFromRuntimeMessage(
+  message: RuntimeSessionDetail["messages"][number],
+): string | undefined {
+  if (typeof message.uuid === "string" && message.uuid.trim()) {
+    return message.uuid.trim();
+  }
+  const rawJson = rawJsonFromRuntimeMessage(message);
+  const uuid = rawJson?.uuid;
+  return typeof uuid === "string" && uuid.trim() ? uuid.trim() : undefined;
+}
+
 function rawJsonFromDebugEvent(event: DebugStreamEvent): Record<string, unknown> | null {
   const rawJson = event.payload.raw_json;
   if (isRecord(rawJson)) {
@@ -2250,6 +2262,7 @@ function runtimeSessionToArtifacts(
         events: DebugStreamEvent[];
         startedAt: number;
         updatedAt: number;
+        checkpointUuid?: string;
       }
     | null = null;
 
@@ -2271,6 +2284,7 @@ function runtimeSessionToArtifacts(
         progressText:
           progressText && progressText !== text ? progressText : undefined,
         status: "complete",
+        checkpointUuid: pendingAssistant.checkpointUuid,
       });
       bundles[pendingAssistant.id] = {
         messageId: pendingAssistant.id,
@@ -2313,6 +2327,7 @@ function runtimeSessionToArtifacts(
           role: "user",
           text: displayText,
           links: [],
+          checkpointUuid: checkpointUuidFromRuntimeMessage(message),
           fileReferences: fileReferenceSummaries.length > 0 ? fileReferenceSummaries : undefined,
         });
       }
@@ -2339,6 +2354,7 @@ function runtimeSessionToArtifacts(
       pendingTurnEvents = [];
 
       const modelCallId = modelCallIdFromRawJson(rawJsonFromRuntimeMessage(message));
+      const checkpointUuid = checkpointUuidFromRuntimeMessage(message);
 
       if (!pendingAssistant) {
         if (!modelCallId) {
@@ -2353,6 +2369,7 @@ function runtimeSessionToArtifacts(
           events: eventBatch,
           startedAt: eventBatch[0]?.receivedAt ?? detail.updated_at_ms + index,
           updatedAt: eventBatch.length > 0 ? eventBatch[eventBatch.length - 1].receivedAt : detail.updated_at_ms + index,
+          checkpointUuid,
         };
         continue;
       }
@@ -2361,6 +2378,9 @@ function runtimeSessionToArtifacts(
         pendingAssistant.modelCallIds,
         modelCallId,
       );
+      if (checkpointUuid) {
+        pendingAssistant.checkpointUuid = checkpointUuid;
+      }
 
       if (text) {
         pendingAssistant.progressText = mergeProgressText(
@@ -4527,6 +4547,55 @@ export function App() {
     setError(null);
   }
 
+  async function handleForkSession(project: ProjectFolder, session: ProjectSession) {
+    if (isNewSessionId(session.id)) {
+      setError("这个会话还没有真实 session 文件，不能 Fork。请先发送一条消息生成会话。");
+      return;
+    }
+
+    try {
+      setError(null);
+      setOpenSessionMenu(null);
+      const forkedSession = await createForkRuntimeSession(project.root, session.id);
+      const detail = await loadTypedRuntimeSession(project.root, forkedSession.id);
+      const artifacts = runtimeSessionToArtifacts(detail, project.root);
+
+      setProjects((currentProjects) =>
+        currentProjects.map((candidate) =>
+          candidate.id === project.id
+            ? {
+                ...candidate,
+                sessions: dedupeSessions([
+                  {
+                    id: forkedSession.id,
+                    title: forkedSession.title || `Fork · ${session.title}`,
+                    processStatus: "stopped",
+                  },
+                  ...candidate.sessions,
+                ]),
+              }
+            : candidate,
+        ),
+      );
+      setExpandedFolders((folders) => new Set(folders).add(project.id));
+      setActiveView("workspace");
+      setActiveProjectId(project.id);
+      setAssistantDebugBundles((bundles) => ({
+        ...bundles,
+        ...artifacts.bundles,
+      }));
+      setSessionStreams((streams) => ({
+        ...streams,
+        [forkedSession.id]: collapseAssistantTurns(artifacts.items),
+      }));
+      setActiveSessionId(forkedSession.id);
+      setPreviewTabs([]);
+      setActivePreviewId(null);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
   async function killSessionProcessBestEffort(root: string, sessionId: string) {
     try {
       await killAgentReplProcess(root, sessionId);
@@ -5245,8 +5314,8 @@ function handleViewAssistantUsage(bundleId: string) {
       selectedChatModel,
       permissionState?.currentMode ?? "default",
     )
-      .then(() =>
-        sendAgentReplInput(activeProject.root, targetSessionId, inputForClaude),
+      .then((state) =>
+        sendAgentReplInput(activeProject.root, state.sessionId || targetSessionId, inputForClaude),
       )
       .catch((reason) => {
         setError(String(reason));
@@ -5264,6 +5333,56 @@ function handleViewAssistantUsage(bundleId: string) {
         );
         setIsRunningTurn(false);
       });
+  }
+
+  async function handleForkFromMessage(item: Extract<StreamItem, { kind: "message" }>) {
+    if (!activeProject || !activeSessionId || item.role !== "assistant" || !item.checkpointUuid) {
+      setError("This message cannot be used as a fork checkpoint because its jsonl uuid is missing.");
+      return;
+    }
+
+    try {
+      setError(null);
+      setIsRunningTurn(true);
+      const forkedSession = await createForkRuntimeSession(
+        activeProject.root,
+        activeSessionId,
+        item.checkpointUuid,
+      );
+      const detail = await loadTypedRuntimeSession(activeProject.root, forkedSession.id);
+      const artifacts = runtimeSessionToArtifacts(detail, activeProject.root);
+
+      setProjects((folders) =>
+        folders.map((folder) =>
+          folder.id === activeProject.id
+            ? {
+                ...folder,
+                sessions: dedupeSessions([
+                  {
+                    id: forkedSession.id,
+                    title: forkedSession.title || `Fork · ${activeSessionTitle}`,
+                    processStatus: "stopped",
+                  },
+                  ...folder.sessions,
+                ]),
+              }
+            : folder,
+        ),
+      );
+      setAssistantDebugBundles((bundles) => ({
+        ...bundles,
+        ...artifacts.bundles,
+      }));
+      setSessionStreams((streams) => ({
+        ...streams,
+        [forkedSession.id]: collapseAssistantTurns(artifacts.items),
+      }));
+      setActiveSessionId(forkedSession.id);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setIsRunningTurn(false);
+    }
   }
 
   function handlePermissionDecision(approved: boolean) {
@@ -5582,6 +5701,16 @@ function handleViewAssistantUsage(bundleId: string) {
                                   role="menuitem"
                                   onClick={(event) => {
                                     event.stopPropagation();
+                                    void handleForkSession(folder, session);
+                                  }}
+                                >
+                                  Fork
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
                                     void handleHideSession(folder, session);
                                   }}
                                 >
@@ -5831,6 +5960,24 @@ function handleViewAssistantUsage(bundleId: string) {
                                 title="查看 Usage"
                               >
                                 <span>{bundleUsageButtonLabel(assistantLiveUsage)}</span>
+                              </button>
+                              <button
+                                className="message-debug-button"
+                                type="button"
+                                onClick={() => handleForkFromMessage(item)}
+                                disabled={Boolean(
+                                  !item.checkpointUuid ||
+                                  isRunningTurn ||
+                                  pendingPermission ||
+                                  isResolvingFileReferences
+                                )}
+                                title={
+                                  item.checkpointUuid
+                                    ? "点击将从此消息位置fork一个新会话"
+                                    : "这条消息缺少 jsonl uuid，不能作为 fork checkpoint"
+                                }
+                              >
+                                Fork
                               </button>
                               {(() => {
                                 const outputDateTime = assistantUsageOutputDateTimeFromBundle(assistantDebugBundle);

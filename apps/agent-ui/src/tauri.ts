@@ -145,6 +145,18 @@ export function createRuntimeSession(root: string): Promise<RuntimeSessionSummar
   return invoke("create_runtime_session", { root });
 }
 
+export function createForkRuntimeSession(
+  root: string,
+  sourceSessionId: string,
+  checkpointUuid?: string,
+): Promise<RuntimeSessionSummary> {
+  return invoke("create_fork_runtime_session", {
+    root,
+    sourceSessionId,
+    checkpointUuid,
+  });
+}
+
 export function loadRuntimeSession(root: string, reference: string): Promise<unknown> {
   return invoke("load_runtime_session", { root, reference });
 }
@@ -205,6 +217,24 @@ export function ensureAgentReplProcess(
   permissionMode?: PermissionMode,
 ): Promise<AgentReplProcessState> {
   return invoke("ensure_agent_repl_process", { root, sessionId, modelOverride, permissionMode });
+}
+
+export function forkAgentReplProcess(
+  root: string,
+  sourceSessionId: string,
+  checkpointUuid: string,
+  forkSessionId: string,
+  modelOverride?: string,
+  permissionMode?: PermissionMode,
+): Promise<AgentReplProcessState> {
+  return invoke("fork_agent_repl_process", {
+    root,
+    sourceSessionId,
+    checkpointUuid,
+    forkSessionId,
+    modelOverride,
+    permissionMode,
+  });
 }
 
 export function getAgentReplCapabilities(

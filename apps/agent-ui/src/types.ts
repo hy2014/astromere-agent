@@ -301,6 +301,8 @@ export type RuntimeSessionSummary = {
 
 export type RuntimeSessionMessage = {
   id: string;
+  uuid?: string | null;
+  parentUuid?: string | null;
   role: "user" | "assistant" | "system" | "tool";
   text: string;
   raw_json?: unknown;
@@ -337,6 +339,8 @@ export type StreamItem =
       progressText?: string;
       /** Assistant-only: whether this message is still receiving stream-json events. */
       status?: "streaming" | "complete";
+      /** Top-level jsonl uuid. Used as a safe checkpoint for fork-from-here. */
+      checkpointUuid?: string;
       /** Assistant-only: whether the intermediate process panel is open. */
       progressOpen?: boolean;
       /** User-only: local files referenced with @ and injected into the transport prompt. */
