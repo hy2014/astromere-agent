@@ -932,6 +932,17 @@ function capabilityItemsFromValue(value: any, fallbackKind: string) {
   return value.map((item) => capabilityItemFromValue(item, fallbackKind)).filter(Boolean);
 }
 
+
+function contextUsageFromControlResponse(root: string, sessionId: string, value: any) {
+  const data = value?.response?.response ?? value?.response ?? {};
+  return {
+    root,
+    sessionId,
+    data,
+    updatedAtMs: Date.now(),
+  };
+}
+
 function capabilitiesFromControlResponse(root: string, sessionId: string, value: any) {
   const capabilities = value?.response?.capabilities ?? value?.response?.response?.capabilities ?? {};
   const commands = capabilityItemsFromValue(capabilities.commands, "command");
@@ -1014,6 +1025,10 @@ function emitRawJson(root: string, sessionId: string, raw: any) {
 
 function emitParsedAgentStdout(root: string, currentSessionId: string, raw: any, line: string) {
   rememberControlResponse(raw);
+
+  if (raw?.type === "control_response") {
+    return;
+  }
 
   const nextSessionId = raw?.sessionId ?? raw?.session_id;
   if (typeof nextSessionId === "string" && nextSessionId.trim()) {
@@ -1780,6 +1795,31 @@ async function handle(request: Request): Promise<Response> {
     } catch {
       return json(fallbackCapabilities(root, proc.sessionId));
     }
+  }
+
+
+  if (url.pathname === "/agent/context-usage") {
+    const root = canonicalWorkspaceRoot(String(url.searchParams.get("root") ?? ""));
+    const sessionId = String(url.searchParams.get("sessionId") ?? "");
+    const proc = findAgentProcess(root, sessionId);
+
+    if (!proc) {
+      return error("REPL process is not running", 409);
+    }
+
+    const requestId = `agent-ui-context-${Date.now()}`;
+    controlResponses.delete(requestId);
+
+    await writeAgentLine(proc, {
+      type: "control_request",
+      request_id: requestId,
+      request: {
+        subtype: "get_context_usage",
+      },
+    });
+
+    const response = await waitForControlResponse(requestId, 5000);
+    return json(contextUsageFromControlResponse(root, proc.sessionId, response));
   }
 
   if (url.pathname === "/agent/ensure" && request.method === "POST") {

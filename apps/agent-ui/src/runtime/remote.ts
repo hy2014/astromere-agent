@@ -304,6 +304,9 @@ export function createRemoteRuntime(profile: RemoteProfile): AgentRuntime {
   runtime.getAgentReplCapabilities = async (root: string, sessionId: string) =>
     remoteJson(profile, `/agent/capabilities${query({ root, sessionId })}`);
 
+  runtime.getAgentContextUsage = async (root: string, sessionId: string) =>
+    remoteJson(profile, `/agent/context-usage${query({ root, sessionId })}`);
+
   runtime.sendAgentReplInput = async (root: string, sessionId: string, input: string) =>
     remoteJson(profile, "/agent/input", {
       method: "POST",

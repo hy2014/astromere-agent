@@ -201,6 +201,37 @@ export type AgentReplStreamEvent = {
   payload: Record<string, unknown>;
 };
 
+export type ContextUsageCategory = {
+  name: string;
+  tokens: number;
+  color?: string;
+  isDeferred?: boolean;
+};
+
+export type ContextUsageData = {
+  categories?: ContextUsageCategory[];
+  totalTokens: number;
+  maxTokens: number;
+  rawMaxTokens?: number;
+  percentage?: number;
+  model?: string;
+  autoCompactThreshold?: number;
+  isAutoCompactEnabled?: boolean;
+  apiUsage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  } | null;
+};
+
+export type AgentContextUsage = {
+  root: string;
+  sessionId: string;
+  data: ContextUsageData;
+  updatedAtMs: number;
+};
+
 export type McpToolConfig = {
   name: string;
   description?: string | null;

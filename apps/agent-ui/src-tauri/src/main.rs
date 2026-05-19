@@ -233,6 +233,15 @@ struct AgentReplCapabilities {
     updated_at_ms: u64
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AgentContextUsage {
+    root: String,
+    session_id: String,
+    data: Value,
+    updated_at_ms: u64
+}
+
 #[derive(Debug, Deserialize)]
 struct GrepRuntimeRequest {
     pattern: String,
@@ -463,6 +472,26 @@ fn capabilities_from_control_response(
         slash_commands,
         updated_at_ms: now_millis() as u64
 })
+}
+
+
+fn context_usage_from_control_response(
+    root: &str,
+    session_id: &str,
+    value: &Value,
+) -> Result<AgentContextUsage, String> {
+    let data = value
+        .pointer("/response/response")
+        .or_else(|| value.pointer("/response"))
+        .ok_or_else(|| format!("Control response did not include context usage: {value}"))?
+        .clone();
+
+    Ok(AgentContextUsage {
+        root: root.to_string(),
+        session_id: session_id.to_string(),
+        data,
+        updated_at_ms: now_millis() as u64
+    })
 }
 
 fn process_key(root: &str, session_id: &str) -> String {
@@ -2761,6 +2790,44 @@ fn get_agent_repl_capabilities(
     capabilities_from_control_response(&root, &session_id, &response)
 }
 
+
+#[tauri::command]
+fn get_agent_context_usage(
+    root: String,
+    session_id: String,
+) -> Result<AgentContextUsage, String> {
+    let request_id = format!("agent-ui-context-{}", now_millis());
+    let request = json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "get_context_usage"
+        }
+    });
+
+    {
+        let registry = control_responses();
+        let mut responses = registry.responses.lock().map_err(error_to_string)?;
+        responses.remove(&request_id);
+    }
+
+    let line = serde_json::to_string(&request).map_err(error_to_string)?;
+    let key = process_key(&root, &session_id);
+
+    {
+        let mut processes = claw_processes().lock().map_err(error_to_string)?;
+        let proc_state = processes
+            .get_mut(&key)
+            .ok_or_else(|| "REPL process is not running".to_string())?;
+
+        writeln!(proc_state.stdin, "{line}").map_err(error_to_string)?;
+        proc_state.stdin.flush().map_err(error_to_string)?;
+    }
+
+    let response = wait_for_control_response(&request_id, Duration::from_secs(5))?;
+    context_usage_from_control_response(&root, &session_id, &response)
+}
+
 #[tauri::command]
 fn run_agent_turn(
     root: String,
@@ -4044,6 +4111,7 @@ fn main() {
             ensure_agent_repl_process,
             fork_agent_repl_process,
             get_agent_repl_capabilities,
+            get_agent_context_usage,
             send_agent_repl_input,
             run_agent_turn,
                     save_bundle_usage_snapshot,
