@@ -55,6 +55,7 @@ import {
   splitSysPromptPrefix,
   toolToAPISchema,
 } from '../../utils/api.js'
+import { recordAIRequestTrace } from '../../utils/apiTrace.js'
 import { getOauthAccountInfo } from '../../utils/auth.js'
 import {
   getBedrockExtraBodyParamsBetas,
@@ -1610,12 +1611,21 @@ export async function* executeNonStreamingRequest(
       )
 
       try {
+        const requestParams = {
+          ...adjustedParams,
+          model: normalizeModelStringForAPI(adjustedParams.model),
+        }
+        recordAIRequestTrace({
+          querySource: retryOptions.querySource,
+          attempt,
+          model: clientOptions.model,
+          previousRequestId: originatingRequestId ?? undefined,
+          isStreaming: false,
+          params: requestParams,
+        })
         // biome-ignore lint/plugin: non-streaming API call
         return await anthropic.beta.messages.create(
-          {
-            ...adjustedParams,
-            model: normalizeModelStringForAPI(adjustedParams.model),
-          },
+          requestParams,
           {
             signal: retryOptions.signal,
             timeout: fallbackTimeoutMs,
@@ -2577,6 +2587,16 @@ async function* queryModel(
           getAPIProvider() === 'firstParty' && isFirstPartyAnthropicBaseUrl()
             ? randomUUID()
             : undefined
+
+        recordAIRequestTrace({
+          querySource: options.querySource,
+          attempt,
+          model: options.model,
+          clientRequestId,
+          previousRequestId,
+          isStreaming: true,
+          params: { ...params, stream: true },
+        })
 
         // Use raw stream instead of BetaMessageStream to avoid O(n²) partial JSON parsing
         // BetaMessageStream calls partialParse() on every input_json_delta, which we don't need

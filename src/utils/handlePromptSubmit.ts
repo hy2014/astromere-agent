@@ -17,6 +17,7 @@ import {
   type PromptInputMode,
   type QueuedCommand,
 } from '../types/textInputTypes.js'
+import { stopAIRequestTrace } from './apiTrace.js'
 import { createAbortController } from './abortController.js'
 import type { PastedContent } from './config.js'
 import { logForDebugging } from './debug.js'
@@ -595,6 +596,7 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
       }
     }) // end runWithWorkload — ALS context naturally scoped, no finally needed
   } finally {
+    stopAIRequestTrace()
     // Safety net: release the guard reservation if processUserInput threw
     // or onQuery was skipped. No-op if onQuery already ran (guard is idle
     // via end(), or running — cancelReservation only acts on dispatching).
