@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -276,6 +276,7 @@ struct ControlResponseRegistry {
 
 static CLAW_PROCESSES: OnceLock<Mutex<HashMap<String, ClawProcess>>> = OnceLock::new();
 static CONTROL_RESPONSES: OnceLock<ControlResponseRegistry> = OnceLock::new();
+static FORK_SESSION_COUNTER: OnceLock<Mutex<u64>> = OnceLock::new();
 
 fn claw_processes() -> &'static Mutex<HashMap<String, ClawProcess>> {
     CLAW_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -493,6 +494,69 @@ fn claude_session_file_exists(root_path: &Path, session_id: &str) -> bool {
     claude_project_sessions_dir(root_path)
         .map(|dir| dir.join(format!("{session_id}.jsonl")).is_file())
         .unwrap_or(false)
+}
+
+fn claude_session_file_path(root_path: &Path, session_id: &str) -> Result<PathBuf, String> {
+    if !is_existing_claude_session_id(session_id) {
+        return Err(format!("not a Claude session id: {session_id}"));
+    }
+
+    Ok(claude_project_sessions_dir(root_path)?.join(format!("{session_id}.jsonl")))
+}
+
+fn fill_random_bytes(bytes: &mut [u8; 16]) {
+    if let Ok(mut file) = fs::File::open("/dev/urandom") {
+        if file.read_exact(bytes).is_ok() {
+            return;
+        }
+    }
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = std::process::id() as u128;
+    let counter = {
+        let counter_cell = FORK_SESSION_COUNTER.get_or_init(|| Mutex::new(0));
+        let mut counter = counter_cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *counter = counter.wrapping_add(1);
+        *counter as u128
+    };
+
+    let mut seed = nanos ^ (pid << 64) ^ counter;
+    for byte in bytes.iter_mut() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        *byte = (seed & 0xff) as u8;
+    }
+}
+
+fn generate_session_uuid() -> String {
+    let mut bytes = [0u8; 16];
+    fill_random_bytes(&mut bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
 }
 
 fn rekey_process_session(root: &str, old_session_id: &str, new_session_id: &str) -> Option<u32> {
@@ -1886,6 +1950,127 @@ fn create_runtime_session(root: String) -> Result<RuntimeSessionSummary, String>
 }
 
 #[tauri::command]
+fn create_fork_runtime_session(
+    root: String,
+    source_session_id: String,
+    checkpoint_uuid: Option<String>,
+) -> Result<RuntimeSessionSummary, String> {
+    let root_path = canonical_workspace_root(&root)?;
+    let source_session_id = source_session_id.trim().to_string();
+    let checkpoint_uuid = checkpoint_uuid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    if source_session_id.is_empty() {
+        return Err("source_session_id is required".to_string());
+    }
+
+    let source_path_candidate = PathBuf::from(&source_session_id);
+    let source_path = if source_path_candidate.is_file() {
+        source_path_candidate.canonicalize().map_err(error_to_string)?
+    } else {
+        claude_session_file_path(&root_path, &source_session_id)?
+    };
+
+    if !source_path.is_file() {
+        return Err(format!("source session not found: {source_session_id}"));
+    }
+
+    let sessions_dir = claude_project_sessions_dir(&root_path)?;
+    fs::create_dir_all(&sessions_dir).map_err(error_to_string)?;
+
+    let mut new_session_id = generate_session_uuid();
+    let mut new_path = sessions_dir.join(format!("{new_session_id}.jsonl"));
+    for _ in 0..5 {
+        if !new_path.exists() {
+            break;
+        }
+        new_session_id = generate_session_uuid();
+        new_path = sessions_dir.join(format!("{new_session_id}.jsonl"));
+    }
+    if new_path.exists() {
+        return Err("failed to allocate a new fork session id".to_string());
+    }
+
+    let source_content = fs::read_to_string(&source_path).map_err(error_to_string)?;
+    let mut fork_lines: Vec<String> = Vec::new();
+    let mut found_checkpoint = checkpoint_uuid.is_none();
+
+    for (index, line) in source_content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let mut value = serde_json::from_str::<serde_json::Value>(line)
+            .map_err(|error| format!("invalid jsonl at line {}: {error}", index + 1))?;
+
+        let line_uuid = value
+            .get("uuid")
+            .and_then(|uuid| uuid.as_str())
+            .map(|uuid| uuid.to_string());
+
+        if let Some(object) = value.as_object_mut() {
+            object.insert("sessionId".to_string(), json!(new_session_id.clone()));
+            if object.contains_key("session_id") {
+                object.insert("session_id".to_string(), json!(new_session_id.clone()));
+            }
+        }
+
+        fork_lines.push(serde_json::to_string(&value).map_err(error_to_string)?);
+
+        if let Some(checkpoint) = checkpoint_uuid.as_deref() {
+            if line_uuid.as_deref() == Some(checkpoint) {
+                found_checkpoint = true;
+                break;
+            }
+        }
+    }
+
+    if !found_checkpoint {
+        return Err(format!(
+            "No message found with jsonl uuid of: {}",
+            checkpoint_uuid.as_deref().unwrap_or_default()
+        ));
+    }
+
+    if fork_lines.is_empty() {
+        return Err("fork session would be empty".to_string());
+    }
+
+    let fork_content = format!("{}\n", fork_lines.join("\n"));
+    fs::write(&new_path, &fork_content).map_err(error_to_string)?;
+
+    let modified_ms = fs::metadata(&new_path)
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(SystemTime::now())
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let message_count = parse_jsonl_messages(&fork_content).len();
+    let title = first_user_title_from_jsonl(&fork_content)
+        .map(|title| format!("Fork · {title}"))
+        .unwrap_or_else(|| format!("Fork · {source_session_id}"));
+
+    Ok(RuntimeSessionSummary {
+        id: new_session_id,
+        title: truncate_title(&title, 80),
+        path: new_path.to_string_lossy().to_string(),
+        updated_at_ms: modified_ms as u64,
+        modified_epoch_millis: modified_ms,
+        message_count,
+        parent_session_id: Some(source_session_id),
+        branch_name: Some(
+            checkpoint_uuid
+                .as_deref()
+                .map(|uuid| format!("fork@{}", &uuid[..uuid.len().min(8)]))
+                .unwrap_or_else(|| "fork".to_string()),
+        )
+    })
+}
+
+#[tauri::command]
 fn read_git_diff(root: String, path: Option<String>) -> Result<GitDiff, String> {
     let root_path = canonical_workspace_root(&root)?;
     let mut cmd = Command::new("git");
@@ -2228,6 +2413,226 @@ fn ensure_agent_repl_process(
         "payload": {
             "bridge": "bun-stream-json",
             "process": "spawned",
+            "pid": pid,
+            "model": model,
+            "provider": config.as_ref().map(|c| c.provider),
+            "baseUrl": config.as_ref().map(|c| c.base_url.clone()).unwrap_or_default(),
+            "apiKeyPresent": config.as_ref().map(|c| !c.api_key.trim().is_empty()).unwrap_or(false)
+        }
+    }));
+
+    emit_process_status(&app, &root, &session_id, true, Some(pid), "spawned");
+
+    {
+        let mut processes = claw_processes().lock().map_err(error_to_string)?;
+
+        processes.insert(
+            key,
+            ClawProcess {
+                root: root.clone(),
+                session_id: session_id.clone(),
+                pid,
+                stdin,
+                child
+},
+        );
+    }
+
+    Ok(AgentReplProcessState {
+        session_id,
+        root,
+        model,
+        permission_mode: permission_mode.clone()
+})
+}
+
+
+#[tauri::command]
+fn fork_agent_repl_process(
+    app: tauri::AppHandle,
+    root: String,
+    source_session_id: String,
+    checkpoint_uuid: String,
+    fork_session_id: String,
+    model_override: Option<String>,
+    permission_mode: Option<String>,
+) -> Result<AgentReplProcessState, String> {
+    let session_id = if fork_session_id.trim().is_empty() {
+        format!("pending-fork-{}", now_millis())
+    } else {
+        fork_session_id.trim().to_string()
+    };
+    let source_session_id = source_session_id.trim().to_string();
+    if source_session_id.is_empty() {
+        return Err("source_session_id is required".to_string());
+    }
+    let checkpoint_uuid = checkpoint_uuid.trim().to_string();
+    if checkpoint_uuid.is_empty() {
+        return Err("checkpoint_uuid is required".to_string());
+    }
+
+    let permission_mode =
+        normalize_permission_mode(permission_mode.as_deref().unwrap_or("default"))?.to_string();
+    let root_path = canonical_workspace_root(&root)?;
+    let repo = repo_root()?;
+    let settings = load_model_settings().unwrap_or_else(|_| default_model_settings());
+    let config = active_model_config(&settings).ok().cloned();
+
+    let model = model_override.unwrap_or_else(|| {
+        config
+            .as_ref()
+            .map(resolve_model_for_provider)
+            .unwrap_or_else(|| "default".to_string())
+    });
+
+    let key = process_key(&root, &session_id);
+
+    {
+        let mut processes = claw_processes().lock().map_err(error_to_string)?;
+
+        if let Some(proc_state) = processes.get_mut(&key) {
+            match proc_state.child.try_wait().map_err(error_to_string)? {
+                None => {
+                    let _ = app.emit(
+                        "agent-repl-event",
+                        json!({
+                            "sessionId": session_id,
+                            "root": root,
+                            "eventType": "startup",
+                            "payload": {
+                                "bridge": "bun-stream-json",
+                                "process": "reused",
+                                "fork": true,
+                                "pid": proc_state.pid,
+                                "model": model
+                            }
+                        }),
+                    );
+
+                    emit_process_status(
+                        &app,
+                        &root,
+                        &session_id,
+                        true,
+                        Some(proc_state.pid),
+                        "reused",
+                    );
+
+                    return Ok(AgentReplProcessState {
+                        session_id,
+                        root,
+                        model,
+                        permission_mode: permission_mode.clone()
+});
+                }
+                Some(status) => {
+                    let old_pid = proc_state.pid;
+                    processes.remove(&key);
+
+                    let _ = app.emit(
+                        "agent-repl-event",
+                        json!({
+                            "sessionId": session_id,
+                            "root": root,
+                            "eventType": "process_exit",
+                            "payload": {
+                                "running": false,
+                                "pid": old_pid,
+                                "status": status.to_string(),
+                                "reason": "exited_before_ensure"
+                            }
+                        }),
+                    );
+
+                    emit_process_status(
+                        &app,
+                        &root,
+                        &session_id,
+                        false,
+                        Some(old_pid),
+                        "exited_before_ensure",
+                    );
+                }
+            }
+        }
+    }
+
+    let mut cmd = Command::new("bun");
+    cmd.arg("run")
+        .arg(repo.join("src/entrypoints/cli.tsx"))
+        .arg("-p")
+        .arg("--input-format")
+        .arg("stream-json")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose")
+        .arg("--replay-user-messages")
+        .arg("--permission-mode")
+        .arg(&permission_mode)
+        .arg("--permission-prompt-tool")
+        .arg("stdio");
+
+    let resume_reference = source_session_id.trim();
+    if !(claude_session_file_exists(&root_path, resume_reference)
+        || Path::new(resume_reference).is_file())
+    {
+        return Err(format!("source session not found: {resume_reference}"));
+    }
+
+    cmd.arg("--resume")
+        .arg(resume_reference)
+        .arg("--resume-session-at")
+        .arg(&checkpoint_uuid)
+        .arg("--fork-session");
+
+    cmd.current_dir(&root_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    apply_agent_ui_env(&mut cmd, &root_path, &session_id)?;
+
+    if let Some(config) = config.as_ref() {
+        apply_model_env(&mut cmd, config);
+
+        if model != "default" {
+            cmd.arg("--model").arg(&model);
+        }
+    }
+
+    let mut child = cmd.spawn().map_err(error_to_string)?;
+    let pid = child.id();
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "failed to open child stdin".to_string())?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "failed to open child stdout".to_string())?;
+
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "failed to open child stderr".to_string())?;
+
+    let shared_session = Arc::new(Mutex::new(session_id.clone()));
+
+    spawn_repl_stdout_reader(app.clone(), shared_session.clone(), root.clone(), stdout);
+    spawn_repl_stderr_reader(app.clone(), shared_session.clone(), root.clone(), stderr);
+
+    let _ = app.emit("agent-repl-event", json!({
+        "sessionId": session_id,
+        "root": root,
+        "eventType": "startup",
+        "payload": {
+            "bridge": "bun-stream-json",
+            "process": "spawned",
+            "fork": true,
+            "sourceSessionId": source_session_id,
+            "checkpointUuid": checkpoint_uuid,
             "pid": pid,
             "model": model,
             "provider": config.as_ref().map(|c| c.provider),
@@ -3521,10 +3926,24 @@ fn parse_jsonl_messages(content: &str) -> Vec<serde_json::Value> {
                 "missing_message_id"
             };
 
+            let uuid = value
+                .get("uuid")
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| v.to_string());
+            let parent_uuid = value
+                .get("parentUuid")
+                .or_else(|| value.get("parent_uuid"))
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| v.to_string());
+
             Some(json!({
                 "id": message_id
                     .map(|id| id.to_string())
                     .unwrap_or_else(|| format!("missing-message-id-{index}")),
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
                 "role": normalized_role,
                 "text": text,
                 "event_type": event_type,
@@ -3609,6 +4028,7 @@ fn main() {
             list_runtime_sessions,
             load_runtime_session,
             create_runtime_session,
+            create_fork_runtime_session,
             read_git_diff,
             load_model_settings,
             save_model_settings,
@@ -3622,6 +4042,7 @@ fn main() {
             respond_agent_permission,
             set_agent_permission_mode,
             ensure_agent_repl_process,
+            fork_agent_repl_process,
             get_agent_repl_capabilities,
             send_agent_repl_input,
             run_agent_turn,

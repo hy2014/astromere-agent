@@ -183,6 +183,16 @@ export function createRemoteRuntime(profile: RemoteProfile): AgentRuntime {
       body: JSON.stringify({ root }),
     });
 
+  runtime.createForkRuntimeSession = async (
+    root: string,
+    sourceSessionId: string,
+    checkpointUuid?: string,
+  ) =>
+    remoteJson(profile, "/sessions/fork", {
+      method: "POST",
+      body: JSON.stringify({ root, sourceSessionId, checkpointUuid }),
+    });
+
   runtime.loadRuntimeSession = async (root: string, reference: string) =>
     remoteJson(profile, `/sessions/${encodeURIComponent(reference)}${query({ root })}`);
 
@@ -269,6 +279,26 @@ export function createRemoteRuntime(profile: RemoteProfile): AgentRuntime {
     remoteJson(profile, "/agent/ensure", {
       method: "POST",
       body: JSON.stringify({ root, sessionId, modelOverride, permissionMode }),
+    });
+
+  runtime.forkAgentReplProcess = async (
+    root: string,
+    sourceSessionId: string,
+    checkpointUuid: string,
+    forkSessionId: string,
+    modelOverride?: string,
+    permissionMode?: any,
+  ) =>
+    remoteJson(profile, "/agent/fork", {
+      method: "POST",
+      body: JSON.stringify({
+        root,
+        sourceSessionId,
+        checkpointUuid,
+        forkSessionId,
+        modelOverride,
+        permissionMode,
+      }),
     });
 
   runtime.getAgentReplCapabilities = async (root: string, sessionId: string) =>
