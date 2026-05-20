@@ -3692,6 +3692,54 @@ function contextUsageLabel(usage: AgentContextUsage | null | undefined): string 
   return `上下文：${current}/${threshold}(${contextUsageAutoCompactEnabledLabel(usage)})`;
 }
 
+function contextUsageFromBundleSnapshot(
+  snapshot: BundleUsageSnapshot,
+  previous?: AgentContextUsage | null,
+): AgentContextUsage | null {
+  const totalInput =
+    snapshot.usage.totalInputTokens ||
+    snapshot.usage.inputTokens +
+      snapshot.usage.cacheReadInputTokens +
+      snapshot.usage.cacheCreationInputTokens;
+
+  if (!totalInput || totalInput <= 0) {
+    return null;
+  }
+
+  const maxTokens =
+    previous?.data?.maxTokens ??
+    previous?.data?.rawMaxTokens ??
+    DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD;
+  const autoCompactThreshold =
+    previous?.data?.autoCompactThreshold ??
+    DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD;
+  const model =
+    previous?.data?.model ??
+    snapshot.modelCallUsages.find((item) => item.model)?.model ??
+    undefined;
+
+  return {
+    root: snapshot.root,
+    sessionId: snapshot.sessionId,
+    updatedAtMs: Date.now(),
+    data: {
+      totalTokens: totalInput,
+      maxTokens,
+      rawMaxTokens: previous?.data?.rawMaxTokens ?? maxTokens,
+      percentage: maxTokens > 0 ? totalInput / maxTokens : undefined,
+      model,
+      autoCompactThreshold,
+      isAutoCompactEnabled: previous?.data?.isAutoCompactEnabled,
+      apiUsage: {
+        input_tokens: snapshot.usage.inputTokens,
+        output_tokens: snapshot.usage.outputTokens,
+        cache_creation_input_tokens: snapshot.usage.cacheCreationInputTokens,
+        cache_read_input_tokens: snapshot.usage.cacheReadInputTokens,
+      },
+    },
+  };
+}
+
 export function App() {
   useEffect(() => {
 
@@ -4198,6 +4246,26 @@ export function App() {
             [bundleUsageStorageKey(snapshot.sessionId, snapshot.bundleId)]: snapshot,
           }));
           if (resolved.completesBundle) {
+            const contextSessionId = realSessionId ?? snapshot.sessionId;
+            const contextSnapshot =
+              contextSessionId === snapshot.sessionId
+                ? snapshot
+                : { ...snapshot, sessionId: contextSessionId };
+            setSessionContextUsageById((current) => {
+              const usage = contextUsageFromBundleSnapshot(
+                contextSnapshot,
+                current[contextSessionId] ?? current[snapshot.sessionId] ?? null,
+              );
+              if (!usage) {
+                return current;
+              }
+              return {
+                ...current,
+                [snapshot.sessionId]: usage,
+                [contextSessionId]: usage,
+              };
+            });
+            setContextUsageError(null);
             void saveBundleUsageSnapshot(snapshot).catch((reason) => {
               console.warn("[bundle-usage] failed to save stream bundle usage snapshot", {
                 sessionId: snapshot.sessionId,
@@ -4324,10 +4392,8 @@ export function App() {
         setIsRunningTurn(false);
         clearPendingPermissionsForSession(event.sessionId);
 
-        if (event.eventType === "turn_complete") {
-          const contextSessionId = realSessionId ?? event.sessionId;
-          void refreshSessionContextUsage(event.root, contextSessionId);
-        }
+        // Context usage is updated from the terminal assistant usage snapshot above.
+        // Do not call get_context_usage here: that path can trigger expensive SDK token counting.
       }
 
       if (event.eventType === "process_exit") {
