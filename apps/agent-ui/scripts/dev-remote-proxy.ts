@@ -702,6 +702,7 @@ type AgentProcessRecord = {
   proc: any;
   stdin: any;
   closed: boolean;
+  excludedSessionIds?: Set<string>;
 };
 
 type ControlWaiter = {
@@ -742,9 +743,29 @@ function isExistingClaudeSessionId(sessionId: string) {
   return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(sessionId);
 }
 
+function claudeSessionJsonlPath(root: string, sessionId: string) {
+  return join(claudeProjectSessionsDir(root), `${sessionId}.jsonl`);
+}
+
 function claudeSessionFileExists(root: string, sessionId: string) {
   if (!isExistingClaudeSessionId(sessionId)) return false;
-  return existsSync(join(claudeProjectSessionsDir(root), `${sessionId}.jsonl`));
+  return existsSync(claudeSessionJsonlPath(root, sessionId));
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForSessionJsonlCreated(root: string, sessionId: string, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  const path = claudeSessionJsonlPath(root, sessionId);
+
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return path;
+    await sleep(100);
+  }
+
+  throw new Error(`Timed out waiting for forked CLI process to create session file after ${timeoutMs / 1000}s: ${path}`);
 }
 
 function emitAgentEvent(event: any) {
@@ -1023,7 +1044,13 @@ function emitRawJson(root: string, sessionId: string, raw: any) {
   });
 }
 
-function emitParsedAgentStdout(root: string, currentSessionId: string, raw: any, line: string) {
+function emitParsedAgentStdout(
+  root: string,
+  currentSessionId: string,
+  raw: any,
+  line: string,
+  excludedSessionIds: Set<string> = new Set(),
+) {
   rememberControlResponse(raw);
 
   if (raw?.type === "control_response") {
@@ -1032,8 +1059,11 @@ function emitParsedAgentStdout(root: string, currentSessionId: string, raw: any,
 
   const nextSessionId = raw?.sessionId ?? raw?.session_id;
   if (typeof nextSessionId === "string" && nextSessionId.trim()) {
-    rekeyAgentProcess(root, currentSessionId, nextSessionId.trim());
-    currentSessionId = nextSessionId.trim();
+    const normalizedNextSessionId = nextSessionId.trim();
+    if (!excludedSessionIds.has(normalizedNextSessionId)) {
+      rekeyAgentProcess(root, currentSessionId, normalizedNextSessionId);
+      currentSessionId = normalizedNextSessionId;
+    }
   }
 
   emitRawJson(root, currentSessionId, raw);
@@ -1174,7 +1204,13 @@ function watchAgentProcess(proc: AgentProcessRecord) {
   readAgentStream(proc.proc.stdout, (line) => {
     console.log(`[agent stdout] root=${proc.root} session=${proc.sessionId} ${line}`);
     try {
-      emitParsedAgentStdout(proc.root, proc.sessionId, JSON.parse(line), line);
+      emitParsedAgentStdout(
+        proc.root,
+        proc.sessionId,
+        JSON.parse(line),
+        line,
+        proc.excludedSessionIds ?? new Set(),
+      );
     } catch {
       emitAgentEvent({
         sessionId: proc.sessionId,
@@ -1347,6 +1383,137 @@ function startAgentProcess(
   return record;
 }
 
+async function startForkAgentProcess(
+  root: string,
+  sourceSessionIdInput: string,
+  checkpointUuidInput: string,
+  modelOverride?: string,
+  permissionModeInput?: PermissionMode,
+) {
+  const rootPath = canonicalWorkspaceRoot(root);
+  const sourceSessionId = String(sourceSessionIdInput ?? "").trim();
+  const checkpointUuid = String(checkpointUuidInput ?? "").trim();
+
+  if (!sourceSessionId) {
+    throw new Error("sourceSessionId is required");
+  }
+  if (!checkpointUuid) {
+    throw new Error("checkpointUuid is required");
+  }
+
+  const sourceArgIsFile = existsSync(sourceSessionId) && statSync(sourceSessionId).isFile();
+  if (!claudeSessionFileExists(rootPath, sourceSessionId) && !sourceArgIsFile) {
+    throw new Error(`source session not found: ${sourceSessionId}`);
+  }
+
+  const settings = readModelSettings();
+  const config = activeModelConfig(settings);
+  const model = modelOverride?.trim() || (config ? resolveModelForProvider(config) : "default");
+  const permissionMode = normalizePermissionMode(permissionModeInput);
+  const forkedSessionId = crypto.randomUUID();
+  const cli = join(proxyRepoRoot(), "src", "entrypoints", "cli.tsx");
+
+  const args = [
+    "run",
+    cli,
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--replay-user-messages",
+    "--resume",
+    sourceSessionId,
+    "--resume-session-at",
+    checkpointUuid,
+    "--fork-session",
+    "-desktop-mode",
+    "--session-id",
+    forkedSessionId,
+    "--permission-mode",
+    permissionMode,
+    "--permission-prompt-tool",
+    "stdio",
+  ];
+
+  if (model !== "default") {
+    args.push("--model", model);
+  }
+
+  console.error(`[agent fork] cwd=${rootPath}`);
+  console.error(`[agent fork] sourceSessionId=${sourceSessionId} forkedSessionId=${forkedSessionId} checkpointUuid=${checkpointUuid}`);
+  console.error(`[agent fork] cmd=bun ${args.map((arg) => JSON.stringify(arg)).join(" ")}`);
+
+  const proc = Bun.spawn(["bun", ...args], {
+    cwd: rootPath,
+    env: buildAgentEnv(rootPath, forkedSessionId, config),
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const record: AgentProcessRecord = {
+    root: rootPath,
+    sessionId: forkedSessionId,
+    model,
+    permissionMode,
+    pid: proc.pid ?? null,
+    proc,
+    stdin: proc.stdin ?? null,
+    closed: false,
+    excludedSessionIds: new Set([sourceSessionId]),
+  };
+
+  agentProcesses.set(processKey(rootPath, forkedSessionId), record);
+  watchAgentProcess(record);
+
+  emitAgentEvent({
+    sessionId: forkedSessionId,
+    root: rootPath,
+    eventType: "process_status",
+    payload: {
+      running: true,
+      pid: record.pid,
+      reason: "fork_spawned",
+    },
+  });
+
+  try {
+    const jsonlPath = await waitForSessionJsonlCreated(rootPath, forkedSessionId, 30000);
+    console.error(`[agent fork] ready sessionId=${forkedSessionId} pid=${record.pid} jsonl=${jsonlPath}`);
+  } catch (err) {
+    console.error(`[agent fork] failed sessionId=${forkedSessionId} pid=${record.pid} error=${err instanceof Error ? err.message : String(err)}`);
+    await stopAgentProcess(rootPath, forkedSessionId);
+    throw err;
+  }
+
+  emitAgentEvent({
+    sessionId: forkedSessionId,
+    root: rootPath,
+    eventType: "fork_created",
+    payload: {
+      sourceSessionId,
+      checkpointUuid,
+      pid: record.pid,
+      model,
+    },
+  });
+
+  emitAgentEvent({
+    sessionId: forkedSessionId,
+    root: rootPath,
+    eventType: "process_status",
+    payload: {
+      running: true,
+      pid: record.pid,
+      reason: "forked",
+    },
+  });
+
+  return record;
+}
+
 async function stopAgentProcess(root: string, sessionId: string) {
   const resolvedSessionId = resolveSessionId(root, sessionId);
   const key = processKey(root, resolvedSessionId);
@@ -1508,6 +1675,7 @@ async function handle(request: Request): Promise<Response> {
         "mcp",
         "models",
         "agent-http-surface",
+        "agent-fork",
         "event-stream",
       ],
       dataDir,
@@ -1844,6 +2012,31 @@ async function handle(request: Request): Promise<Response> {
     const proc = startAgentProcess(
       rootPath,
       body.sessionId,
+      body.modelOverride,
+      body.permissionMode,
+    );
+
+    return json({
+      root: proc.root,
+      sessionId: proc.sessionId,
+      model: proc.model,
+      permissionMode: proc.permissionMode,
+    });
+  }
+
+  if (url.pathname === "/agent/fork" && request.method === "POST") {
+    const body = await parseJsonBody<{
+      root: string;
+      sourceSessionId: string;
+      checkpointUuid: string;
+      modelOverride?: string;
+      permissionMode?: PermissionMode;
+    }>(request);
+
+    const proc = await startForkAgentProcess(
+      body.root,
+      body.sourceSessionId,
+      body.checkpointUuid,
       body.modelOverride,
       body.permissionMode,
     );

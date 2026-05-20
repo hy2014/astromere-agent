@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -283,9 +284,89 @@ struct ControlResponseRegistry {
     condvar: Condvar
 }
 
+struct ForkSessionRegistry {
+    sessions: Mutex<HashMap<String, String>>,
+}
+
+struct SessionReadyRegistry {
+    sessions: Mutex<HashMap<String, bool>>,
+    condvar: Condvar
+}
+
+static SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 static CLAW_PROCESSES: OnceLock<Mutex<HashMap<String, ClawProcess>>> = OnceLock::new();
 static CONTROL_RESPONSES: OnceLock<ControlResponseRegistry> = OnceLock::new();
-static FORK_SESSION_COUNTER: OnceLock<Mutex<u64>> = OnceLock::new();
+static FORK_SESSIONS: OnceLock<ForkSessionRegistry> = OnceLock::new();
+static SESSION_READY: OnceLock<SessionReadyRegistry> = OnceLock::new();
+
+
+fn truncate_for_log(text: &str, max_len: usize) -> String {
+    if text.chars().count() <= max_len {
+        return text.to_string();
+    }
+
+    let truncated: String = text.chars().take(max_len).collect();
+    format!("{}…<truncated>", truncated)
+}
+
+fn value_summary_for_log(value: &Value) -> String {
+    let event_type = value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    let request_id = control_response_request_id(value)
+        .or_else(|| value.get("request_id").and_then(|v| v.as_str()).map(|v| v.to_string()))
+        .unwrap_or_else(|| "<none>".to_string());
+    let session_id = stream_value_session_id(value).unwrap_or_else(|| "<none>".to_string());
+    let subtype = value
+        .get("request")
+        .and_then(|request| request.get("subtype"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("subtype"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("<none>");
+    let raw = serde_json::to_string(value).unwrap_or_else(|_| "<unserializable json>".to_string());
+
+    format!(
+        "type={} request_id={} session_id={} subtype={} raw={}",
+        event_type,
+        request_id,
+        session_id,
+        subtype,
+        truncate_for_log(&raw, 1600)
+    )
+}
+
+fn fork_debug(message: impl AsRef<str>) {
+    eprintln!("[agent-ui][fork] {}", message.as_ref());
+}
+
+fn generate_agent_ui_session_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let counter = SESSION_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id() as u64;
+
+    let high = (nanos as u64) ^ counter.rotate_left(17) ^ (pid << 32);
+    let low = ((nanos >> 64) as u64) ^ counter.rotate_left(31) ^ 0xa5a5_5a5a_d3c3_b4b4u64;
+
+    let part1 = (high >> 32) as u32;
+    let part2 = ((high >> 16) & 0xffff) as u16;
+    let part3 = (0x4000 | (high & 0x0fff)) as u16;
+    let part4 = (0x8000 | ((low >> 48) & 0x3fff)) as u16;
+    let part5 = low & 0x0000_ffff_ffff_ffff;
+
+    format!(
+        "{part1:08x}-{part2:04x}-{part3:04x}-{part4:04x}-{part5:012x}"
+    )
+}
 
 fn claw_processes() -> &'static Mutex<HashMap<String, ClawProcess>> {
     CLAW_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -296,6 +377,176 @@ fn control_responses() -> &'static ControlResponseRegistry {
         responses: Mutex::new(HashMap::new()),
         condvar: Condvar::new()
 })
+}
+
+fn fork_sessions() -> &'static ForkSessionRegistry {
+    FORK_SESSIONS.get_or_init(|| ForkSessionRegistry {
+        sessions: Mutex::new(HashMap::new())
+})
+}
+
+fn session_ready_registry() -> &'static SessionReadyRegistry {
+    SESSION_READY.get_or_init(|| SessionReadyRegistry {
+        sessions: Mutex::new(HashMap::new()),
+        condvar: Condvar::new()
+})
+}
+
+fn session_ready_key(root: &str, session_id: &str) -> String {
+    format!("{}::{}", root, session_id)
+}
+
+fn clear_session_ready(root: &str, session_id: &str) {
+    let registry = session_ready_registry();
+    if let Ok(mut sessions) = registry.sessions.lock() {
+        sessions.remove(&session_ready_key(root, session_id));
+    }
+}
+
+fn mark_session_ready(root: &str, session_id: &str) {
+    if session_id.trim().is_empty() {
+        return;
+    }
+
+    let registry = session_ready_registry();
+    if let Ok(mut sessions) = registry.sessions.lock() {
+        sessions.insert(session_ready_key(root, session_id), true);
+        registry.condvar.notify_all();
+    }
+}
+
+fn wait_for_session_ready(root: &str, session_id: &str, timeout: Duration) -> Result<(), String> {
+    let registry = session_ready_registry();
+    let key = session_ready_key(root, session_id);
+    let deadline = Instant::now() + timeout;
+    let mut sessions = registry.sessions.lock().map_err(error_to_string)?;
+
+    loop {
+        if sessions.get(&key).copied().unwrap_or(false) {
+            return Ok(());
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(format!(
+                "Timed out waiting for forked CLI process to report session id after {}s",
+                timeout.as_secs()
+            ));
+        }
+
+        let wait_for = deadline.saturating_duration_since(now).min(Duration::from_millis(250));
+        let (next_sessions, wait_result) = registry
+            .condvar
+            .wait_timeout(sessions, wait_for)
+            .map_err(error_to_string)?;
+        sessions = next_sessions;
+
+        if wait_result.timed_out() && Instant::now() >= deadline {
+            return Err(format!(
+                "Timed out waiting for forked CLI process to report session id after {}s",
+                timeout.as_secs()
+            ));
+        }
+    }
+}
+
+fn wait_for_session_jsonl_created(
+    root: &str,
+    root_path: &Path,
+    session_id: &str,
+    timeout: Duration,
+) -> Result<PathBuf, String> {
+    let path = claude_session_file_path(root_path, session_id)?;
+    let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let mut next_progress_log = started + Duration::from_secs(2);
+
+    loop {
+        if let Ok(metadata) = fs::metadata(&path) {
+            if metadata.is_file() && metadata.len() > 0 {
+                fork_debug(format!(
+                    "fork JSONL ready; session_id={} path={} bytes={} elapsed_ms={}",
+                    session_id,
+                    path.display(),
+                    metadata.len(),
+                    started.elapsed().as_millis()
+                ));
+                mark_session_ready(root, session_id);
+                return Ok(path);
+            }
+        }
+
+        {
+            let mut processes = claw_processes().lock().map_err(error_to_string)?;
+            let key = process_key(root, session_id);
+            let Some(proc_state) = processes.get_mut(&key) else {
+                return Err(format!(
+                    "Forked CLI process disappeared before creating session file: {session_id}"
+                ));
+            };
+
+            if let Some(status) = proc_state.child.try_wait().map_err(error_to_string)? {
+                return Err(format!(
+                    "Forked CLI process exited before creating session file {session_id}: {status}"
+                ));
+            }
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(format!(
+                "Timed out waiting for forked CLI process to create session file after {}s: {}",
+                timeout.as_secs(),
+                path.display()
+            ));
+        }
+
+        if now >= next_progress_log {
+            fork_debug(format!(
+                "waiting for fork JSONL; session_id={} path={} elapsed_ms={}",
+                session_id,
+                path.display(),
+                started.elapsed().as_millis()
+            ));
+            next_progress_log += Duration::from_secs(2);
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn fork_session_wait_key(root: &str, source_session_id: &str) -> String {
+    format!("{}::{}", root, source_session_id)
+}
+
+fn clear_fork_session_hint(root: &str, source_session_id: &str) {
+    if let Ok(mut sessions) = fork_sessions().sessions.lock() {
+        sessions.remove(&fork_session_wait_key(root, source_session_id));
+    }
+}
+
+fn remember_fork_session_hint(root: &str, source_session_id: &str, forked_session_id: &str) {
+    if source_session_id.trim().is_empty()
+        || forked_session_id.trim().is_empty()
+        || source_session_id == forked_session_id
+    {
+        return;
+    }
+
+    if let Ok(mut sessions) = fork_sessions().sessions.lock() {
+        sessions.insert(
+            fork_session_wait_key(root, source_session_id),
+            forked_session_id.to_string(),
+        );
+    }
+}
+
+fn take_fork_session_hint(root: &str, source_session_id: &str) -> Option<String> {
+    fork_sessions()
+        .sessions
+        .lock()
+        .ok()
+        .and_then(|mut sessions| sessions.remove(&fork_session_wait_key(root, source_session_id)))
 }
 
 fn control_response_request_id(value: &Value) -> Option<String> {
@@ -325,13 +576,26 @@ fn remember_control_response(value: &Value) {
     }
 
     let Some(request_id) = control_response_request_id(value) else {
+        fork_debug(format!(
+            "saw control_response without request_id; {}",
+            value_summary_for_log(value)
+        ));
         return;
     };
 
+    fork_debug(format!(
+        "saw control_response; request_id={} {}",
+        request_id,
+        value_summary_for_log(value)
+    ));
+
     let registry = control_responses();
     if let Ok(mut responses) = registry.responses.lock() {
-        responses.insert(request_id, value.clone());
+        responses.insert(request_id.clone(), value.clone());
         registry.condvar.notify_all();
+        fork_debug(format!("stored control_response; request_id={}", request_id));
+    } else {
+        fork_debug(format!("failed to lock control_response registry; request_id={}", request_id));
     }
 }
 
@@ -533,61 +797,6 @@ fn claude_session_file_path(root_path: &Path, session_id: &str) -> Result<PathBu
     Ok(claude_project_sessions_dir(root_path)?.join(format!("{session_id}.jsonl")))
 }
 
-fn fill_random_bytes(bytes: &mut [u8; 16]) {
-    if let Ok(mut file) = fs::File::open("/dev/urandom") {
-        if file.read_exact(bytes).is_ok() {
-            return;
-        }
-    }
-
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let pid = std::process::id() as u128;
-    let counter = {
-        let counter_cell = FORK_SESSION_COUNTER.get_or_init(|| Mutex::new(0));
-        let mut counter = counter_cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        *counter = counter.wrapping_add(1);
-        *counter as u128
-    };
-
-    let mut seed = nanos ^ (pid << 64) ^ counter;
-    for byte in bytes.iter_mut() {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        *byte = (seed & 0xff) as u8;
-    }
-}
-
-fn generate_session_uuid() -> String {
-    let mut bytes = [0u8; 16];
-    fill_random_bytes(&mut bytes);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15]
-    )
-}
-
 fn rekey_process_session(root: &str, old_session_id: &str, new_session_id: &str) -> Option<u32> {
     if old_session_id == new_session_id || new_session_id.trim().is_empty() {
         return None;
@@ -614,7 +823,69 @@ fn rekey_process_session(root: &str, old_session_id: &str, new_session_id: &str)
 
 fn remove_process_session(root: &str, session_id: &str) {
     if let Ok(mut processes) = claw_processes().lock() {
-        processes.remove(&process_key(root, session_id));
+        let key = process_key(root, session_id);
+        if let Some(mut process) = processes.remove(&key) {
+            match process.child.try_wait() {
+                Ok(Some(status)) => fork_debug(format!(
+                    "process removed after child exit; root={} session_id={} stored_session_id={} pid={} status={} code={:?} success={}",
+                    root,
+                    session_id,
+                    process.session_id,
+                    process.pid,
+                    status,
+                    status.code(),
+                    status.success()
+                )),
+                Ok(None) => fork_debug(format!(
+                    "process removed while child still running; root={} session_id={} stored_session_id={} pid={}",
+                    root,
+                    session_id,
+                    process.session_id,
+                    process.pid
+                )),
+                Err(error) => fork_debug(format!(
+                    "process removed but child exit status check failed; root={} session_id={} stored_session_id={} pid={} error={}",
+                    root,
+                    session_id,
+                    process.session_id,
+                    process.pid,
+                    error
+                )),
+            }
+        } else {
+            fork_debug(format!(
+                "process remove requested but no process entry found; root={} session_id={}",
+                root,
+                session_id
+            ));
+        }
+    } else {
+        fork_debug(format!(
+            "process remove requested but process map lock failed; root={} session_id={}",
+            root,
+            session_id
+        ));
+    }
+}
+
+fn poll_fork_wait_child_exit(
+    root: &str,
+    session_id: &str,
+) -> Option<Result<(u32, String, std::process::ExitStatus), String>> {
+    let key = process_key(root, session_id);
+    let mut processes = match claw_processes().lock() {
+        Ok(processes) => processes,
+        Err(error) => return Some(Err(error_to_string(error))),
+    };
+
+    let Some(process) = processes.get_mut(&key) else {
+        return None;
+    };
+
+    match process.child.try_wait() {
+        Ok(Some(status)) => Some(Ok((process.pid, process.session_id.clone(), status))),
+        Ok(None) => None,
+        Err(error) => Some(Err(error_to_string(error))),
     }
 }
 
@@ -628,6 +899,223 @@ fn shared_session_id(shared: &Arc<Mutex<String>>) -> String {
 fn set_shared_session_id(shared: &Arc<Mutex<String>>, session_id: &str) {
     if let Ok(mut current) = shared.lock() {
         *current = session_id.to_string();
+    }
+}
+
+fn stream_value_session_id(value: &Value) -> Option<String> {
+    value
+        .get("session_id")
+        .or_else(|| value.get("sessionId"))
+        .and_then(|session_id| session_id.as_str())
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+        .map(str::to_string)
+}
+
+fn find_string_field_deep(value: &Value, keys: &[&str]) -> Option<String> {
+    if let Some(object) = value.as_object() {
+        for key in keys {
+            if let Some(candidate) = object
+                .get(*key)
+                .and_then(|candidate| candidate.as_str())
+                .map(str::trim)
+                .filter(|candidate| !candidate.is_empty())
+            {
+                return Some(candidate.to_string());
+            }
+        }
+
+        for child in object.values() {
+            if let Some(candidate) = find_string_field_deep(child, keys) {
+                return Some(candidate);
+            }
+        }
+    } else if let Some(array) = value.as_array() {
+        for child in array {
+            if let Some(candidate) = find_string_field_deep(child, keys) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+fn is_allowed_forked_session_id(candidate: &str, excluded_session_ids: &[String]) -> bool {
+    let candidate = candidate.trim();
+    !candidate.is_empty()
+        && excluded_session_ids
+            .iter()
+            .all(|excluded| excluded.trim() != candidate)
+}
+
+fn fork_session_id_from_control_response(value: &Value, excluded_session_ids: &[String]) -> Option<String> {
+    find_string_field_deep(
+        value,
+        &[
+            "forked_session_id",
+            "forkedSessionId",
+            "new_session_id",
+            "newSessionId",
+        ],
+    )
+    .filter(|session_id| is_allowed_forked_session_id(session_id, excluded_session_ids))
+    .or_else(|| {
+        find_string_field_deep(value, &["session_id", "sessionId"])
+            .filter(|session_id| is_allowed_forked_session_id(session_id, excluded_session_ids))
+    })
+}
+
+fn take_control_response(request_id: &str) -> Result<Option<Value>, String> {
+    let registry = control_responses();
+    let mut responses = registry.responses.lock().map_err(error_to_string)?;
+    Ok(responses.remove(request_id))
+}
+
+fn wait_for_fork_session_id(
+    request_id: &str,
+    root: &str,
+    source_session_id: &str,
+    excluded_session_ids: &[String],
+    timeout: Duration,
+) -> Result<(String, Option<Value>), String> {
+    let started = Instant::now();
+    let deadline = started + timeout;
+    let mut next_progress_log = started + Duration::from_secs(2);
+
+    fork_debug(format!(
+        "wait started; request_id={} source_session_id={} excluded_session_ids={:?} timeout_s={}",
+        request_id,
+        source_session_id,
+        excluded_session_ids,
+        timeout.as_secs()
+    ));
+
+    loop {
+        if let Some(forked_session_id) = take_fork_session_hint(root, source_session_id) {
+            if is_allowed_forked_session_id(&forked_session_id, excluded_session_ids) {
+                fork_debug(format!(
+                    "wait resolved from stream session hint; request_id={} source_session_id={} forked_session_id={} elapsed_ms={}",
+                    request_id,
+                    source_session_id,
+                    forked_session_id,
+                    started.elapsed().as_millis()
+                ));
+                return Ok((forked_session_id, None));
+            }
+
+            fork_debug(format!(
+                "wait ignored stream session hint; request_id={} source_session_id={} candidate_session_id={} excluded_session_ids={:?} elapsed_ms={}",
+                request_id,
+                source_session_id,
+                forked_session_id,
+                excluded_session_ids,
+                started.elapsed().as_millis()
+            ));
+        }
+
+        if let Some(response) = take_control_response(request_id)? {
+            fork_debug(format!(
+                "wait saw matching control_response; request_id={} {}",
+                request_id,
+                value_summary_for_log(&response)
+            ));
+
+            if let Some(forked_session_id) =
+                fork_session_id_from_control_response(&response, excluded_session_ids)
+            {
+                fork_debug(format!(
+                    "wait resolved from control_response; request_id={} source_session_id={} forked_session_id={} elapsed_ms={}",
+                    request_id,
+                    source_session_id,
+                    forked_session_id,
+                    started.elapsed().as_millis()
+                ));
+                return Ok((forked_session_id, Some(response)));
+            }
+
+            if response
+                .get("error")
+                .or_else(|| response.get("message"))
+                .is_some()
+            {
+                let message = format!(
+                    "CLI fork response did not include a new session id: {}",
+                    response
+                );
+                fork_debug(format!(
+                    "wait failed from error control_response; request_id={} elapsed_ms={} error={}",
+                    request_id,
+                    started.elapsed().as_millis(),
+                    message
+                ));
+                return Err(message);
+            }
+
+            fork_debug(format!(
+                "matching control_response had no forked session id and no error; request_id={} elapsed_ms={}",
+                request_id,
+                started.elapsed().as_millis()
+            ));
+        }
+
+        if let Some(exit_result) = poll_fork_wait_child_exit(root, source_session_id) {
+            match exit_result {
+                Ok((pid, stored_session_id, status)) => {
+                    let message = format!(
+                        "fork CLI child exited before reporting a forked session id; request_id={} source_session_id={} stored_session_id={} pid={} status={} code={:?} success={} elapsed_ms={}",
+                        request_id,
+                        source_session_id,
+                        stored_session_id,
+                        pid,
+                        status,
+                        status.code(),
+                        status.success(),
+                        started.elapsed().as_millis()
+                    );
+                    fork_debug(&message);
+                    return Err(message);
+                }
+                Err(error) => {
+                    let message = format!(
+                        "fork CLI child exit-status check failed while waiting for forked session id; request_id={} source_session_id={} error={} elapsed_ms={}",
+                        request_id,
+                        source_session_id,
+                        error,
+                        started.elapsed().as_millis()
+                    );
+                    fork_debug(&message);
+                    return Err(message);
+                }
+            }
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            let message = format!(
+                "Timed out waiting for forked session id from host CLI process after {}s",
+                timeout.as_secs()
+            );
+            fork_debug(format!(
+                "wait timed out; request_id={} source_session_id={} elapsed_ms={}",
+                request_id,
+                source_session_id,
+                started.elapsed().as_millis()
+            ));
+            return Err(message);
+        }
+
+        if now >= next_progress_log {
+            fork_debug(format!(
+                "still waiting; request_id={} source_session_id={} elapsed_ms={}",
+                request_id,
+                source_session_id,
+                started.elapsed().as_millis()
+            ));
+            next_progress_log += Duration::from_secs(2);
+        }
+
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -1979,127 +2467,6 @@ fn create_runtime_session(root: String) -> Result<RuntimeSessionSummary, String>
 }
 
 #[tauri::command]
-fn create_fork_runtime_session(
-    root: String,
-    source_session_id: String,
-    checkpoint_uuid: Option<String>,
-) -> Result<RuntimeSessionSummary, String> {
-    let root_path = canonical_workspace_root(&root)?;
-    let source_session_id = source_session_id.trim().to_string();
-    let checkpoint_uuid = checkpoint_uuid
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-
-    if source_session_id.is_empty() {
-        return Err("source_session_id is required".to_string());
-    }
-
-    let source_path_candidate = PathBuf::from(&source_session_id);
-    let source_path = if source_path_candidate.is_file() {
-        source_path_candidate.canonicalize().map_err(error_to_string)?
-    } else {
-        claude_session_file_path(&root_path, &source_session_id)?
-    };
-
-    if !source_path.is_file() {
-        return Err(format!("source session not found: {source_session_id}"));
-    }
-
-    let sessions_dir = claude_project_sessions_dir(&root_path)?;
-    fs::create_dir_all(&sessions_dir).map_err(error_to_string)?;
-
-    let mut new_session_id = generate_session_uuid();
-    let mut new_path = sessions_dir.join(format!("{new_session_id}.jsonl"));
-    for _ in 0..5 {
-        if !new_path.exists() {
-            break;
-        }
-        new_session_id = generate_session_uuid();
-        new_path = sessions_dir.join(format!("{new_session_id}.jsonl"));
-    }
-    if new_path.exists() {
-        return Err("failed to allocate a new fork session id".to_string());
-    }
-
-    let source_content = fs::read_to_string(&source_path).map_err(error_to_string)?;
-    let mut fork_lines: Vec<String> = Vec::new();
-    let mut found_checkpoint = checkpoint_uuid.is_none();
-
-    for (index, line) in source_content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let mut value = serde_json::from_str::<serde_json::Value>(line)
-            .map_err(|error| format!("invalid jsonl at line {}: {error}", index + 1))?;
-
-        let line_uuid = value
-            .get("uuid")
-            .and_then(|uuid| uuid.as_str())
-            .map(|uuid| uuid.to_string());
-
-        if let Some(object) = value.as_object_mut() {
-            object.insert("sessionId".to_string(), json!(new_session_id.clone()));
-            if object.contains_key("session_id") {
-                object.insert("session_id".to_string(), json!(new_session_id.clone()));
-            }
-        }
-
-        fork_lines.push(serde_json::to_string(&value).map_err(error_to_string)?);
-
-        if let Some(checkpoint) = checkpoint_uuid.as_deref() {
-            if line_uuid.as_deref() == Some(checkpoint) {
-                found_checkpoint = true;
-                break;
-            }
-        }
-    }
-
-    if !found_checkpoint {
-        return Err(format!(
-            "No message found with jsonl uuid of: {}",
-            checkpoint_uuid.as_deref().unwrap_or_default()
-        ));
-    }
-
-    if fork_lines.is_empty() {
-        return Err("fork session would be empty".to_string());
-    }
-
-    let fork_content = format!("{}\n", fork_lines.join("\n"));
-    fs::write(&new_path, &fork_content).map_err(error_to_string)?;
-
-    let modified_ms = fs::metadata(&new_path)
-        .and_then(|metadata| metadata.modified())
-        .unwrap_or(SystemTime::now())
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let message_count = parse_jsonl_messages(&fork_content).len();
-    let title = first_user_title_from_jsonl(&fork_content)
-        .map(|title| format!("Fork · {title}"))
-        .unwrap_or_else(|| format!("Fork · {source_session_id}"));
-
-    Ok(RuntimeSessionSummary {
-        id: new_session_id,
-        title: truncate_title(&title, 80),
-        path: new_path.to_string_lossy().to_string(),
-        updated_at_ms: modified_ms as u64,
-        modified_epoch_millis: modified_ms,
-        message_count,
-        parent_session_id: Some(source_session_id),
-        branch_name: Some(
-            checkpoint_uuid
-                .as_deref()
-                .map(|uuid| format!("fork@{}", &uuid[..uuid.len().min(8)]))
-                .unwrap_or_else(|| "fork".to_string()),
-        )
-    })
-}
-
-#[tauri::command]
 fn read_git_diff(root: String, path: Option<String>) -> Result<GitDiff, String> {
     let root_path = canonical_workspace_root(&root)?;
     let mut cmd = Command::new("git");
@@ -2432,7 +2799,7 @@ fn ensure_agent_repl_process(
 
     let shared_session = Arc::new(Mutex::new(session_id.clone()));
 
-    spawn_repl_stdout_reader(app.clone(), shared_session.clone(), root.clone(), stdout);
+    spawn_repl_stdout_reader(app.clone(), shared_session.clone(), root.clone(), stdout, Vec::new());
     spawn_repl_stderr_reader(app.clone(), shared_session.clone(), root.clone(), stderr);
 
     let _ = app.emit("agent-repl-event", json!({
@@ -2476,21 +2843,16 @@ fn ensure_agent_repl_process(
 }
 
 
+
 #[tauri::command]
 fn fork_agent_repl_process(
     app: tauri::AppHandle,
     root: String,
     source_session_id: String,
     checkpoint_uuid: String,
-    fork_session_id: String,
     model_override: Option<String>,
     permission_mode: Option<String>,
 ) -> Result<AgentReplProcessState, String> {
-    let session_id = if fork_session_id.trim().is_empty() {
-        format!("pending-fork-{}", now_millis())
-    } else {
-        fork_session_id.trim().to_string()
-    };
     let source_session_id = source_session_id.trim().to_string();
     if source_session_id.is_empty() {
         return Err("source_session_id is required".to_string());
@@ -2503,7 +2865,6 @@ fn fork_agent_repl_process(
     let permission_mode =
         normalize_permission_mode(permission_mode.as_deref().unwrap_or("default"))?.to_string();
     let root_path = canonical_workspace_root(&root)?;
-    let repo = repo_root()?;
     let settings = load_model_settings().unwrap_or_else(|_| default_model_settings());
     let config = active_model_config(&settings).ok().cloned();
 
@@ -2514,78 +2875,36 @@ fn fork_agent_repl_process(
             .unwrap_or_else(|| "default".to_string())
     });
 
-    let key = process_key(&root, &session_id);
+    let source_jsonl_exists = claude_session_file_exists(&root_path, &source_session_id);
+    let source_arg_is_file = Path::new(&source_session_id).is_file();
+    fork_debug(format!(
+        "command received; root={} canonical_root={} source_session_id={} checkpoint_uuid={} source_jsonl_exists={} source_arg_is_file={} model={} permission_mode={}",
+        root,
+        root_path.display(),
+        source_session_id,
+        checkpoint_uuid,
+        source_jsonl_exists,
+        source_arg_is_file,
+        model,
+        permission_mode
+    ));
 
-    {
-        let mut processes = claw_processes().lock().map_err(error_to_string)?;
-
-        if let Some(proc_state) = processes.get_mut(&key) {
-            match proc_state.child.try_wait().map_err(error_to_string)? {
-                None => {
-                    let _ = app.emit(
-                        "agent-repl-event",
-                        json!({
-                            "sessionId": session_id,
-                            "root": root,
-                            "eventType": "startup",
-                            "payload": {
-                                "bridge": "bun-stream-json",
-                                "process": "reused",
-                                "fork": true,
-                                "pid": proc_state.pid,
-                                "model": model
-                            }
-                        }),
-                    );
-
-                    emit_process_status(
-                        &app,
-                        &root,
-                        &session_id,
-                        true,
-                        Some(proc_state.pid),
-                        "reused",
-                    );
-
-                    return Ok(AgentReplProcessState {
-                        session_id,
-                        root,
-                        model,
-                        permission_mode: permission_mode.clone()
-});
-                }
-                Some(status) => {
-                    let old_pid = proc_state.pid;
-                    processes.remove(&key);
-
-                    let _ = app.emit(
-                        "agent-repl-event",
-                        json!({
-                            "sessionId": session_id,
-                            "root": root,
-                            "eventType": "process_exit",
-                            "payload": {
-                                "running": false,
-                                "pid": old_pid,
-                                "status": status.to_string(),
-                                "reason": "exited_before_ensure"
-                            }
-                        }),
-                    );
-
-                    emit_process_status(
-                        &app,
-                        &root,
-                        &session_id,
-                        false,
-                        Some(old_pid),
-                        "exited_before_ensure",
-                    );
-                }
-            }
-        }
+    if !(source_jsonl_exists || source_arg_is_file) {
+        fork_debug(format!(
+            "source session missing before fork; source_session_id={} root={}",
+            source_session_id,
+            root_path.display()
+        ));
+        return Err(format!("source session not found: {source_session_id}"));
     }
 
+    // Same contract as normal session creation:
+    // agent-ui owns the target session id; fork only changes the CLI startup args.
+    let forked_session_id = generate_agent_ui_session_id();
+    clear_session_ready(&root, &forked_session_id);
+    clear_fork_session_hint(&root, &forked_session_id);
+
+    let repo = repo_root()?;
     let mut cmd = Command::new("bun");
     cmd.arg("run")
         .arg(repo.join("src/entrypoints/cli.tsx"))
@@ -2596,30 +2915,25 @@ fn fork_agent_repl_process(
         .arg("stream-json")
         .arg("--verbose")
         .arg("--replay-user-messages")
+        .arg("--resume")
+        .arg(&source_session_id)
+        .arg("--resume-session-at")
+        .arg(&checkpoint_uuid)
+        .arg("--fork-session")
+        .arg("-desktop-mode")
+        .arg("--session-id")
+        .arg(&forked_session_id)
         .arg("--permission-mode")
         .arg(&permission_mode)
         .arg("--permission-prompt-tool")
         .arg("stdio");
-
-    let resume_reference = source_session_id.trim();
-    if !(claude_session_file_exists(&root_path, resume_reference)
-        || Path::new(resume_reference).is_file())
-    {
-        return Err(format!("source session not found: {resume_reference}"));
-    }
-
-    cmd.arg("--resume")
-        .arg(resume_reference)
-        .arg("--resume-session-at")
-        .arg(&checkpoint_uuid)
-        .arg("--fork-session");
 
     cmd.current_dir(&root_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    apply_agent_ui_env(&mut cmd, &root_path, &session_id)?;
+    apply_agent_ui_env(&mut cmd, &root_path, &forked_session_id)?;
 
     if let Some(config) = config.as_ref() {
         apply_model_env(&mut cmd, config);
@@ -2629,66 +2943,156 @@ fn fork_agent_repl_process(
         }
     }
 
+    fork_debug(format!(
+        "spawning native CLI fork; source_session_id={} forked_session_id={} checkpoint_uuid={} mode=pregenerated_session_id",
+        source_session_id,
+        forked_session_id,
+        checkpoint_uuid
+    ));
+
     let mut child = cmd.spawn().map_err(error_to_string)?;
     let pid = child.id();
+
+    fork_debug(format!(
+        "spawned native CLI fork process; source_session_id={} forked_session_id={} pid={} cwd={} checkpoint_uuid={}",
+        source_session_id,
+        forked_session_id,
+        pid,
+        root_path.display(),
+        checkpoint_uuid
+    ));
 
     let stdin = child
         .stdin
         .take()
-        .ok_or_else(|| "failed to open child stdin".to_string())?;
+        .ok_or_else(|| "failed to open fork child stdin".to_string())?;
 
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "failed to open child stdout".to_string())?;
+        .ok_or_else(|| "failed to open fork child stdout".to_string())?;
 
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| "failed to open child stderr".to_string())?;
+        .ok_or_else(|| "failed to open fork child stderr".to_string())?;
 
-    let shared_session = Arc::new(Mutex::new(session_id.clone()));
-
-    spawn_repl_stdout_reader(app.clone(), shared_session.clone(), root.clone(), stdout);
-    spawn_repl_stderr_reader(app.clone(), shared_session.clone(), root.clone(), stderr);
-
-    let _ = app.emit("agent-repl-event", json!({
-        "sessionId": session_id,
-        "root": root,
-        "eventType": "startup",
-        "payload": {
-            "bridge": "bun-stream-json",
-            "process": "spawned",
-            "fork": true,
-            "sourceSessionId": source_session_id,
-            "checkpointUuid": checkpoint_uuid,
-            "pid": pid,
-            "model": model,
-            "provider": config.as_ref().map(|c| c.provider),
-            "baseUrl": config.as_ref().map(|c| c.base_url.clone()).unwrap_or_default(),
-            "apiKeyPresent": config.as_ref().map(|c| !c.api_key.trim().is_empty()).unwrap_or(false)
-        }
-    }));
-
-    emit_process_status(&app, &root, &session_id, true, Some(pid), "spawned");
-
+    let fork_key = process_key(&root, &forked_session_id);
     {
         let mut processes = claw_processes().lock().map_err(error_to_string)?;
-
         processes.insert(
-            key,
+            fork_key,
             ClawProcess {
                 root: root.clone(),
-                session_id: session_id.clone(),
+                session_id: forked_session_id.clone(),
                 pid,
                 stdin,
-                child
-},
+                child,
+            },
         );
     }
 
+    let shared_session = Arc::new(Mutex::new(forked_session_id.clone()));
+    spawn_repl_stdout_reader(app.clone(), shared_session.clone(), root.clone(), stdout, Vec::new());
+    spawn_repl_stderr_reader(app.clone(), shared_session.clone(), root.clone(), stderr);
+
+    let forked_jsonl_path = match wait_for_session_jsonl_created(
+        &root,
+        &root_path,
+        &forked_session_id,
+        Duration::from_secs(30),
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            fork_debug(format!(
+                "native CLI fork did not create JSONL; source_session_id={} forked_session_id={} pid={} error={}",
+                source_session_id,
+                forked_session_id,
+                pid,
+                error
+            ));
+            if let Ok(mut processes) = claw_processes().lock() {
+                if let Some(mut proc_state) = processes.remove(&process_key(&root, &forked_session_id)) {
+                    match proc_state.child.try_wait() {
+                        Ok(Some(status)) => {
+                            fork_debug(format!(
+                                "fork child already exited before cleanup; forked_session_id={} pid={} status={} code={:?} success={}",
+                                forked_session_id,
+                                pid,
+                                status,
+                                status.code(),
+                                status.success()
+                            ));
+                        }
+                        Ok(None) => {
+                            fork_debug(format!(
+                                "fork child still running after JSONL wait timeout; killing; forked_session_id={} pid={}",
+                                forked_session_id,
+                                pid
+                            ));
+                            let _ = proc_state.child.kill();
+                            match proc_state.child.wait() {
+                                Ok(status) => fork_debug(format!(
+                                    "fork child exited after kill; forked_session_id={} pid={} status={} code={:?} success={}",
+                                    forked_session_id,
+                                    pid,
+                                    status,
+                                    status.code(),
+                                    status.success()
+                                )),
+                                Err(wait_error) => fork_debug(format!(
+                                    "fork child wait after kill failed; forked_session_id={} pid={} error={}",
+                                    forked_session_id,
+                                    pid,
+                                    wait_error
+                                )),
+                            }
+                        }
+                        Err(wait_error) => {
+                            fork_debug(format!(
+                                "fork child try_wait failed during cleanup; forked_session_id={} pid={} error={}",
+                                forked_session_id,
+                                pid,
+                                wait_error
+                            ));
+                            let _ = proc_state.child.kill();
+                            let _ = proc_state.child.wait();
+                        }
+                    }
+                }
+            }
+            emit_process_status(&app, &root, &forked_session_id, false, Some(pid), "fork_start_timeout");
+            return Err(error);
+        }
+    };
+
+    fork_debug(format!(
+        "native CLI fork ready; source_session_id={} forked_session_id={} pid={} jsonl_path={}",
+        source_session_id,
+        forked_session_id,
+        pid,
+        forked_jsonl_path.display()
+    ));
+
+    let _ = app.emit(
+        "agent-repl-event",
+        json!({
+            "sessionId": forked_session_id.clone(),
+            "root": root.clone(),
+            "eventType": "fork_created",
+            "payload": {
+                "sourceSessionId": source_session_id.clone(),
+                "checkpointUuid": checkpoint_uuid.clone(),
+                "pid": pid,
+                "model": model.clone(),
+            }
+        }),
+    );
+
+    emit_process_status(&app, &root, &forked_session_id, true, Some(pid), "forked");
+
     Ok(AgentReplProcessState {
-        session_id,
+        session_id: forked_session_id,
         root,
         model,
         permission_mode: permission_mode.clone()
@@ -2913,6 +3317,7 @@ fn spawn_repl_stdout_reader(
     shared_session: Arc<Mutex<String>>,
     root: String,
     stdout: ChildStdout,
+    ignored_rekey_session_ids: Vec<String>,
 ) {
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
@@ -2922,10 +3327,15 @@ fn spawn_repl_stdout_reader(
         let mut saw_text = false;
 
         for line in reader.lines() {
-            let event_session_id = shared_session_id(&shared_session);
+            let mut event_session_id = shared_session_id(&shared_session);
             let line = match line {
                 Ok(line) => line,
                 Err(error) => {
+                    fork_debug(format!(
+                        "stdout reader error; session_id={} error={}",
+                        event_session_id,
+                        error
+                    ));
                     let _ = app.emit(
                         "agent-repl-event",
                         json!({
@@ -2947,7 +3357,13 @@ fn spawn_repl_stdout_reader(
 
             let value: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(value) => value,
-                Err(_) => {
+                Err(error) => {
+                    fork_debug(format!(
+                        "stdout non-json line; session_id={} error={} line={}",
+                        event_session_id,
+                        error,
+                        truncate_for_log(&line, 1600)
+                    ));
                     let _ = app.emit(
                         "agent-repl-event",
                         json!({
@@ -2963,7 +3379,77 @@ fn spawn_repl_stdout_reader(
                 }
             };
 
+            let parsed_event_type = value
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<missing>")
+                .to_string();
+            let parsed_session_id = stream_value_session_id(&value);
+            if parsed_event_type == "control_response"
+                || parsed_event_type == "control_request"
+                || parsed_session_id
+                    .as_deref()
+                    .map(|session_id| session_id != event_session_id)
+                    .unwrap_or(false)
+            {
+                fork_debug(format!(
+                    "stdout event; current_session_id={} {}",
+                    event_session_id,
+                    value_summary_for_log(&value)
+                ));
+            }
+
             remember_control_response(&value);
+
+            if let Some(real_session_id) = parsed_session_id.as_deref() {
+                if real_session_id != event_session_id
+                    && ignored_rekey_session_ids
+                        .iter()
+                        .any(|ignored| ignored.trim() == real_session_id)
+                {
+                    fork_debug(format!(
+                        "stdout ignored session id change because candidate is excluded; current_session_id={} ignored_session_id={} ignored_rekey_session_ids={:?}",
+                        event_session_id,
+                        real_session_id,
+                        ignored_rekey_session_ids
+                    ));
+                    continue;
+                }
+            }
+
+            if let Some(real_session_id) = parsed_session_id {
+                mark_session_ready(&root, &real_session_id);
+                if real_session_id != event_session_id {
+                    fork_debug(format!(
+                        "stdout session id changed; previous_session_id={} real_session_id={}",
+                        event_session_id,
+                        real_session_id
+                    ));
+                    remember_fork_session_hint(&root, &event_session_id, &real_session_id);
+                    let process_pid = if event_session_id.trim().is_empty() {
+                        None
+                    } else {
+                        rekey_process_session(&root, &event_session_id, &real_session_id)
+                    };
+                    set_shared_session_id(&shared_session, &real_session_id);
+                    event_session_id = real_session_id.clone();
+                    fork_debug(format!(
+                        "stdout rekey result; real_session_id={} process_pid={:?}",
+                        real_session_id,
+                        process_pid
+                    ));
+                    if process_pid.is_some() {
+                        emit_process_status(
+                            &app,
+                            &root,
+                            &real_session_id,
+                            true,
+                            process_pid,
+                            "rekeyed",
+                        );
+                    }
+                }
+            }
 
             let _ = app.emit(
                 "agent-repl-event",
@@ -3065,14 +3551,11 @@ fn spawn_repl_stdout_reader(
                         .unwrap_or("")
                         .to_string();
 
-                    let real_session_id = value
-                        .get("session_id")
-                        .and_then(|v| v.as_str())
-                        .filter(|value| !value.trim().is_empty())
-                        .map(|value| value.to_string());
+                    let real_session_id = stream_value_session_id(&value);
 
                     let mut process_pid = None;
                     if let Some(real_session_id) = real_session_id.as_deref() {
+                        mark_session_ready(&root, real_session_id);
                         if real_session_id != event_session_id {
                             process_pid =
                                 rekey_process_session(&root, &event_session_id, real_session_id);
@@ -3230,6 +3713,11 @@ fn spawn_repl_stdout_reader(
         }
 
         let final_session_id = shared_session_id(&shared_session);
+        fork_debug(format!(
+            "stdout reader ended; final_session_id={} root={}",
+            final_session_id,
+            root
+        ));
         remove_process_session(&root, &final_session_id);
         let _ = app.emit(
             "agent-repl-event",
@@ -3260,6 +3748,11 @@ fn spawn_repl_stderr_reader(
                 continue;
             }
             let event_session_id = shared_session_id(&shared_session);
+            fork_debug(format!(
+                "stderr line; session_id={} line={}",
+                event_session_id,
+                truncate_for_log(&line, 1600)
+            ));
             let _ = app.emit(
                 "agent-repl-event",
                 json!({
@@ -3272,6 +3765,12 @@ fn spawn_repl_stderr_reader(
                 }),
             );
         }
+        let final_session_id = shared_session_id(&shared_session);
+        fork_debug(format!(
+            "stderr reader ended; final_session_id={} root={}",
+            final_session_id,
+            root
+        ));
     });
 }
 
@@ -4095,7 +4594,6 @@ fn main() {
             list_runtime_sessions,
             load_runtime_session,
             create_runtime_session,
-            create_fork_runtime_session,
             read_git_diff,
             load_model_settings,
             save_model_settings,

@@ -209,6 +209,8 @@ import {
   doesMessageExistInSession,
   findUnresolvedToolUse,
   recordAttributionSnapshot,
+  recordContentReplacement,
+  recordTranscript,
   saveAgentSetting,
   saveMode,
   saveAiGeneratedTitle,
@@ -482,6 +484,7 @@ export async function runHeadless(
     replayUserMessages: boolean | undefined
     includePartialMessages: boolean | undefined
     forkSession: boolean | undefined
+    desktopMode: boolean | undefined
     rewindFiles: string | undefined
     enableAuthStatus: boolean | undefined
     agent: string | undefined
@@ -689,6 +692,7 @@ export async function runHeadless(
     resume: options.resume,
     resumeSessionAt: options.resumeSessionAt,
     forkSession: options.forkSession,
+    desktopMode: options.desktopMode,
     outputFormat: options.outputFormat,
     sessionStartHooksPromise: options.sessionStartHooksPromise,
     restoredWorkerState: structuredIO.restoredWorkerState,
@@ -4970,6 +4974,7 @@ async function loadInitialMessages(
     resume: string | boolean | undefined
     resumeSessionAt: string | undefined
     forkSession: boolean | undefined
+    desktopMode: boolean | undefined
     outputFormat: string | undefined
     sessionStartHooksPromise?: ReturnType<typeof processSessionStartHooks>
     restoredWorkerState: Promise<SessionExternalMetadata | null>
@@ -5034,6 +5039,13 @@ async function loadInitialMessages(
             ? { ...result, worktreeSession: undefined }
             : result,
         )
+
+        if (options.desktopMode && options.forkSession && persistSession) {
+          if (result.contentReplacements?.length) {
+            await recordContentReplacement(result.contentReplacements)
+          }
+          await recordTranscript(result.messages)
+        }
 
         // Write mode entry for the resumed session
         if (feature('COORDINATOR_MODE') && coordinatorModeModule) {
@@ -5234,6 +5246,13 @@ async function loadInitialMessages(
           ? { ...result, worktreeSession: undefined }
           : result,
       )
+
+      if (options.desktopMode && options.forkSession && persistSession) {
+        if (result.contentReplacements?.length) {
+          await recordContentReplacement(result.contentReplacements)
+        }
+        await recordTranscript(result.messages)
+      }
 
       // Write mode entry for the resumed session
       if (feature('COORDINATOR_MODE') && coordinatorModeModule) {
