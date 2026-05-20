@@ -5942,3 +5942,21 @@ button.message-file-reference-chip:hover,
   border: 0;
   background: #ffffff;
 }
+
+.message-fork-spinner {
+  width: 0.8em;
+  height: 0.8em;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  display: inline-block;
+  margin-right: 0.35rem;
+  vertical-align: -0.1em;
+  animation: message-fork-spin 0.7s linear infinite;
+}
+
+@keyframes message-fork-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

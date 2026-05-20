@@ -27,9 +27,6 @@ import type {
   WorkspaceState,
   WorkspaceRegistry,
   SqliteDatabaseInfo,
-  SqliteExecuteResult,
-  SqliteQueryRow,
-  SqliteValue,
 } from "./types";
 
 export type AgentReplCapabilityItem = {
@@ -146,18 +143,6 @@ export function createRuntimeSession(root: string): Promise<RuntimeSessionSummar
   return invoke("create_runtime_session", { root });
 }
 
-export function createForkRuntimeSession(
-  root: string,
-  sourceSessionId: string,
-  checkpointUuid?: string,
-): Promise<RuntimeSessionSummary> {
-  return invoke("create_fork_runtime_session", {
-    root,
-    sourceSessionId,
-    checkpointUuid,
-  });
-}
-
 export function loadRuntimeSession(root: string, reference: string): Promise<unknown> {
   return invoke("load_runtime_session", { root, reference });
 }
@@ -224,7 +209,6 @@ export function forkAgentReplProcess(
   root: string,
   sourceSessionId: string,
   checkpointUuid: string,
-  forkSessionId: string,
   modelOverride?: string,
   permissionMode?: PermissionMode,
 ): Promise<AgentReplProcessState> {
@@ -232,7 +216,6 @@ export function forkAgentReplProcess(
     root,
     sourceSessionId,
     checkpointUuid,
-    forkSessionId,
     modelOverride,
     permissionMode,
   });
@@ -333,30 +316,3 @@ export function loadBundleUsageSnapshotsForSession(
   return invoke("load_bundle_usage_snapshots_for_session", { sessionId });
 }
 
-export type UsageRecordRow = Record<string, unknown>;
-export type UsageSummaryRow = Record<string, unknown>;
-export type UsageAssistantSummaryRow = Record<string, unknown>;
-export type UsageDaySplitRow = Record<string, unknown>;
-export type UsageReadSource = "disabled" | string;
-
-export function loadUsageReadSource(): Promise<UsageReadSource> {
-  return Promise.resolve("disabled");
-}
-
-export function loadUsageRecords(_sessionId: string): Promise<UsageRecordRow[]> {
-  return Promise.resolve([]);
-}
-
-export function loadUsageAssistantSummaries(
-  _sessionId: string,
-): Promise<UsageAssistantSummaryRow[]> {
-  return Promise.resolve([]);
-}
-
-export function loadUsageSessionSummary(_sessionId: string): Promise<UsageSummaryRow[]> {
-  return Promise.resolve([]);
-}
-
-export function loadUsageDaySplits(_sessionId: string): Promise<UsageDaySplitRow[]> {
-  return Promise.resolve([]);
-}

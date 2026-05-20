@@ -8,8 +8,8 @@ import { FormEvent,
   useState } from "react";
 import {
   addWorkspaceRegistryEntry,
-  createForkRuntimeSession,
   ensureAgentReplProcess,
+  forkAgentReplProcess,
   getAgentPermissionState,
   getAgentReplCapabilities,
   getAgentContextUsage,
@@ -42,7 +42,6 @@ import {
   getActiveRemoteProfileId,
   loadRemoteProfiles,
   setActiveRemoteProfileId,
-  testRemoteHealth,
   upsertRemoteProfile,
   useLocalRuntime,
   useRemoteRuntime,
@@ -54,7 +53,6 @@ import type {
   AgentContextUsage,
   AgentPermissionState,
   AgentReplStreamEvent,
-  AgentTurnResponse,
   FileView,
   GitDiff,
   LocalFileReferenceSummary,
@@ -71,12 +69,6 @@ import type {
   WorkspaceFileReference,
   } from "../types";
 import {
-  loadUsageRecords,
-  loadUsageAssistantSummaries,
-  loadUsageSessionSummary,
-  type UsageRecordRow,
-  type UsageAssistantSummaryRow,
-  type UsageSummaryRow,
   sqliteDatabaseInfo,
   saveBundleUsageSnapshot,
   loadBundleUsageSnapshotsForSession,
@@ -353,9 +345,6 @@ function loadHiddenSessions(): HiddenSession[] {
   }
 }
 
-function loadAssistantDebugBundles(): Record<string, AssistantMessageDebugBundle> {
-  return {};
-}
 function uniqueHiddenSessions(sessions: HiddenSession[]): HiddenSession[] {
   const seen = new Set<string>();
   const unique: HiddenSession[] = [];
@@ -600,6 +589,156 @@ function addUsageTotals(left: BundleUsageTotals, right: BundleUsageTotals): Bund
   };
 }
 
+type BundleUsageModelCost = {
+  modelCallId: string;
+  model?: string | null;
+  currency: string;
+  costAmount?: number | null;
+  costUsd?: number | null;
+  reason?: string | null;
+  cacheHitInputTokens: number;
+  cacheMissInputTokens: number;
+  outputTokens: number;
+  cacheHitInputCost?: number | null;
+  cacheMissInputCost?: number | null;
+  outputCost?: number | null;
+};
+
+function activeDeepSeekPricingModelName(
+  settings: ModelSettings | null | undefined,
+): string | null {
+  const activeModel = settings?.models.find((model) => model.id === settings.activeModelId);
+  const configured = activeModel?.model || activeModel?.supportModels?.[0] || null;
+  return configured && configured.trim() ? configured.trim() : null;
+}
+
+function deepSeekPricingItemsForModel(
+  settings: ModelSettings | null | undefined,
+  model: string | null | undefined,
+): Map<string, number> | null {
+  const pricing = settings?.deepseekPricing;
+  if (!pricing || !Array.isArray(pricing.models)) {
+    return null;
+  }
+
+  const normalizedModel = (model || "").trim().toLowerCase();
+  const configuredModel = (activeDeepSeekPricingModelName(settings) || "").trim().toLowerCase();
+  const match =
+    pricing.models.find((candidate) => candidate.model.toLowerCase() === normalizedModel) ??
+    pricing.models.find((candidate) => candidate.model.toLowerCase() === configuredModel) ??
+    null;
+
+  if (!match) {
+    return null;
+  }
+
+  return new Map(
+    match.items
+      .filter((item) => Number.isFinite(item.pricePerMTokens))
+      .map((item) => [item.item, item.pricePerMTokens]),
+  );
+}
+
+function calculateBundleUsageCostFromDeepSeekPricing(
+  modelCallUsages: ModelCallUsageSnapshot[],
+  settings: ModelSettings | null | undefined,
+): BundleUsageSnapshot["cost"] {
+  const activeModel = settings?.models.find((model) => model.id === settings.activeModelId);
+  if (!settings?.deepseekPricing || (activeModel?.provider && activeModel.provider !== "deepseek")) {
+    return null;
+  }
+
+  const currency = settings.deepseekPricing.currency || "CNY";
+  const unit = settings.deepseekPricing.unit || "CNY_PER_1M_TOKENS";
+  const modelCosts: BundleUsageModelCost[] = [];
+  let totalCostAmount = 0;
+  let pricedCallCount = 0;
+
+  for (const call of modelCallUsages) {
+    const totals = usageTotalsFromUsage(call.usage);
+    const prices = deepSeekPricingItemsForModel(settings, call.model);
+    const cacheHitPrice = prices?.get("cache_hit_input");
+    const cacheMissPrice = prices?.get("cache_miss_input");
+    const outputPrice = prices?.get("output");
+
+    const cacheHitInputTokens = totals.cacheReadInputTokens;
+    const cacheMissInputTokens = totals.inputTokens + totals.cacheCreationInputTokens;
+    const outputTokens = totals.outputTokens;
+
+    if (
+      typeof cacheHitPrice !== "number" ||
+      !Number.isFinite(cacheHitPrice) ||
+      typeof cacheMissPrice !== "number" ||
+      !Number.isFinite(cacheMissPrice) ||
+      typeof outputPrice !== "number" ||
+      !Number.isFinite(outputPrice)
+    ) {
+      modelCosts.push({
+        modelCallId: call.modelCallId,
+        model: call.model,
+        currency,
+        costAmount: null,
+        costUsd: null,
+        reason: call.model ? `pricing_missing_for_${call.model}` : "pricing_missing_for_unknown_model",
+        cacheHitInputTokens,
+        cacheMissInputTokens,
+        outputTokens,
+      });
+      continue;
+    }
+
+    const cacheHitInputCost = (cacheHitInputTokens * cacheHitPrice) / 1_000_000;
+    const cacheMissInputCost = (cacheMissInputTokens * cacheMissPrice) / 1_000_000;
+    const outputCost = (outputTokens * outputPrice) / 1_000_000;
+    const costAmount = cacheHitInputCost + cacheMissInputCost + outputCost;
+
+    totalCostAmount += costAmount;
+    pricedCallCount += 1;
+    modelCosts.push({
+      modelCallId: call.modelCallId,
+      model: call.model,
+      currency,
+      costAmount,
+      costUsd: null,
+      reason: null,
+      cacheHitInputTokens,
+      cacheMissInputTokens,
+      outputTokens,
+      cacheHitInputCost,
+      cacheMissInputCost,
+      outputCost,
+    });
+  }
+
+  if (modelCallUsages.length === 0) {
+    return null;
+  }
+
+  if (pricedCallCount === 0) {
+    return {
+      pricingMode: "deepseek_pricing",
+      currency,
+      unit,
+      costAmount: null,
+      costUsd: null,
+      reason: modelCosts[0]?.reason ?? "pricing_unavailable",
+      pricedAtMs: Date.now(),
+      modelCosts,
+    };
+  }
+
+  return {
+    pricingMode: "deepseek_pricing",
+    currency,
+    unit,
+    costAmount: totalCostAmount,
+    costUsd: null,
+    reason: null,
+    pricedAtMs: Date.now(),
+    modelCosts,
+  };
+}
+
 function usageCompletenessScore(usage: Record<string, unknown>): number {
   let numericKeyCount = 0;
   for (const value of Object.values(usage)) {
@@ -686,6 +825,7 @@ function calculateBundleUsageSnapshot(
   bundle: AssistantMessageDebugBundle,
   status: BundleUsageSnapshot["status"],
   completedAtMs?: number | null,
+  modelSettings?: ModelSettings | null,
 ): BundleUsageSnapshot {
   const grouped = new Map<string, ModelCallUsageCandidate[]>();
 
@@ -740,6 +880,7 @@ function calculateBundleUsageSnapshot(
     modelCallIds: orderedModelCallIds,
     modelCallUsages,
     usage: totals,
+    cost: calculateBundleUsageCostFromDeepSeekPricing(modelCallUsages, modelSettings),
   };
 }
 
@@ -866,7 +1007,6 @@ function formatBundleUsageHitRate(snapshot: BundleUsageSnapshot | null | undefin
   const hitRate = bundleUsageHitRate(snapshot);
   return hitRate == null ? "unavailable" : `${(hitRate * 100).toFixed(2)}%`;
 }
-
 
 
 function isAssistantBundleStartEvent(event: AgentReplStreamEvent): boolean {
@@ -1181,7 +1321,6 @@ function rekeyAssistantStreamItem(
 }
 
 
-
 function rekeyAssistantDebugBundles(
   current: Record<string, AssistantMessageDebugBundle>,
   oldSessionId: string,
@@ -1218,6 +1357,27 @@ async function copyTextToClipboard(text: string): Promise<void> {
   textarea.select();
   document.execCommand("copy");
   document.body.removeChild(textarea);
+}
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function loadTypedRuntimeSessionWithRetry(
+  root: string,
+  reference: string,
+  attempts = 12,
+): Promise<RuntimeSessionDetail> {
+  let lastError: unknown = null;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      return await loadTypedRuntimeSession(root, reference);
+    } catch (reason) {
+      lastError = reason;
+      await waitMs(150);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function detectFileMention(value: string, cursor: number): FileMentionState {
@@ -1417,9 +1577,6 @@ type LocalFileReferenceBuildResult = {
   fileReferences: LocalFileReferenceSummary[];
 };
 
-function isImageReferencePath(path: string): boolean {
-  return /\.(png|jpe?g|gif|webp|svg)$/i.test(path.trim());
-}
 
 function isCsvFilePath(path?: string | null, language?: string | null): boolean {
   const normalizedPath = (path ?? "").trim().toLowerCase();
@@ -1725,7 +1882,6 @@ function assistantUsageButtonTitle(
   const outputDateTime = assistantUsageOutputDateTimeFromBundle(bundle);
   return outputDateTime ? `输出时间 ${outputDateTime}` : "查看 Usage";
 }
-
 
 
 function jsonContainsTypedBlock(value: unknown, expectedType: string): boolean {
@@ -2398,173 +2554,6 @@ function runtimeSessionToArtifacts(
   return { items, bundles };
 }
 
-function runtimeSessionToStream(detail: RuntimeSessionDetail): StreamItem[] {
-  return runtimeSessionToArtifacts(detail, detail.workspace_root ?? "").items;
-}
-
-function consumeLeadingStructuredOutput(
-  text: string,
-  baseId: string,
-): { items: StreamItem[]; rest: string } {
-  const items: StreamItem[] = [];
-  let rest = text.trim();
-  const patterns: Array<{
-    subtype: Extract<StreamItem, { kind: "system" }>["subtype"];
-    title: string;
-    regex: RegExp;
-  }> = [
-    {
-      subtype: "session_switch",
-      title: "Session switched",
-      regex: /^Session switched\n(?:  .+\n?){3}/,
-    },
-    {
-      subtype: "session_clear",
-      title: "Session cleared",
-      regex: /^Session cleared\n(?:  .+\n?){5,6}/,
-    },
-    {
-      subtype: "permissions",
-      title: "Permissions updated",
-      regex: /^Permissions updated\n(?:  .+\n?){4}/,
-    },
-    {
-      subtype: "model",
-      title: "Model updated",
-      regex: /^Model updated\n(?:  .+\n?){4}/,
-    },
-    {
-      subtype: "cost",
-      title: "Cost",
-      regex: /^Cost\n(?:  .+\n?){5}/,
-    },
-    {
-      subtype: "compact_notice",
-      title: "Context compacted",
-      regex: /^\[auto-compacted: removed \d+ messages\]/,
-    },
-  ];
-
-  let matched = true;
-  while (matched) {
-    matched = false;
-    for (const pattern of patterns) {
-      const match = rest.match(pattern.regex);
-      if (!match) {
-        continue;
-      }
-      const detail = match[0].trim();
-      items.push({
-        id: `${baseId}:system:${items.length}`,
-        kind: "system",
-        subtype: pattern.subtype,
-        title: pattern.title,
-        detail,
-      });
-      rest = rest.slice(match[0].length).trimStart();
-      matched = true;
-      break;
-    }
-  }
-
-  return { items, rest };
-}
-
-function extractArtifactItems(text: string, baseId: string): StreamItem[] {
-  const items: StreamItem[] = [];
-
-  const diffMatch = text.match(/(?:^|\n)(diff --git[\s\S]+)$/);
-  if (diffMatch) {
-    items.push({
-      id: `${baseId}:artifact:diff`,
-      kind: "artifact",
-      title: "Diff",
-      artifactKind: "diff",
-      preview: diffMatch[1].trim(),
-    });
-  }
-
-  const tableMatch = text.match(
-    /((?:^\|.+\|\n)+^\|?(?:\s*:?-+:?\s*\|)+\s*$[\s\S]*?)(?:\n\n|$)/m,
-  );
-  if (tableMatch) {
-    items.push({
-      id: `${baseId}:artifact:table`,
-      kind: "artifact",
-      title: "Table",
-      artifactKind: "table",
-      preview: tableMatch[1].trim(),
-    });
-  }
-
-  const links = extractPreviewLinks(text);
-  for (const [index, link] of links.entries()) {
-    items.push({
-      id: `${baseId}:artifact:link:${index}`,
-      kind: "artifact",
-      title: link.label,
-      artifactKind: "link",
-      preview: link.path,
-      path: link.path,
-    });
-  }
-
-  return items;
-}
-
-function formatAgentMetadata(response: AgentTurnResponse): string {
-  const chunks = [];
-  if (response.model) {
-    chunks.push(`model ${response.model}`);
-  }
-  if (typeof response.iterations === "number") {
-    chunks.push(`${response.iterations} iterations`);
-  }
-  if (response.usage) {
-    const input = response.usage.input_tokens ?? 0;
-    const output = response.usage.output_tokens ?? 0;
-    chunks.push(`${input} input / ${output} output tokens`);
-  }
-  if (response.estimated_cost) {
-    chunks.push(response.estimated_cost);
-  }
-  return chunks.join(" · ");
-}
-
-function responseToStreamItems(
-  response: AgentTurnResponse,
-  baseId: string,
-): StreamItem[] {
-  const metadata = formatAgentMetadata(response);
-  const { items: systemItems, rest } = consumeLeadingStructuredOutput(
-    response.message,
-    baseId,
-  );
-  const content = rest.trim();
-  const links = extractPreviewLinks(content);
-  const artifactItems = extractArtifactItems(content, baseId);
-  const items: StreamItem[] = [...systemItems];
-
-  if (content) {
-    items.push({
-      id: `${baseId}:message`,
-      kind: "message",
-      role: "assistant",
-      text: [content, metadata].filter(Boolean).join("\n\n"),
-      links,
-    });
-  } else if (metadata) {
-    items.push({
-      id: `${baseId}:message`,
-      kind: "message",
-      role: "assistant",
-      text: metadata,
-    });
-  }
-
-  return [...items, ...artifactItems];
-}
-
 function isPermissionEventName(eventType: string): boolean {
   const normalized = eventType.toLowerCase();
   return (
@@ -2577,53 +2566,6 @@ function isPermissionEventName(eventType: string): boolean {
     normalized === "permission_denied" ||
     normalized.includes("permission")
   );
-}
-
-function isPermissionLikeStreamItem(item: StreamItem): boolean {
-  const text =
-    item.kind === "message"
-      ? `${item.role}\n${item.text}`
-      : item.kind === "system"
-        ? `${item.subtype}\n${item.title}\n${item.detail}`
-        : "";
-  const normalized = text.toLowerCase();
-  return (
-    normalized.includes("permission required") ||
-    normalized.includes("permission approved") ||
-    normalized.includes("permission denied") ||
-    normalized.includes("permission approval required") ||
-    normalized.includes("需要授权") ||
-    normalized.includes("已允许") ||
-    normalized.includes("已拒绝") ||
-    normalized.includes("permission_request") ||
-    normalized.includes("permission_response")
-  );
-}
-
-function permissionInputPreview(input: unknown): string {
-  if (!input || typeof input !== "object") {
-    return "";
-  }
-  const record = input as Record<string, unknown>;
-  const candidates = [
-    record.command,
-    record.cmd,
-    record.file_path,
-    record.filePath,
-    record.path,
-    record.pattern,
-    record.query,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return truncateProcessDetail(candidate, 900);
-    }
-  }
-  try {
-    return truncateProcessDetail(JSON.stringify(input, null, 2), 900);
-  } catch {
-    return "";
-  }
 }
 
 function permissionToolNameFromEvent(event: AgentReplStreamEvent): string {
@@ -2667,37 +2609,6 @@ function payloadText(event: AgentReplStreamEvent): string {
   return "";
 }
 
-type SessionUsagePayload = {
-  records: UsageRecordRow[];
-  assistantSummaries: UsageAssistantSummaryRow[];
-  summary: UsageSummaryRow | null;
-};
-
-const emptySessionUsagePayload: SessionUsagePayload = {
-  records: [],
-  assistantSummaries: [],
-  summary: null,
-};
-
-type UsageMetricKey =
-  | "total_input_tokens"
-  | "input_tokens"
-  | "output_tokens"
-  | "cache_read_input_tokens"
-  | "cache_creation_input_tokens"
-  | "input_hit_rate"
-  | "cost_usd";
-
-const usageMetricOptions: Array<{ key: UsageMetricKey; label: string }> = [
-  { key: "total_input_tokens", label: "Total input" },
-  { key: "input_tokens", label: "Input" },
-  { key: "output_tokens", label: "Output" },
-  { key: "cache_read_input_tokens", label: "Cache hit input" },
-  { key: "cache_creation_input_tokens", label: "Cache create input" },
-  { key: "input_hit_rate", label: "Hit rate" },
-  { key: "cost_usd", label: "Cost" },
-];
-
 function usageNumberValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
@@ -2705,10 +2616,6 @@ function usageNumberValue(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
-}
-
-function usageCell(row: Record<string, unknown> | null | undefined, key: string): unknown {
-  return row?.[key];
 }
 
 function usageFormatValue(value: unknown, key: string): string {
@@ -2723,337 +2630,6 @@ function usageShortId(value: unknown): string {
   const text = typeof value === "string" ? value : "";
   return text.length > 18 ? `${text.slice(0, 8)}…${text.slice(-6)}` : text || "—";
 }
-
-function usageMetricLabel(key: UsageMetricKey): string {
-  return usageMetricOptions.find((item) => item.key === key)?.label ?? key;
-}
-function usageFormatOccurTime(row: Record<string, unknown> | null | undefined): string {
-  const createdAtMs = usageNumberValue(usageCell(row, "created_at_ms"));
-  if (createdAtMs === null) return "—";
-
-  return new Date(createdAtMs).toLocaleString(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function compareUsageTurnRows(left: UsageRecordRow, right: UsageRecordRow): number {
-  const leftTurn = usageNumberValue(usageCell(left, "turn_index")) ?? Number.MAX_SAFE_INTEGER;
-  const rightTurn = usageNumberValue(usageCell(right, "turn_index")) ?? Number.MAX_SAFE_INTEGER;
-  if (leftTurn !== rightTurn) return leftTurn - rightTurn;
-
-  const leftTime = usageNumberValue(usageCell(left, "created_at_ms")) ?? 0;
-  const rightTime = usageNumberValue(usageCell(right, "created_at_ms")) ?? 0;
-  return leftTime - rightTime;
-}
-
-type AssistantUsageTimelinePoint = {
-  assistantBundleId: string;
-  summary: UsageAssistantSummaryRow;
-  occurAtMs: number | null;
-  firstTurnIndex: number | null;
-  value: number | null;
-};
-
-function assistantUsageSummaryMetricValue(
-  summary: UsageAssistantSummaryRow | null | undefined,
-  metricKey: UsageMetricKey,
-): number | null {
-  return usageNumberValue(usageCell(summary, metricKey));
-}
-
-function buildAssistantUsageTimelinePoints(
-  assistantSummaries: UsageAssistantSummaryRow[],
-  metricKey: UsageMetricKey,
-): AssistantUsageTimelinePoint[] {
-  return assistantSummaries
-    .map((summary) => {
-      const assistantBundleId = String(usageCell(summary, "assistant_message_id") ?? "").trim();
-      if (!assistantBundleId) return null;
-
-      return {
-        assistantBundleId,
-        summary,
-        occurAtMs: usageNumberValue(usageCell(summary, "created_at_ms")),
-        firstTurnIndex: usageNumberValue(usageCell(summary, "first_turn_index")),
-        value: assistantUsageSummaryMetricValue(summary, metricKey),
-      };
-    })
-    .filter((point): point is AssistantUsageTimelinePoint => point !== null && point.value !== null)
-    .sort((left, right) => {
-      const leftTurn = left.firstTurnIndex ?? Number.MAX_SAFE_INTEGER;
-      const rightTurn = right.firstTurnIndex ?? Number.MAX_SAFE_INTEGER;
-      if (leftTurn !== rightTurn) return leftTurn - rightTurn;
-
-      const leftTime = left.occurAtMs ?? 0;
-      const rightTime = right.occurAtMs ?? 0;
-      return leftTime - rightTime;
-    });
-}
-
-function assistantPointOccurTime(point: AssistantUsageTimelinePoint): string {
-  if (point.occurAtMs === null) return "—";
-  return new Date(point.occurAtMs).toLocaleString(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-
-function UsageTimelineChart({
-  assistantSummaries,
-  metricKey,
-  selectedAssistantBundleId,
-  onAssistantDoubleClick,
-}: {
-  assistantSummaries: UsageAssistantSummaryRow[];
-  metricKey: UsageMetricKey;
-  selectedAssistantBundleId?: string | null;
-  onAssistantDoubleClick?: (assistantBundleId: string) => void;
-}) {
-  const points = buildAssistantUsageTimelinePoints(assistantSummaries, metricKey);
-
-  if (points.length === 0) {
-    return <div className="debug-empty">No usage points for {usageMetricLabel(metricKey)}.</div>;
-  }
-
-  const width = 720;
-  const height = 220;
-  const padding = 44;
-  const plotBottom = height - padding;
-  const plotHeight = Math.max(plotBottom - padding, 1);
-  const values = points.map((point) => point.value ?? 0);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || 1;
-
-  const xForIndex = (index: number) =>
-    points.length === 1
-      ? width / 2
-      : padding + (index / (points.length - 1)) * (width - padding * 2);
-  const yForValue = (value: number) =>
-    plotBottom - ((value - min) / span) * plotHeight;
-
-  const path = points
-    .map((point, index) => {
-      const x = xForIndex(index);
-      const y = yForValue(point.value ?? 0);
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(" ");
-
-  return (
-    <div className="usage-timeline-wrap">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        role="img"
-        aria-label={`${usageMetricLabel(metricKey)} timeline by assistant message`}
-      >
-        <path
-          className="usage-timeline-path"
-          d={path}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          opacity="0.7"
-        />
-        {points.map((point, index) => {
-          const value = point.value ?? 0;
-          const x = xForIndex(index);
-          const y = yForValue(value);
-          const occurTime = assistantPointOccurTime(point);
-          const valueLabel = usageFormatValue(value, metricKey);
-          const isSelected = selectedAssistantBundleId === point.assistantBundleId;
-
-          return (
-            <circle
-              key={point.assistantBundleId}
-              className={`usage-timeline-point${isSelected ? " selected" : ""}`}
-              cx={x}
-              cy={y}
-              r={isSelected ? "5.5" : "3.5"}
-              tabIndex={0}
-              role="button"
-              aria-label={`Assistant ${usageShortId(point.assistantBundleId)} ${occurTime} ${usageMetricLabel(metricKey)} ${valueLabel}`}
-              onClick={() => onAssistantDoubleClick?.(point.assistantBundleId)}
-              onDoubleClick={() => onAssistantDoubleClick?.(point.assistantBundleId)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  onAssistantDoubleClick?.(point.assistantBundleId);
-                }
-              }}
-            >
-              <title>{`${occurTime} · ${usageMetricLabel(metricKey)} ${valueLabel}`}</title>
-            </circle>
-          );
-        })}
-        <text x={padding} y={22} fontSize="11">
-          max {usageFormatValue(max, metricKey)}
-        </text>
-        <text x={padding} y={plotBottom + 28} fontSize="11">
-          min {usageFormatValue(min, metricKey)}
-        </text>
-      </svg>
-      <div className="usage-timeline-hint">
-        Click an assistant point to show message detail and its turns below.
-      </div>
-    </div>
-  );
-}
-
-
-
-function SessionUsageAssistantMessageDetail({
-  records,
-  assistantSummaries,
-  assistantBundleId,
-}: {
-  records: UsageRecordRow[];
-  assistantSummaries: UsageAssistantSummaryRow[];
-  assistantBundleId: string | null;
-}) {
-  if (!assistantBundleId) {
-    return (
-      <div className="usage-table-card">
-        <div className="debug-empty">Click an assistant point to inspect that assistant message.</div>
-      </div>
-    );
-  }
-
-  const assistantSummary = assistantSummaries.find(
-    (row) => String(usageCell(row, "assistant_message_id") ?? "") === assistantBundleId,
-  );
-  const assistantRecords = records
-    .filter((row) => String(usageCell(row, "assistant_message_id") ?? "") === assistantBundleId)
-    .sort(compareUsageTurnRows);
-
-  if (!assistantSummary && assistantRecords.length === 0) {
-    return (
-      <div className="usage-table-card">
-        <strong>Assistant message detail</strong>
-        <div className="debug-empty">No usage found for {usageShortId(assistantBundleId)}.</div>
-      </div>
-    );
-  }
-
-  const occurAtMs = usageNumberValue(usageCell(assistantSummary, "created_at_ms"));
-  const occurTime =
-    occurAtMs === null
-      ? "—"
-      : new Date(occurAtMs).toLocaleString(undefined, {
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-
-  return (
-    <>
-      <div className="usage-table-card">
-        <strong>Assistant message detail</strong>
-        <form className="usage-detail-form">
-          <label>
-            <span>Assistant</span>
-            <input readOnly value={usageShortId(assistantBundleId)} title={assistantBundleId} />
-          </label>
-          <label>
-            <span>Occur time</span>
-            <input readOnly value={occurTime} />
-          </label>
-          <label>
-            <span>Turns</span>
-            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "turn_count"), "turn_count")} />
-          </label>
-          <label>
-            <span>Model</span>
-            <input readOnly value={String(usageCell(assistantSummary, "model") ?? "—")} />
-          </label>
-          <label>
-            <span>Total input</span>
-            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "total_input_tokens"), "total_input_tokens")} />
-          </label>
-          <label>
-            <span>Input</span>
-            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "input_tokens"), "input_tokens")} />
-          </label>
-          <label>
-            <span>Output</span>
-            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "output_tokens"), "output_tokens")} />
-          </label>
-          <label>
-            <span>Cache hit</span>
-            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "cache_read_input_tokens"), "cache_read_input_tokens")} />
-          </label>
-          <label>
-            <span>Cache create</span>
-            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "cache_creation_input_tokens"), "cache_creation_input_tokens")} />
-          </label>
-          <label>
-            <span>Hit rate</span>
-            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "input_hit_rate"), "input_hit_rate")} />
-          </label>
-          <label>
-            <span>Cost</span>
-            <input readOnly value={usageFormatValue(usageCell(assistantSummary, "cost_usd"), "cost_usd")} />
-          </label>
-          <label className="usage-detail-form-wide">
-            <span>Cost source</span>
-            <textarea readOnly value={String(usageCell(assistantSummary, "cost_source") ?? "—")} rows={2} />
-          </label>
-        </form>
-      </div>
-
-      <div className="usage-table-card">
-        <strong>Turn detail</strong>
-        <div className="usage-detail-meta">
-          assistant {usageShortId(assistantBundleId)} · rows {assistantRecords.length}
-        </div>
-        <table className="usage-table">
-          <thead>
-            <tr>
-              <th>Turn</th>
-              <th>Occur time</th>
-              <th>Model</th>
-              <th>Total input</th>
-              <th>Input</th>
-              <th>Output</th>
-              <th>Cache hit</th>
-              <th>Cache create</th>
-              <th>Hit rate</th>
-              <th>Cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {assistantRecords.map((row) => (
-              <tr
-                key={String(usageCell(row, "turn_key") ?? `${usageCell(row, "session_id")}:${usageCell(row, "assistant_message_id")}:${usageCell(row, "turn_index")}`)}
-              >
-                <td>{usageFormatValue(usageCell(row, "turn_index"), "turn_index")}</td>
-                <td>{usageFormatOccurTime(row)}</td>
-                <td>{String(usageCell(row, "model") ?? "—")}</td>
-                <td>{usageFormatValue(usageCell(row, "total_input_tokens"), "total_input_tokens")}</td>
-                <td>{usageFormatValue(usageCell(row, "input_tokens"), "input_tokens")}</td>
-                <td>{usageFormatValue(usageCell(row, "output_tokens"), "output_tokens")}</td>
-                <td>{usageFormatValue(usageCell(row, "cache_read_input_tokens"), "cache_read_input_tokens")}</td>
-                <td>{usageFormatValue(usageCell(row, "cache_creation_input_tokens"), "cache_creation_input_tokens")}</td>
-                <td>{usageFormatValue(usageCell(row, "input_hit_rate"), "input_hit_rate")}</td>
-                <td>{usageFormatValue(usageCell(row, "cost_usd"), "cost_usd")}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
-  );
-}
-
-
 
 function AssistantUsageMiniOverlay({
   bundleId,
@@ -3740,11 +3316,13 @@ function contextUsageFromBundleSnapshot(
   };
 }
 
+export function waitForNextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
+}
+
 export function App() {
-  useEffect(() => {
-
-  }, []);
-
   useEffect(() => {
     void sqliteDatabaseInfo()
       .then((info) => {
@@ -3766,8 +3344,9 @@ export function App() {
   >({});
   const [assistantDebugBundles, setAssistantDebugBundles] = useState<
     Record<string, AssistantMessageDebugBundle>
-  >(() => loadAssistantDebugBundles());
+  >({});
   const [streamUsageByBundleKey, setStreamUsageByBundleKey] = useState<Record<string, BundleUsageSnapshot>>({});
+  const usageCostModelSettingsRef = useRef<ModelSettings | null>(null);
   const currentBundleBySessionRef = useRef<Record<string, string | null>>({});
   const [copiedDebugMessageId, setCopiedDebugMessageId] = useState<string | null>(
     null,
@@ -3789,14 +3368,6 @@ export function App() {
     sessionId: string;
   } | null>(null);
   const [isDebugOpen, setIsDebugOpen] = useState(false);
-  const [sessionUsageLoading, setSessionUsageLoading] = useState(false);
-  const [sessionUsageError, setSessionUsageError] = useState<string | null>(null);
-  const [sessionUsagePayload, setSessionUsagePayload] =
-    useState<SessionUsagePayload>(emptySessionUsagePayload);
-  const [sessionUsageMetricKey, setSessionUsageMetricKey] =
-    useState<UsageMetricKey>("total_input_tokens");
-  const [selectedSessionUsageAssistantBundleId, setSelectedSessionUsageAssistantBundleId] =
-    useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const promptHighlightRef = useRef<HTMLDivElement | null>(null);
@@ -3831,6 +3402,7 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>("workspace");
   const [isRunningTurn, setIsRunningTurn] = useState(false);
+  const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
   const [isInterruptingTurn, setIsInterruptingTurn] = useState(false);
   const [pendingPermissions, setPendingPermissions] = useState<
     Array<{
@@ -4062,6 +3634,7 @@ export function App() {
         if (cancelled) {
           return;
         }
+        usageCostModelSettingsRef.current = settings;
         const deepseek = settings.models.find(
           (model) => model.provider === "deepseek",
         );
@@ -4080,6 +3653,7 @@ export function App() {
       })
       .catch(() => {
         if (!cancelled) {
+          usageCostModelSettingsRef.current = null;
           setChatModelOptions(["deepseek-v4-flash", "deepseek-v4-pro"]);
           setSelectedChatModel("deepseek-v4-flash");
         }
@@ -4240,6 +3814,7 @@ export function App() {
             bundle,
             bundleUsageStatusFromEvent(event),
             resolved.completesBundle ? debugEntry.receivedAt : null,
+            usageCostModelSettingsRef.current,
           );
           setStreamUsageByBundleKey((current) => ({
             ...current,
@@ -4458,11 +4033,6 @@ export function App() {
   }, []);
 
   function selectSession(project: ProjectFolder, sessionId: string) {
-    console.log("[debug-session] selectSession called", {
-      projectId: project.id,
-      projectRoot: project.root,
-      sessionId,
-    });
     const sessionTitle =
       project.sessions.find((session) => session.id === sessionId)?.title ??
       "会话";
@@ -4678,12 +4248,34 @@ export function App() {
       return;
     }
 
+    const sourceItems = sessionStreams[session.id] ?? [];
+    const checkpointMessage = [...sourceItems]
+      .reverse()
+      .find(
+        (item): item is Extract<StreamItem, { kind: "message" }> =>
+          item.kind === "message" && item.role === "assistant" && Boolean(item.checkpointUuid),
+      );
+
+    if (!checkpointMessage?.checkpointUuid) {
+      setError("这个会话还没有可 fork 的 assistant checkpoint。");
+      return;
+    }
+
     try {
       setError(null);
       setOpenSessionMenu(null);
-      const forkedSession = await createForkRuntimeSession(project.root, session.id);
-      const detail = await loadTypedRuntimeSession(project.root, forkedSession.id);
+      const forkedProcess = await forkAgentReplProcess(
+        project.root,
+        session.id,
+        checkpointMessage.checkpointUuid,
+        selectedChatModel,
+        permissionState?.currentMode ?? "default",
+      );
+      const forkedSessionId = forkedProcess.sessionId;
+      const detail = await loadTypedRuntimeSessionWithRetry(project.root, forkedSessionId, 80);
       const artifacts = runtimeSessionToArtifacts(detail, project.root);
+      const forkedTitle =
+        firstUserTitleFromStream(artifacts.items) ?? `Fork · ${session.title}`;
 
       setProjects((currentProjects) =>
         currentProjects.map((candidate) =>
@@ -4692,9 +4284,10 @@ export function App() {
                 ...candidate,
                 sessions: dedupeSessions([
                   {
-                    id: forkedSession.id,
-                    title: forkedSession.title || `Fork · ${session.title}`,
-                    processStatus: "stopped",
+                    id: forkedSessionId,
+                    title: forkedTitle,
+                    processStatus: "active",
+                    processPid: undefined,
                   },
                   ...candidate.sessions,
                 ]),
@@ -4711,11 +4304,12 @@ export function App() {
       }));
       setSessionStreams((streams) => ({
         ...streams,
-        [forkedSession.id]: collapseAssistantTurns(artifacts.items),
+        [forkedSessionId]: collapseAssistantTurns(artifacts.items),
       }));
-      setActiveSessionId(forkedSession.id);
+      setActiveSessionId(forkedSessionId);
       setPreviewTabs([]);
       setActivePreviewId(null);
+      void refreshSessionContextUsage(project.root, forkedSessionId);
     } catch (reason) {
       setError(String(reason));
     }
@@ -4981,132 +4575,6 @@ export function App() {
   }
 
 
-  // TEMP_USAGE_DIAGNOSTIC_ALERT_START
-  function showUsageDebugAlert(
-    source: "usage-button" | "debug-button" | "global-usage-button",
-    messageId?: string,
-  ) {
-    const records = sessionUsagePayload.records ?? [];
-    const assistantSummaries = Array.isArray((sessionUsagePayload as any).assistantSummaries)
-      ? ((sessionUsagePayload as any).assistantSummaries as Array<Record<string, unknown>>)
-      : [];
-    const summary = sessionUsagePayload.summary as Record<string, unknown> | null;
-    const messageKey = String(messageId ?? "");
-    const matchingRecords = messageKey
-      ? records.filter(
-          (row) => String(usageCell(row, "assistant_message_id") ?? "") === messageKey,
-        )
-      : [];
-    const matchingSummaries = messageKey
-      ? assistantSummaries.filter(
-          (row) => String(usageCell(row, "assistant_message_id") ?? "") === messageKey,
-        )
-      : [];
-    const bundle = messageKey ? assistantDebugBundles[messageKey] : null;
-    const recordCost = matchingRecords.reduce(
-      (total, row) => total + (usageNumberValue(usageCell(row, "cost_usd")) ?? 0),
-      0,
-    );
-    const recordTotalInput = matchingRecords.reduce(
-      (total, row) => total + (usageNumberValue(usageCell(row, "total_input_tokens")) ?? 0),
-      0,
-    );
-    const recordOutput = matchingRecords.reduce(
-      (total, row) => total + (usageNumberValue(usageCell(row, "output_tokens")) ?? 0),
-      0,
-    );
-    const recordTurnIndexes = matchingRecords
-      .map((row) => usageCell(row, "turn_index"))
-      .filter((value) => value !== null && value !== undefined)
-      .map((value) => String(value));
-    const recordSessions = Array.from(
-      new Set(
-        matchingRecords
-          .map((row) => String(usageCell(row, "session_id") ?? "").trim())
-          .filter(Boolean),
-      ),
-    );
-    const summaryLines = matchingSummaries.slice(0, 5).map((row, index) => {
-      return [
-        `#${index + 1}`,
-        `session=${String(usageCell(row, "session_id") ?? "—")}`,
-        `assistant=${usageShortId(usageCell(row, "assistant_message_id"))}`,
-        `turn_count=${String(usageCell(row, "turn_count") ?? "—")}`,
-        `range=${String(usageCell(row, "first_turn_index") ?? "—")}-${String(usageCell(row, "last_turn_index") ?? "—")}`,
-        `cost=${usageFormatValue(usageCell(row, "cost_usd"), "cost_usd")}`,
-      ].join(" | ");
-    });
-    const debugEventSessions = Array.from(
-      new Set(
-        (bundle?.events ?? [])
-          .flatMap((event) => {
-            const payload = event.payload as Record<string, unknown> | null;
-            const rawJson =
-              payload && typeof payload === "object"
-                ? ((payload.raw_json ?? payload) as Record<string, unknown> | null)
-                : null;
-            const rawMessage =
-              rawJson && typeof rawJson === "object"
-                ? ((rawJson.message ?? null) as Record<string, unknown> | null)
-                : null;
-            return [
-              event.sessionId,
-              payload && typeof payload === "object" ? payload.session_id : null,
-              payload && typeof payload === "object" ? payload.sessionId : null,
-              rawJson && typeof rawJson === "object" ? rawJson.session_id : null,
-              rawJson && typeof rawJson === "object" ? rawJson.sessionId : null,
-              rawMessage && typeof rawMessage === "object" ? rawMessage.session_id : null,
-              rawMessage && typeof rawMessage === "object" ? rawMessage.sessionId : null,
-            ];
-          })
-          .map((value) => String(value ?? "").trim())
-          .filter(Boolean),
-      ),
-    );
-    const debugSourceCounts = bundle ? debugStorageSourceCounts(bundle.events) : {};
-    const firstEvent = bundle?.events[0] ?? null;
-    const lastEvent = bundle?.events[bundle.events.length - 1] ?? null;
-
-    window.alert(
-      [
-        "USAGE/DEBUG CLICK DIAGNOSTIC",
-        `source=${source}`,
-        `activeSessionId=${activeSessionId ?? "—"}`,
-        `messageId=${messageKey || "—"}`,
-        `messageShort=${messageKey ? usageShortId(messageKey) : "—"}`,
-        "",
-        "loaded usage state:",
-        `records.length=${records.length}`,
-        `assistantSummaries.length=${assistantSummaries.length}`,
-        `session summary turn_count=${String(usageCell(summary, "turn_count") ?? "—")}`,
-        `session summary cost=${usageFormatValue(usageCell(summary, "cost_usd"), "cost_usd")}`,
-        "",
-        "match by assistant_message_id:",
-        `raw usage record matches=${matchingRecords.length}`,
-        `assistant summary matches=${matchingSummaries.length}`,
-        `raw record sessions=${recordSessions.join(", ") || "—"}`,
-        `raw turn indexes=${recordTurnIndexes.join(", ") || "—"}`,
-        `raw aggregate total_input=${usageFormatValue(recordTotalInput, "total_input_tokens")}`,
-        `raw aggregate output=${usageFormatValue(recordOutput, "output_tokens")}`,
-        `raw aggregate cost=${usageFormatValue(recordCost, "cost_usd")}`,
-        "",
-        "assistant summary rows:",
-        summaryLines.length ? summaryLines.join("\n") : "—",
-        "",
-        "debug bundle:",
-        `bundle exists=${bundle ? "yes" : "no"}`,
-        `bundle.sessionId=${bundle?.sessionId ?? "—"}`,
-        `bundle.root=${bundle?.root ?? "—"}`,
-        `bundle.events.length=${bundle?.events.length ?? 0}`,
-        `debug source counts=${JSON.stringify(debugSourceCounts)}`,
-        `debug event sessions=${debugEventSessions.join(", ") || "—"}`,
-        `first event=${firstEvent ? `${firstEvent.eventType}@${new Date(firstEvent.receivedAt).toISOString()}` : "—"}`,
-        `last event=${lastEvent ? `${lastEvent.eventType}@${new Date(lastEvent.receivedAt).toISOString()}` : "—"}`,
-      ].join("\n"),
-    );
-  }
-  // TEMP_USAGE_DIAGNOSTIC_ALERT_END
-
   function handleToggleAssistantProcess(messageId: string) {
     setOpenProcessMessageIds((current) => {
       const next = new Set(current);
@@ -5119,53 +4587,12 @@ export function App() {
     });
   }
 
-  async function loadSessionUsageForPanel(sessionId: string) {
-    setSessionUsageLoading(true);
-    setSessionUsageError(null);
-
-    try {
-      const [records, assistantSummaries, summaryRows] = await Promise.all([
-        loadUsageRecords(sessionId),
-        loadUsageAssistantSummaries(sessionId),
-        loadUsageSessionSummary(sessionId),
-      ]);
-
-      setSessionUsagePayload((current) => ({
-        ...current,
-        records,
-        assistantSummaries,
-        summary: summaryRows[0] ?? null,
-      }));
-      setSelectedSessionUsageAssistantBundleId((current) => {
-        if (!current) return current;
-        return assistantSummaries.some(
-          (row) => String(usageCell(row, "assistant_message_id") ?? "") === current,
-        )
-          ? current
-          : null;
-      });
-    } catch (reason) {
-      setSessionUsageError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setSessionUsageLoading(false);
-    }
-  }
-
-
   function handleToggleSessionUsage() {
     if (!activeSessionId) return;
-    const sessionId = activeSessionId;
-
-    setIsDebugOpen((current) => {
-      const next = !current;
-      if (next) {
-        void loadSessionUsageForPanel(sessionId).then(() => {
-});
-      }
-      return next;
-    });
+    setIsDebugOpen((current) => !current);
   }
-function handleViewAssistantUsage(bundleId: string) {
+
+  function handleViewAssistantUsage(bundleId: string) {
     if (!activeSessionId) return;
     const key = bundleUsageStorageKey(activeSessionId, bundleId);
     if (!streamUsageByBundleKey[key]) {
@@ -5468,14 +4895,20 @@ function handleViewAssistantUsage(bundleId: string) {
 
     try {
       setError(null);
-      setIsRunningTurn(true);
-      const forkedSession = await createForkRuntimeSession(
+      setForkingMessageId(item.id);
+      await waitForNextPaint();
+      const forkedProcess = await forkAgentReplProcess(
         activeProject.root,
         activeSessionId,
         item.checkpointUuid,
+        selectedChatModel,
+        permissionState?.currentMode ?? "default",
       );
-      const detail = await loadTypedRuntimeSession(activeProject.root, forkedSession.id);
+      const forkedSessionId = forkedProcess.sessionId;
+      const detail = await loadTypedRuntimeSessionWithRetry(activeProject.root, forkedSessionId, 80);
       const artifacts = runtimeSessionToArtifacts(detail, activeProject.root);
+      const forkedTitle =
+        firstUserTitleFromStream(artifacts.items) ?? `Fork · ${activeSessionTitle}`;
 
       setProjects((folders) =>
         folders.map((folder) =>
@@ -5484,9 +4917,10 @@ function handleViewAssistantUsage(bundleId: string) {
                 ...folder,
                 sessions: dedupeSessions([
                   {
-                    id: forkedSession.id,
-                    title: forkedSession.title || `Fork · ${activeSessionTitle}`,
-                    processStatus: "stopped",
+                    id: forkedSessionId,
+                    title: forkedTitle,
+                    processStatus: "active",
+                    processPid: undefined,
                   },
                   ...folder.sessions,
                 ]),
@@ -5500,13 +4934,14 @@ function handleViewAssistantUsage(bundleId: string) {
       }));
       setSessionStreams((streams) => ({
         ...streams,
-        [forkedSession.id]: collapseAssistantTurns(artifacts.items),
+        [forkedSessionId]: collapseAssistantTurns(artifacts.items),
       }));
-      setActiveSessionId(forkedSession.id);
+      setActiveSessionId(forkedSessionId);
+      void refreshSessionContextUsage(activeProject.root, forkedSessionId);
     } catch (reason) {
       setError(String(reason));
     } finally {
-      setIsRunningTurn(false);
+      setForkingMessageId(null);
     }
   }
 
@@ -5778,12 +5213,6 @@ function handleViewAssistantUsage(bundleId: string) {
                               type="button"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                console.log("[debug-session] tree-session-main clicked", {
-                                  folderId: folder.id,
-                                  folderRoot: folder.root,
-                                  sessionId: session.id,
-                                  title: session.title,
-                                });
                                 selectSession(folder, session.id);
                               }}
                             >
@@ -6093,6 +5522,7 @@ function handleViewAssistantUsage(bundleId: string) {
                                 disabled={Boolean(
                                   !item.checkpointUuid ||
                                   isRunningTurn ||
+                                  Boolean(forkingMessageId) ||
                                   pendingPermission ||
                                   isResolvingFileReferences
                                 )}
@@ -6102,7 +5532,14 @@ function handleViewAssistantUsage(bundleId: string) {
                                     : "这条消息缺少 jsonl uuid，不能作为 fork checkpoint"
                                 }
                               >
-                                Fork
+                                {forkingMessageId === item.id ? (
+                                  <>
+                                    <span className="message-fork-spinner" aria-hidden="true" />
+                                    <span>Forking…</span>
+                                  </>
+                                ) : (
+                                  "Fork"
+                                )}
                               </button>
                               {(() => {
                                 const outputDateTime = assistantUsageOutputDateTimeFromBundle(assistantDebugBundle);
@@ -7124,85 +6561,6 @@ function SkillsView({ activeProject }: SkillsViewProps) {
     </section>
   );
 }
-
-const DEFAULT_MCP_SETTINGS_TEXT = JSON.stringify(
-  {
-    mcpServers: {
-      mydata: {
-        enabled: true,
-        type: "stdio",
-        command: "python",
-        args: ["/Users/nazario.wang/.claude/mcp-servers/mydata/mcp_server.py"],
-        tools: [
-          {
-            name: "get_index_data",
-            description: "获取指数k线和特征数据",
-            parameters: {
-              type: "object",
-              properties: {
-                index_code: {
-                  type: "string",
-                  description: "指数代码，例如 000300.SH",
-                },
-                start_date: {
-                  type: "string",
-                  description: "开始日期 YYYY-MM-DD",
-                },
-                end_date: {
-                  type: "string",
-                  description: "结束日期 YYYY-MM-DD",
-                },
-              },
-              required: ["index_code", "start_date", "end_date"],
-            },
-          },
-        ],
-      },
-    },
-  },
-  null,
-  2,
-);
-
-function normalizeMcpSettings(value: unknown): McpSettings {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("MCP settings must be a JSON object.");
-  }
-
-  const settings = value as Partial<McpSettings>;
-
-  if (!settings.mcpServers || typeof settings.mcpServers !== "object" || Array.isArray(settings.mcpServers)) {
-    throw new Error("MCP settings must contain an object field named mcpServers.");
-  }
-
-  Object.entries(settings.mcpServers).forEach(([serverName, server]) => {
-    if (!server || typeof server !== "object" || Array.isArray(server)) {
-      throw new Error(`MCP server ${serverName} must be an object.`);
-    }
-
-    const serverConfig = server as Record<string, unknown>;
-
-    if (serverConfig.enabled === false) {
-      return;
-    }
-
-    if (typeof serverConfig.command !== "string" || serverConfig.command.trim() === "") {
-      throw new Error(`MCP server ${serverName} must have a non-empty command.`);
-    }
-
-    if (!Array.isArray(serverConfig.tools)) {
-      throw new Error(`MCP server ${serverName} must have a tools array.`);
-    }
-  });
-
-  return settings as McpSettings;
-}
-
-type McpEnvDraftRow = {
-  id: string;
-  key: string;
-  value: string;
-};
 
 type McpServerDraftRow = {
   id: string;
