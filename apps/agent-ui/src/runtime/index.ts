@@ -89,6 +89,9 @@ export const getAgentContextUsage: AgentRuntime["getAgentContextUsage"] = ((...a
 export const sendAgentReplInput: AgentRuntime["sendAgentReplInput"] = ((...args: Parameters<AgentRuntime["sendAgentReplInput"]>) => getCurrentRuntime().sendAgentReplInput(...args)) as AgentRuntime["sendAgentReplInput"];
 export const listenAgentReplEvents: AgentRuntime["listenAgentReplEvents"] = ((...args: Parameters<AgentRuntime["listenAgentReplEvents"]>) => getCurrentRuntime().listenAgentReplEvents(...args)) as AgentRuntime["listenAgentReplEvents"];
 export const runAgentTurn: AgentRuntime["runAgentTurn"] = ((...args: Parameters<AgentRuntime["runAgentTurn"]>) => getCurrentRuntime().runAgentTurn(...args)) as AgentRuntime["runAgentTurn"];
+export const saveBundleUsageSnapshot: AgentRuntime["saveBundleUsageSnapshot"] = ((...args: Parameters<AgentRuntime["saveBundleUsageSnapshot"]>) => getCurrentRuntime().saveBundleUsageSnapshot(...args)) as AgentRuntime["saveBundleUsageSnapshot"];
+export const loadBundleUsageSnapshot: AgentRuntime["loadBundleUsageSnapshot"] = ((...args: Parameters<AgentRuntime["loadBundleUsageSnapshot"]>) => getCurrentRuntime().loadBundleUsageSnapshot(...args)) as AgentRuntime["loadBundleUsageSnapshot"];
+export const loadBundleUsageSnapshotsForSession: AgentRuntime["loadBundleUsageSnapshotsForSession"] = ((...args: Parameters<AgentRuntime["loadBundleUsageSnapshotsForSession"]>) => getCurrentRuntime().loadBundleUsageSnapshotsForSession(...args)) as AgentRuntime["loadBundleUsageSnapshotsForSession"];
 
 export {
   loadRemoteProfiles,

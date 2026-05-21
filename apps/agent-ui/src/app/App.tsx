@@ -3272,13 +3272,25 @@ function contextUsageFromBundleSnapshot(
   snapshot: BundleUsageSnapshot,
   previous?: AgentContextUsage | null,
 ): AgentContextUsage | null {
-  const totalInput =
-    snapshot.usage.totalInputTokens ||
-    snapshot.usage.inputTokens +
-      snapshot.usage.cacheReadInputTokens +
-      snapshot.usage.cacheCreationInputTokens;
+  // patched: context length uses last model request input + output
+  const lastModelCall =
+    snapshot.modelCallUsages.length > 0
+      ? snapshot.modelCallUsages[snapshot.modelCallUsages.length - 1]
+      : null;
 
-  if (!totalInput || totalInput <= 0) {
+  if (!lastModelCall) {
+    return null;
+  }
+
+  const lastTotals = usageTotalsFromUsage(lastModelCall.usage);
+  const totalInput =
+    lastTotals.totalInputTokens ||
+    lastTotals.inputTokens +
+      lastTotals.cacheReadInputTokens +
+      lastTotals.cacheCreationInputTokens;
+  const totalTokens = totalInput + lastTotals.outputTokens;
+
+  if (!totalTokens || totalTokens <= 0) {
     return null;
   }
 
@@ -3289,32 +3301,30 @@ function contextUsageFromBundleSnapshot(
   const autoCompactThreshold =
     previous?.data?.autoCompactThreshold ??
     DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD;
-  const model =
-    previous?.data?.model ??
-    snapshot.modelCallUsages.find((item) => item.model)?.model ??
-    undefined;
+  const model = previous?.data?.model ?? lastModelCall.model ?? undefined;
 
   return {
     root: snapshot.root,
     sessionId: snapshot.sessionId,
     updatedAtMs: Date.now(),
     data: {
-      totalTokens: totalInput,
+      totalTokens,
       maxTokens,
       rawMaxTokens: previous?.data?.rawMaxTokens ?? maxTokens,
-      percentage: maxTokens > 0 ? totalInput / maxTokens : undefined,
+      percentage: maxTokens > 0 ? totalTokens / maxTokens : undefined,
       model,
       autoCompactThreshold,
       isAutoCompactEnabled: previous?.data?.isAutoCompactEnabled,
       apiUsage: {
-        input_tokens: snapshot.usage.inputTokens,
-        output_tokens: snapshot.usage.outputTokens,
-        cache_creation_input_tokens: snapshot.usage.cacheCreationInputTokens,
-        cache_read_input_tokens: snapshot.usage.cacheReadInputTokens,
+        input_tokens: lastTotals.inputTokens,
+        output_tokens: lastTotals.outputTokens,
+        cache_creation_input_tokens: lastTotals.cacheCreationInputTokens,
+        cache_read_input_tokens: lastTotals.cacheReadInputTokens,
       },
     },
   };
 }
+
 
 export function waitForNextPaint(): Promise<void> {
   return new Promise((resolve) => {

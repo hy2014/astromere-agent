@@ -329,5 +329,17 @@ export function createRemoteRuntime(profile: RemoteProfile): AgentRuntime {
       body: JSON.stringify({ root, sessionId, prompt }),
     });
 
+  runtime.saveBundleUsageSnapshot = async (snapshot: any) =>
+    remoteJson(profile, "/usage/bundle", {
+      method: "POST",
+      body: JSON.stringify(snapshot),
+    });
+
+  runtime.loadBundleUsageSnapshot = async (sessionId: string, bundleId: string) =>
+    remoteJson(profile, `/usage/bundle/${encodeURIComponent(sessionId)}/${encodeURIComponent(bundleId)}`);
+
+  runtime.loadBundleUsageSnapshotsForSession = async (sessionId: string) =>
+    remoteJson(profile, `/usage/bundle/${encodeURIComponent(sessionId)}`);
+
   return runtime as AgentRuntime;
 }
