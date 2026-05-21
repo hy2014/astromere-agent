@@ -4226,12 +4226,35 @@ fn repo_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "cannot resolve repo root".to_string())
 }
 
+fn is_subagent_transcript_path(path: &Path) -> bool {
+    let under_subagents = path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .map(|name| name == "subagents")
+            .unwrap_or(false)
+    });
+
+    if under_subagents {
+        return true;
+    }
+
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .map(|name| name.starts_with("agent-") && name.ends_with(".jsonl"))
+        .unwrap_or(false)
+}
+
 fn collect_session_files(dir: &Path, out: &mut Vec<RuntimeSessionSummary>) -> Result<(), String> {
     for entry in fs::read_dir(dir).map_err(error_to_string)? {
         let entry = entry.map_err(error_to_string)?;
         let path = entry.path();
 
         if path.is_dir() {
+            if path.file_name().and_then(|s| s.to_str()) == Some("subagents") {
+                continue;
+            }
+
             collect_session_files(&path, out)?;
             continue;
         }
@@ -4240,6 +4263,9 @@ fn collect_session_files(dir: &Path, out: &mut Vec<RuntimeSessionSummary>) -> Re
             continue;
         }
 
+        if is_subagent_transcript_path(&path) {
+            continue;
+        }
         let metadata = fs::metadata(&path).map_err(error_to_string)?;
         let modified = metadata.modified().unwrap_or(SystemTime::now());
         let modified_ms = modified
