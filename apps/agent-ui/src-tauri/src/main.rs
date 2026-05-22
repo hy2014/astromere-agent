@@ -1175,6 +1175,14 @@ fn add_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, Strin
 }
 
 #[tauri::command]
+fn remove_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, String> {
+    let mut registry = read_workspace_registry().unwrap_or_default();
+    registry.workspaces.retain(|w| w.root != path);
+    write_workspace_registry(&registry)?;
+    Ok(registry)
+}
+
+#[tauri::command]
 fn get_agent_permission_state() -> Result<AgentPermissionState, String> {
     Ok(AgentPermissionState {
         current_mode: "default".to_string(),
@@ -4604,6 +4612,7 @@ fn main() {
             open_workspace,
             load_workspace_registry,
             add_workspace_registry_entry,
+            remove_workspace_registry_entry,
             list_project_entries,
             search_workspace_files,
             list_skills,

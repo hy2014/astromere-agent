@@ -120,6 +120,12 @@ export function createRemoteRuntime(profile: RemoteProfile): AgentRuntime {
       body: JSON.stringify({ root: path }),
     });
 
+  runtime.removeWorkspaceRegistryEntry = async (path: string) =>
+    remoteJson(profile, "/workspaces", {
+      method: "DELETE",
+      body: JSON.stringify({ root: path }),
+    });
+
   runtime.listProjectEntries = async (root: string) =>
     remoteJson(profile, `/workspace/entries${query({ root })}`);
 
