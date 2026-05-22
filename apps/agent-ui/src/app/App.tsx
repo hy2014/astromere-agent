@@ -3405,6 +3405,7 @@ export function App() {
   const remotePathPromptResolve = useRef<((value: string | null) => void) | null>(null);
   const [remotePathInput, setRemotePathInput] = useState("");
   const [remotePathSuggestions, setRemotePathSuggestions] = useState<string[]>([]);
+  const [remotePathHighlightIndex, setRemotePathHighlightIndex] = useState(-1);
   const remotePathDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [projectContextMenu, setProjectContextMenu] = useState<{ root: string; x: number; y: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -5313,42 +5314,63 @@ export function App() {
                           remotePathDebounce.current = setTimeout(async () => {
                             try {
                               const entries = await listProjectEntries(value);
-                              const dirs = entries.filter((entry: any) => entry.type === "directory").map((d: any) => d.path);
+                              const dirs = entries.filter((entry: any) => entry.kind === "directory").map((d: any) => d.path);
                               setRemotePathSuggestions(dirs.slice(0, 8));
                             } catch {}
                           }, 300);
                         }
                       }}
                       onKeyDown={(e) => {
+                        if (e.key === "ArrowDown") {
+                          e.preventDefault();
+                          setRemotePathHighlightIndex((prev) =>
+                            prev < remotePathSuggestions.length - 1 ? prev + 1 : prev
+                          );
+                          return;
+                        }
+                        if (e.key === "ArrowUp") {
+                          e.preventDefault();
+                          setRemotePathHighlightIndex((prev) => (prev > 0 ? prev - 1 : -1));
+                          return;
+                        }
                         if (e.key === "Enter") {
                           e.preventDefault();
-                          const value = (e.target as HTMLInputElement).value;
-                          remotePathPromptResolve.current?.(value);
+                          if (remotePathHighlightIndex >= 0 && remotePathHighlightIndex < remotePathSuggestions.length) {
+                            const selected = remotePathSuggestions[remotePathHighlightIndex];
+                            remotePathPromptResolve.current?.(selected);
+                          } else {
+                            const value = (e.target as HTMLInputElement).value;
+                            remotePathPromptResolve.current?.(value);
+                          }
                           setRemotePathPrompt(null);
                           setRemotePathInput("");
                           setRemotePathSuggestions([]);
+                          setRemotePathHighlightIndex(-1);
                         }
                         if (e.key === "Escape") {
                           remotePathPromptResolve.current?.(null);
                           setRemotePathPrompt(null);
                           setRemotePathInput("");
                           setRemotePathSuggestions([]);
+                          setRemotePathHighlightIndex(-1);
                         }
                       }}
                       placeholder="/home/user/project"
                     />
                     {remotePathSuggestions.length > 0 && (
                       <div className="modal-suggestions">
-                        {remotePathSuggestions.map((s) => (
+                        {remotePathSuggestions.map((s, i) => (
                           <button
                             key={s}
                             type="button"
-                            className="modal-suggestion-item"
+                            className={`modal-suggestion-item ${i === remotePathHighlightIndex ? "highlighted" : ""}`}
+                            onMouseEnter={() => setRemotePathHighlightIndex(i)}
                             onClick={() => {
                               remotePathPromptResolve.current?.(s);
                               setRemotePathPrompt(null);
                               setRemotePathInput("");
                               setRemotePathSuggestions([]);
+                              setRemotePathHighlightIndex(-1);
                             }}
                           >
                             {s}

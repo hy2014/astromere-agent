@@ -2289,3 +2289,7 @@
 .modal-suggestion-item:hover {
   background: #f0f1f5;
 }
+.modal-suggestion-item.highlighted {
+  background: #e8ecff;
+  color: #1a1a2e;
+}
