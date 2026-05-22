@@ -3399,6 +3399,8 @@ export function App() {
   } | null>(null);
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
+  const [remotePathPrompt, setRemotePathPrompt] = useState<string | null>(null);
+  const remotePathPromptResolve = useRef<((value: string | null) => void) | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const promptHighlightRef = useRef<HTMLDivElement | null>(null);
   const [fileReferences, setFileReferences] = useState<LocalFileReference[]>([]);
@@ -4212,12 +4214,15 @@ export function App() {
       const remoteMode = !!activeRemoteProfile;
 
       await clientDebugLog("info", "handleAddProject.start", { remoteMode, activeProfile: activeRemoteProfile?.name ?? null });
-
       if (remoteMode) {
-        // remote mode: 让用户输入远程服务器上的路径
-        selected = window.prompt("Enter the remote project path (must exist on the remote server):");
+        // remote mode: 弹出自定义输入框让用户输入远程服务器路径
+        selected = await new Promise<string | null>((resolve) => {
+          remotePathPromptResolve.current = resolve;
+          setRemotePathPrompt("Enter the remote project path (must exist on the remote server):");
+        });
         await clientDebugLog("info", "handleAddProject.promptResult", { cancelled: selected === null, empty: selected != null && !selected.trim() });
         if (!selected || !selected.trim()) {
+          setRemotePathPrompt(null);
           return;
         }
         selected = selected.trim();
@@ -5254,6 +5259,38 @@ export function App() {
               title="Add project folder"
             >
               +
+
+          {remotePathPrompt !== null && (
+            <div className="modal-overlay" onClick={() => { remotePathPromptResolve.current?.(null); setRemotePathPrompt(null); }}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>Remote Project Path</h3>
+                </div>
+                <div className="modal-body">
+                  <p>{remotePathPrompt}</p>
+                  <input
+                    autoFocus
+                    className="modal-input"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        const value = (e.target as HTMLInputElement).value;
+                        remotePathPromptResolve.current?.(value);
+                        setRemotePathPrompt(null);
+                      }
+                      if (e.key === "Escape") {
+                        remotePathPromptResolve.current?.(null);
+                        setRemotePathPrompt(null);
+                      }
+                    }}
+                    placeholder="/home/user/project"
+                  />
+                </div>
+                <div className="modal-footer">
+                  <button onClick={() => { remotePathPromptResolve.current?.(null); setRemotePathPrompt(null); }}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
             </button>
           </div>
 
