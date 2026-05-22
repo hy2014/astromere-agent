@@ -1741,6 +1741,17 @@ async function handle(request: Request): Promise<Response> {
     return json(registry);
   }
 
+  if (url.pathname === "/workspaces" && request.method === "DELETE") {
+    const body = await parseJsonBody<{ root?: string }>(request);
+    debugLog(requestId, { action: "removeWorkspaceRegistryEntry", body });
+    const root = String(body.root ?? "");
+    const registry = readWorkspaceRegistry();
+    registry.workspaces = registry.workspaces.filter((item) => item.root !== root);
+    writeWorkspaceRegistry(registry);
+    debugLog(requestId, { action: "removeWorkspaceRegistryEntry.result", root, registrySize: registry.workspaces.length });
+    return json(registry);
+  }
+
   if (url.pathname === "/workspace/default") {
     const first = readWorkspaceRegistry().workspaces[0];
     const result = first ?? workspaceStateFromPath(process.cwd());
