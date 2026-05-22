@@ -54,6 +54,7 @@ import type { AgentReplCapabilityItem,
   RemoteProfile } from "../runtime";
 import "./App.css";
 import { TerminalView } from "./Terminal";
+import { TerminalRemoteView } from "./TerminalRemote";
 import type {
   AgentContextUsage,
   AgentPermissionState,
@@ -5588,7 +5589,14 @@ export function App() {
         </div>
       </aside>
       {activeView === "terminal" ? (
-        <TerminalView onClose={() => setActiveView("workspace")} />
+        activeRemoteProfile ? (
+          <TerminalRemoteView
+            onClose={() => setActiveView("workspace")}
+            remoteBaseUrl={activeRemoteProfile.baseUrl}
+          />
+        ) : (
+          <TerminalView onClose={() => setActiveView("workspace")} />
+        )
       ) : activeView === "skills" ? (
         <SkillsView activeProject={activeProject ?? undefined} />
       ) : activeView === "mcp" ? (
