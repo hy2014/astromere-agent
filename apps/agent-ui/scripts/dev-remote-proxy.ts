@@ -6,12 +6,14 @@ import {
   writeFileSync,
   statSync,
   cpSync,
+  appendFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 const port = Number(process.env.PORT ?? "7421");
 const dataDir = process.env.AGENT_UI_REMOTE_HOME ?? join(homedir(), ".agent-ui-proxy-test");
+const debugLogDir = process.env.AGENT_UI_DEBUG_LOG ?? join(dataDir, "debug-logs");
 const workspaceRegistryPath = join(dataDir, "workspace-registry.json");
 const modelSettingsPath = join(dataDir, "model-settings.json");
 const mcpSettingsPath =
@@ -42,6 +44,19 @@ const ignoredDirs = new Set([
 
 function ensureDataDir() {
   mkdirSync(dataDir, { recursive: true });
+}
+
+function debugLog(requestId: string, data: unknown) {
+  ensureDataDir();
+  mkdirSync(debugLogDir, { recursive: true });
+  const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const logLine = `[${timestamp}] [${requestId}] ${JSON.stringify(data)}\n`;
+  const logFile = join(debugLogDir, "proxy-debug.log");
+  try {
+    appendFileSync(logFile, logLine);
+  } catch {
+    // silent
+  }
 }
 
 function json(data: unknown, init: ResponseInit = {}) {
@@ -1655,6 +1670,7 @@ function runAgentTurnOnce(root: string, sessionId: string, prompt: string) {
 
 async function handle(request: Request): Promise<Response> {
   const url = new URL(request.url);
+  const requestId = `${request.method} ${url.pathname} ${Date.now().toString(36)}`;
 
   if (request.method === "OPTIONS") return json({ ok: true });
 
@@ -1713,6 +1729,7 @@ async function handle(request: Request): Promise<Response> {
 
   if (url.pathname === "/workspaces" && request.method === "POST") {
     const body = await parseJsonBody<{ root?: string; name?: string }>(request);
+    debugLog(requestId, { action: "addWorkspaceRegistryEntry", body });
     const ws = workspaceStateFromPath(String(body.root ?? ""));
     if (body.name?.trim()) ws.name = body.name.trim();
     const registry = readWorkspaceRegistry();
@@ -1720,16 +1737,28 @@ async function handle(request: Request): Promise<Response> {
       registry.workspaces.push(ws);
     }
     writeWorkspaceRegistry(registry);
+    debugLog(requestId, { action: "addWorkspaceRegistryEntry.result", ws, registrySize: registry.workspaces.length });
     return json(registry);
   }
 
   if (url.pathname === "/workspace/default") {
     const first = readWorkspaceRegistry().workspaces[0];
-    return json(first ?? workspaceStateFromPath(process.cwd()));
+    const result = first ?? workspaceStateFromPath(process.cwd());
+    debugLog(requestId, { action: "getDefaultWorkspace", result });
+    return json(result);
   }
 
   if (url.pathname === "/workspace/open") {
-    return json(workspaceStateFromPath(String(url.searchParams.get("path") ?? "")));
+    const rawPath = String(url.searchParams.get("path") ?? "");
+    debugLog(requestId, { action: "openWorkspace", input: rawPath });
+    try {
+      const result = workspaceStateFromPath(rawPath);
+      debugLog(requestId, { action: "openWorkspace.result", result });
+      return json(result);
+    } catch (err) {
+      debugLog(requestId, { action: "openWorkspace.error", error: String(err) });
+      return error(String(err));
+    }
   }
 
   if (url.pathname === "/workspace/entries" || url.pathname === "/workspace-files") {
@@ -1886,11 +1915,15 @@ async function handle(request: Request): Promise<Response> {
   }
 
   if (url.pathname === "/sessions" && request.method === "GET") {
-    return json(listRuntimeSessions(String(url.searchParams.get("root") ?? "")));
+    const root = String(url.searchParams.get("root") ?? "");
+    const sessions = listRuntimeSessions(root);
+    debugLog(requestId, { action: "listRuntimeSessions", root, count: sessions.length });
+    return json(sessions);
   }
 
   if (url.pathname === "/sessions" && request.method === "POST") {
     const body = await parseJsonBody<{ root: string }>(request);
+    debugLog(requestId, { action: "createRuntimeSession", root: body.root });
     const rootPath = canonicalWorkspaceRoot(body.root);
     const id = crypto.randomUUID();
     const now = Date.now();
@@ -1898,6 +1931,7 @@ async function handle(request: Request): Promise<Response> {
     const sessionPath = join(sessionsDir, `${id}.jsonl`);
     mkdirSync(sessionsDir, { recursive: true });
     if (!existsSync(sessionPath)) writeFileSync(sessionPath, "");
+    debugLog(requestId, { action: "createRuntimeSession.result", id, path: sessionPath });
     return json({
       id,
       title: "新会话",
@@ -2131,13 +2165,24 @@ async function handle(request: Request): Promise<Response> {
   }
 
 
+  if (url.pathname === "/debug/log" && request.method === "POST") {
+    const body = await parseJsonBody<{ level: string; message: string; data?: any }>(request);
+    debugLog(`client-${body.level}`, { message: body.message, data: body.data });
+    return json({ ok: true });
+  }
+
+  debugLog(requestId, { action: "not_found", pathname: url.pathname });
   return error(`Not found: ${url.pathname}`, 404);
 }
 
 Bun.serve({
   port,
   fetch(request) {
-    return handle(request).catch((err) => error(err instanceof Error ? err.message : String(err), 500));
+    const requestId = `GLOBAL ${Date.now().toString(36)}`;
+    return handle(request).catch((err) => {
+      debugLog(requestId, { action: "unhandled_error", error: String(err) });
+      return error(err instanceof Error ? err.message : String(err), 500);
+    });
   },
 });
 
