@@ -1183,6 +1183,23 @@ fn remove_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, St
 }
 
 #[tauri::command]
+fn load_deepseek_pricing() -> Result<Option<DeepSeekPricingConfig>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let settings_path = std::path::Path::new(&home).join(".claw-agent-ui").join("model-settings.json");
+    if settings_path.exists() {
+        let data = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        let settings: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        if let Some(pricing) = settings.get("deepseekPricing") {
+            serde_json::from_value(pricing.clone()).map_err(|e| e.to_string())
+        } else {
+            Ok(None)
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
 fn get_agent_permission_state() -> Result<AgentPermissionState, String> {
     Ok(AgentPermissionState {
         current_mode: "default".to_string(),
@@ -4611,6 +4628,7 @@ fn main() {
             default_workspace,
             open_workspace,
             load_workspace_registry,
+            load_deepseek_pricing,
             add_workspace_registry_entry,
             remove_workspace_registry_entry,
             list_project_entries,

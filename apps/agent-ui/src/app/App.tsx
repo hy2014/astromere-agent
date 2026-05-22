@@ -1,5 +1,6 @@
 import {
   open as openDialog } from "@tauri-apps/plugin-dialog";
+import { loadDeepseekPricing } from "../tauri";
 import { FormEvent,
   KeyboardEvent,
   useEffect,
@@ -7246,10 +7247,16 @@ function SettingsView({ hiddenSessions, onRestoreSession }: SettingsViewProps) {
   useEffect(() => {
     let cancelled = false;
     loadModelSettings()
-      .then((settings) => {
+      .then(async (settings) => {
         if (cancelled) {
           return;
         }
+        try {
+          const pricing = await loadDeepseekPricing();
+          if (pricing) {
+            settings = { ...settings, deepseekPricing: pricing };
+          }
+        } catch {}
         setSavedSettings(settings);
         setDraftSettings(settings);
         setSelectedModelId(settings.activeModelId);
