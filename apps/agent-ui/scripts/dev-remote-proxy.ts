@@ -2188,12 +2188,72 @@ async function handle(request: Request): Promise<Response> {
 
 Bun.serve({
   port,
-  fetch(request) {
+  fetch(request, server) {
+    const url = new URL(request.url);
+
+    // WebSocket PTY endpoint
+    if (url.pathname === "/pty" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      if (server.upgrade(request, { data: { sessionId: url.searchParams.get("sessionId") || "" } })) {
+        return; // upgraded
+      }
+      return new Response("WebSocket upgrade failed", { status: 426 });
+    }
+
     const requestId = `GLOBAL ${Date.now().toString(36)}`;
     return handle(request).catch((err) => {
       debugLog(requestId, { action: "unhandled_error", error: String(err) });
       return error(err instanceof Error ? err.message : String(err), 500);
     });
+  },
+  websocket: {
+    open(ws) {
+      const shell = Bun.spawn(["bash", "--login"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, TERM: "xterm-256color" },
+      });
+      ws.data = { shell, dead: false };
+
+      // stdout -> WS
+      (async () => {
+        const reader = shell.stdout.getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!ws.data.dead) ws.send(new TextDecoder().decode(value));
+          }
+        } catch {}
+      })();
+
+      // stderr -> WS
+      (async () => {
+        const reader = shell.stderr.getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!ws.data.dead) ws.send(new TextDecoder().decode(value));
+          }
+        } catch {}
+      })();
+    },
+    message(ws, message) {
+      if (typeof message === "string" && ws.data?.shell?.stdin) {
+        const writer = ws.data.shell.stdin.getWriter();
+        writer.write(new TextEncoder().encode(message));
+        writer.releaseLock();
+      }
+    },
+    close(ws) {
+      ws.data = { ...ws.data, dead: true };
+      if (ws.data?.shell) {
+        ws.data.shell.stdin.end();
+        ws.data.shell.kill();
+      }
+    },
+    drain(ws) {},
   },
 });
 
