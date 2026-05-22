@@ -2146,3 +2146,78 @@
   padding: 8px 10px;
   white-space: nowrap;
 }
+
+/* Remote path prompt modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-content {
+  background: var(--bg-primary, #0f1115);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  min-width: 400px;
+  max-width: 520px;
+  padding: 0;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+.modal-header {
+  padding: 20px 24px 0;
+}
+.modal-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #e1e4e8);
+}
+.modal-body {
+  padding: 12px 24px;
+}
+.modal-body p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text-secondary, #8b949e);
+}
+.modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  background: var(--bg-input, #161b22);
+  color: var(--text-primary, #e1e4e8);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.modal-input:focus {
+  border-color: var(--accent, #58a6ff);
+}
+.modal-input::placeholder {
+  color: var(--text-secondary, #484f58);
+}
+.modal-footer {
+  padding: 8px 24px 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.modal-footer button {
+  padding: 8px 18px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+  background: var(--bg-input, #21262d);
+  color: var(--text-primary, #c9d1d9);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+.modal-footer button:hover {
+  background: var(--bg-hover, #30363d);
+}
