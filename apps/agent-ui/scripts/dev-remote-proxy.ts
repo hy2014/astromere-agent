@@ -84,7 +84,8 @@ function writeJson(path: string, value: unknown) {
 }
 
 function canonicalWorkspaceRoot(root: string): string {
-  const resolved = resolve(root);
+  const expanded = expandHome(root);
+  const resolved = resolve(expanded);
   if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
     throw new Error(`workspace root is not a directory: ${root}`);
   }
