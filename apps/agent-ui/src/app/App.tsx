@@ -14,6 +14,7 @@ import {
   getAgentReplCapabilities,
   getAgentContextUsage,
   getAgentReplProcessStatus,
+  getDefaultWorkspace,
   killAgentReplProcess,
   interruptAgentTurn,
   listSkills,
@@ -3589,49 +3590,61 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    loadWorkspaceRegistry()
-      .then(async (registry) => {
-        const loadedProjects = await Promise.all(
-          registry.workspaces.map(async (workspace) => {
-            const sessions = await listRuntimeSessions(workspace.root);
-            return {
-              id: projectIdFromRoot(workspace.root),
-              name: workspace.name,
-              root: workspace.root,
-              sessions: sessionsFromRuntimeSummaries(
-                workspace.root,
-                sessions,
-                hiddenSessions,
-              ),
-            } satisfies ProjectFolder;
-          }),
-        );
-        if (cancelled) {
-          return;
+    (async () => {
+      const registry = await loadWorkspaceRegistry();
+      if (cancelled) return;
+
+      // 如果注册表为空，尝试使用默认 workspace（当前目录）并注册它
+      if (registry.workspaces.length === 0) {
+        try {
+          const defaultWs = await getDefaultWorkspace();
+          await addWorkspaceRegistryEntry(defaultWs.root);
+          registry.workspaces = [{ root: defaultWs.root, name: defaultWs.name }];
+        } catch {
+          // 静默失败，让用户通过"+"手动添加
         }
-        setProjects(loadedProjects);
-        const firstProject = loadedProjects[0] ?? null;
-        const firstSessionId = firstProject?.sessions[0]?.id ?? null;
-        if (firstProject && firstSessionId) {
-          setExpandedFolders(new Set([firstProject.id]));
-          setActiveProjectId(firstProject.id);
-          setActiveSessionId(firstSessionId);
-          setSessionStreams((streams) => ({
-            ...streams,
-            [firstSessionId]:
-              streams[firstSessionId] ??
-              welcomeStream(
-                firstProject.name,
-                firstProject.sessions[0]?.title ?? "会话",
-              ),
-          }));
-        }
-      })
-      .catch((reason) => {
-        if (!cancelled) {
-          setError(String(reason));
-        }
-      });
+      }
+
+      const loadedProjects = await Promise.all(
+        registry.workspaces.map(async (workspace) => {
+          const sessions = await listRuntimeSessions(workspace.root);
+          return {
+            id: projectIdFromRoot(workspace.root),
+            name: workspace.name,
+            root: workspace.root,
+            sessions: sessionsFromRuntimeSummaries(
+              workspace.root,
+              sessions,
+              hiddenSessions,
+            ),
+          } satisfies ProjectFolder;
+        }),
+      );
+      if (cancelled) {
+        return;
+      }
+      setProjects(loadedProjects);
+      const firstProject = loadedProjects[0] ?? null;
+      const firstSessionId = firstProject?.sessions[0]?.id ?? null;
+      if (firstProject && firstSessionId) {
+        setExpandedFolders(new Set([firstProject.id]));
+        setActiveProjectId(firstProject.id);
+        setActiveSessionId(firstSessionId);
+        setSessionStreams((streams) => ({
+          ...streams,
+          [firstSessionId]:
+            streams[firstSessionId] ??
+            welcomeStream(
+              firstProject.name,
+              firstProject.sessions[0]?.title ?? "会话",
+            ),
+        }));
+      }
+    })().catch((reason) => {
+      if (!cancelled) {
+        setError(String(reason));
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -4168,13 +4181,25 @@ export function App() {
 
   async function handleAddProject() {
     try {
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "Add project folder",
-      });
-      if (typeof selected !== "string") {
-        return;
+      let selected: string | null;
+
+      if (activeRemoteProfile) {
+        // remote mode: 让用户输入远程服务器上的路径
+        selected = window.prompt("Enter the remote project path (must exist on the remote server):");
+        if (!selected || !selected.trim()) {
+          return;
+        }
+        selected = selected.trim();
+      } else {
+        // local mode: 使用 Tauri 本地目录选择器
+        selected = await openDialog({
+          directory: true,
+          multiple: false,
+          title: "Add project folder",
+        });
+        if (typeof selected !== "string") {
+          return;
+        }
       }
 
       const workspace = await openWorkspace(selected);
@@ -5792,24 +5817,24 @@ export function App() {
               {pendingPermission &&
               activeSessionId === pendingPermission.sessionId ? (
                 <div className="permission-request">
-                  <div className="permission-request-header">
-                    <strong>需要授权</strong>
-                    <span>{pendingPermission.toolName ?? "tool"}</span>
+                  <div className="permission-request-topline">
+                    <div className="permission-request-icon">!</div>
+                    <div className="permission-request-copy">
+                      <strong>需要授权</strong>
+                      <span className="permission-tool-name">{pendingPermission.toolName ?? "tool"}</span>
+                    </div>
                   </div>
-                  <p>{pendingPermission.prompt}</p>
+                  <div className="permission-prompt">{pendingPermission.prompt}</div>
                   <details className="permission-request-details">
-                    <summary>查看请求详情</summary>
+                    <summary>查看详情</summary>
                     <pre>
-                      {JSON.stringify(
-                        {
-                          requestId: pendingPermission.requestId,
-                          toolName: pendingPermission.toolName,
-                          input: pendingPermission.input,
-                          rawJson: pendingPermission.rawJson,
-                        },
-                        null,
-                        2,
-                      )}
+                      {(() => {
+                        const input = pendingPermission.input;
+                        if (!input) return "—";
+                        if (typeof input === "string") return input;
+                        try { return JSON.stringify(input, null, 2); }
+                        catch { return String(input); }
+                      })()}
                     </pre>
                   </details>
                   <div className="permission-request-actions">
@@ -8497,7 +8522,30 @@ function RichMarkdownMessage({
                 <span>{block.language || "text"}</span>
                 <button
                   type="button"
-                  onClick={() => navigator.clipboard?.writeText(block.code)}
+                  className="rich-code-copy-button"
+                  onClick={(event) => {
+                    const btn = event.currentTarget;
+                    const text = block.code;
+                    const doCopy = navigator.clipboard?.writeText(text)
+                      ?? new Promise((resolve, reject) => {
+                        const ta = document.createElement("textarea");
+                        ta.value = text;
+                        ta.style.position = "fixed";
+                        ta.style.left = "-9999px";
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try { document.execCommand("copy"); resolve(); }
+                        catch { reject(); }
+                        document.body.removeChild(ta);
+                      });
+                    doCopy.then(() => {
+                      btn.textContent = "已复制";
+                      setTimeout(() => { btn.textContent = "复制"; }, 1600);
+                    }).catch(() => {
+                      btn.textContent = "失败";
+                      setTimeout(() => { btn.textContent = "复制"; }, 1600);
+                    });
+                  }}
                 >
                   复制
                 </button>
