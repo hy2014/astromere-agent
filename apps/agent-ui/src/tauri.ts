@@ -65,6 +65,10 @@ export function removeWorkspaceRegistryEntry(path: string): Promise<WorkspaceReg
   return invoke("remove_workspace_registry_entry", { path });
 }
 
+export function loadDeepseekPricing(): Promise<any> {
+  return invoke("load_deepseek_pricing");
+}
+
 export function sqliteDatabaseInfo(): Promise<SqliteDatabaseInfo> {
   return invoke("sqlite_database_info");
 }
