@@ -2256,3 +2256,36 @@
 .context-menu-item.danger:hover {
   background: #fef2f2;
 }
+
+/* Modal input with suggestions */
+.modal-input-wrap {
+  position: relative;
+}
+.modal-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid #d0d5dd;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 10;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.modal-suggestion-item {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 13px;
+  color: #1a1a2e;
+  cursor: pointer;
+}
+.modal-suggestion-item:hover {
+  background: #f0f1f5;
+}
