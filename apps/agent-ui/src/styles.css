@@ -5883,3 +5883,100 @@ button.message-file-reference-chip:hover,
     transform: rotate(360deg);
   }
 }
+
+/* ── Terminal View ── */
+.terminal-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #1a1b1e;
+}
+
+.terminal-tabs-bar {
+  display: flex;
+  align-items: center;
+  background: #25262b;
+  border-bottom: 1px solid #373a40;
+  padding: 0 4px;
+  min-height: 32px;
+}
+
+.terminal-tabs {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+  gap: 2px;
+}
+
+.terminal-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #909296;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+}
+
+.terminal-tab:hover {
+  background: #2c2e33;
+  color: #c1c2c5;
+}
+
+.terminal-tab.active {
+  background: #1a1b1e;
+  color: #e0e0e0;
+  border-color: #373a40;
+}
+
+.terminal-tab-close {
+  background: none;
+  border: none;
+  color: #909296;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 2px;
+}
+
+.terminal-tab-close:hover {
+  color: #e0e0e0;
+  background: #3a3d41;
+}
+
+.terminal-new-tab {
+  background: none;
+  border: none;
+  color: #909296;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.terminal-new-tab:hover {
+  color: #e0e0e0;
+  background: #2c2e33;
+}
+
+.terminal-container {
+  flex: 1;
+  padding: 4px;
+  overflow: hidden;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+}
+
+.terminal-container .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: #373a40 #1a1b1e;
+}

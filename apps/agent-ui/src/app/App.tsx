@@ -53,6 +53,7 @@ import {
 import type { AgentReplCapabilityItem,
   RemoteProfile } from "../runtime";
 import "./App.css";
+import { TerminalView } from "./Terminal";
 import type {
   AgentContextUsage,
   AgentPermissionState,
@@ -218,7 +219,7 @@ type SettingsViewProps = {
   onRestoreSession: (session: HiddenSession) => void | Promise<void>;
 };
 
-type AppView = "workspace" | "skills" | "mcp" | "settings";
+type AppView = "workspace" | "skills" | "mcp" | "settings" | "terminal";
 
 function getActiveRemoteProfileBaseUrl(): string | null {
   const profile = loadActiveRemoteProfileSnapshot();
@@ -5560,9 +5561,17 @@ export function App() {
         </section>
 
         <div className="sidebar-footer">
-          <button className="sidebar-action" type="button" disabled>
+          <button
+            className={`sidebar-action ${activeView === "terminal" ? "active" : ""}`}
+            type="button"
+            onClick={() => {
+              setActiveView("terminal");
+              setPreviewTabs([]);
+              setActivePreviewId(null);
+            }}
+          >
             <span className="nav-icon small plain" aria-hidden="true">⌘</span>
-            <span>Terminal(todo)</span>
+            <span>Terminal</span>
           </button>
           <button
             className={`sidebar-action ${activeView === "settings" ? "active" : ""}`}
@@ -5578,8 +5587,9 @@ export function App() {
           </button>
         </div>
       </aside>
-
-      {activeView === "skills" ? (
+      {activeView === "terminal" ? (
+        <TerminalView onClose={() => setActiveView("workspace")} />
+      ) : activeView === "skills" ? (
         <SkillsView activeProject={activeProject ?? undefined} />
       ) : activeView === "mcp" ? (
         <McpServersView />
@@ -8067,8 +8077,7 @@ function SessionsSettingsPanel({
             ))
           )}
         </div>
-      </section>
-    </>
+      </section></>
   );
 }
 

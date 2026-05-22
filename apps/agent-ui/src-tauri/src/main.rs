@@ -13,6 +13,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
 mod sqlite;
+mod terminal;
+use terminal::{terminal_spawn, terminal_write, terminal_kill, terminal_resize, terminal_list};
 use sqlite::{
     sqlite_database_info, sqlite_execute, sqlite_query,
     save_bundle_usage_snapshot,
@@ -4613,7 +4615,8 @@ fn error_to_string(error: impl std::fmt::Display) -> String {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|_app| {
+        .setup(|app| {
+            terminal::set_app_handle(app.handle().clone());
             thread::spawn(|| {
                 if let Err(error) = refresh_deepseek_pricing_on_startup() {
                     eprintln!("[deepseek-pricing] refresh failed: {error}");
@@ -4668,6 +4671,11 @@ fn main() {
                     save_bundle_usage_snapshot,
             load_bundle_usage_snapshot,
             load_bundle_usage_snapshots_for_session,
+            terminal_spawn,
+            terminal_write,
+            terminal_kill,
+            terminal_resize,
+            terminal_list,
 ])
         .run(tauri::generate_context!())
         .expect("failed to run Claw Agent UI");
