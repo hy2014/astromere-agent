@@ -2207,7 +2207,7 @@ Bun.serve({
   },
   websocket: {
     open(ws) {
-      const shell = Bun.spawn(["bash", "--login"], {
+      const shell = Bun.spawn(["script", "-q", "/dev/null", "bash", "--login"], {
         stdin: "pipe",
         stdout: "pipe",
         stderr: "pipe",
