@@ -46,6 +46,7 @@ import {
   upsertRemoteProfile,
   useLocalRuntime,
   useRemoteRuntime,
+  removeWorkspaceRegistryEntry,
   } from "../runtime";
 import type { AgentReplCapabilityItem,
   RemoteProfile } from "../runtime";
@@ -3401,6 +3402,7 @@ export function App() {
   const [prompt, setPrompt] = useState("");
   const [remotePathPrompt, setRemotePathPrompt] = useState<string | null>(null);
   const remotePathPromptResolve = useRef<((value: string | null) => void) | null>(null);
+  const [projectContextMenu, setProjectContextMenu] = useState<{ root: string; x: number; y: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const promptHighlightRef = useRef<HTMLDivElement | null>(null);
   const [fileReferences, setFileReferences] = useState<LocalFileReference[]>([]);
@@ -3801,6 +3803,23 @@ export function App() {
       window.clearTimeout(timer);
     };
   }, [activeProject, fileMention.active, fileMention.query]);
+
+  async function handleDeleteProject(root: string) {
+    try {
+      await removeWorkspaceRegistryEntry(root);
+      setProjects((prev) => prev.filter((p) => p.root !== root));
+      setExpandedFolders((prev) => {
+        const next = new Set(prev);
+        next.forEach((id) => {
+          if (id.includes(root)) next.delete(id);
+        });
+        return next;
+      });
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   function toggleFolder(folderId: string) {
     setExpandedFolders((current) => {
@@ -5303,6 +5322,7 @@ export function App() {
                     className="tree-project"
                     type="button"
                     onClick={() => toggleFolder(folder.id)}
+                    onContextMenu={(e) => { e.preventDefault(); setProjectContextMenu({ root: folder.root, x: e.clientX, y: e.clientY }); }}
                   >
                     <span className="nav-icon small plain" aria-hidden="true">
                       {isExpanded ? "▾" : "▸"}
@@ -5411,6 +5431,24 @@ export function App() {
             {projects.length === 0 ? (
               <div className="sidebar-empty">点击 + 添加项目文件夹</div>
             ) : null}
+          {projectContextMenu && (
+            <>
+              <div className="context-menu-backdrop" onClick={() => setProjectContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setProjectContextMenu(null); }} />
+              <div className="context-menu" style={{ position: 'fixed', left: projectContextMenu.x, top: projectContextMenu.y, zIndex: 1001 }}>
+                <button
+                  className="context-menu-item danger"
+                  type="button"
+                  onClick={() => {
+                    const root = projectContextMenu.root;
+                    setProjectContextMenu(null);
+                    handleDeleteProject(root);
+                  }}
+                >
+                  删除项目
+                </button>
+              </div>
+            </>
+          )}
           </div>
 
           <button

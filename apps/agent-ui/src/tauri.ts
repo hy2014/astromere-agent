@@ -61,6 +61,10 @@ export function addWorkspaceRegistryEntry(path: string): Promise<WorkspaceRegist
   return invoke("add_workspace_registry_entry", { path });
 }
 
+export function removeWorkspaceRegistryEntry(path: string): Promise<WorkspaceRegistry> {
+  return invoke("remove_workspace_registry_entry", { path });
+}
+
 export function sqliteDatabaseInfo(): Promise<SqliteDatabaseInfo> {
   return invoke("sqlite_database_info");
 }
