@@ -15,6 +15,7 @@ base64 = "0.22"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
+tauri-plugin-shell = "2"
 
 [lints.rust]
 unsafe_code = "forbid"
