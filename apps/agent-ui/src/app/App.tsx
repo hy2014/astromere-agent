@@ -47,6 +47,7 @@ import {
   useLocalRuntime,
   useRemoteRuntime,
   removeWorkspaceRegistryEntry,
+  listProjectEntries,
   } from "../runtime";
 import type { AgentReplCapabilityItem,
   RemoteProfile } from "../runtime";
@@ -3402,6 +3403,9 @@ export function App() {
   const [prompt, setPrompt] = useState("");
   const [remotePathPrompt, setRemotePathPrompt] = useState<string | null>(null);
   const remotePathPromptResolve = useRef<((value: string | null) => void) | null>(null);
+  const [remotePathInput, setRemotePathInput] = useState("");
+  const [remotePathSuggestions, setRemotePathSuggestions] = useState<string[]>([]);
+  const remotePathDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [projectContextMenu, setProjectContextMenu] = useState<{ root: string; x: number; y: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const promptHighlightRef = useRef<HTMLDivElement | null>(null);
@@ -4234,17 +4238,24 @@ export function App() {
 
       await clientDebugLog("info", "handleAddProject.start", { remoteMode, activeProfile: activeRemoteProfile?.name ?? null });
       if (remoteMode) {
-        // remote mode: 弹出自定义输入框让用户输入远程服务器路径
+        // remote mode: 弹出自定义输入框让用户输入远程服务器路径，支持子目录自动补全
         selected = await new Promise<string | null>((resolve) => {
           remotePathPromptResolve.current = resolve;
+          setRemotePathInput("");
+          setRemotePathSuggestions([]);
           setRemotePathPrompt("Enter the remote project path (must exist on the remote server):");
         });
         await clientDebugLog("info", "handleAddProject.promptResult", { cancelled: selected === null, empty: selected != null && !selected.trim() });
         if (!selected || !selected.trim()) {
           setRemotePathPrompt(null);
+          setRemotePathInput("");
+          setRemotePathSuggestions([]);
           return;
         }
         selected = selected.trim();
+        setRemotePathInput("");
+        setRemotePathSuggestions([]);
+        setRemotePathPrompt(null);
         await clientDebugLog("info", "handleAddProject.path", { selected });
       } else {
         // local mode: 使用 Tauri 本地目录选择器
@@ -5287,22 +5298,65 @@ export function App() {
                 </div>
                 <div className="modal-body">
                   <p>{remotePathPrompt}</p>
-                  <input
-                    autoFocus
-                    className="modal-input"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        const value = (e.target as HTMLInputElement).value;
-                        remotePathPromptResolve.current?.(value);
-                        setRemotePathPrompt(null);
-                      }
-                      if (e.key === "Escape") {
-                        remotePathPromptResolve.current?.(null);
-                        setRemotePathPrompt(null);
-                      }
-                    }}
-                    placeholder="/home/user/project"
-                  />
+                  <div className="modal-input-wrap">
+                    <input
+                      autoFocus
+                      className="modal-input"
+                      value={remotePathInput}
+                      onChange={async (e) => {
+                        const value = e.target.value;
+                        setRemotePathInput(value);
+                        // 清空旧建议
+                        setRemotePathSuggestions([]);
+                        if (remotePathDebounce.current) clearTimeout(remotePathDebounce.current);
+                        if (value.length > 0) {
+                          remotePathDebounce.current = setTimeout(async () => {
+                            try {
+                              const entries = await listProjectEntries(value);
+                              const dirs = entries.filter((entry: any) => entry.type === "directory").map((d: any) => d.path);
+                              setRemotePathSuggestions(dirs.slice(0, 8));
+                            } catch {}
+                          }, 300);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          const value = (e.target as HTMLInputElement).value;
+                          remotePathPromptResolve.current?.(value);
+                          setRemotePathPrompt(null);
+                          setRemotePathInput("");
+                          setRemotePathSuggestions([]);
+                        }
+                        if (e.key === "Escape") {
+                          remotePathPromptResolve.current?.(null);
+                          setRemotePathPrompt(null);
+                          setRemotePathInput("");
+                          setRemotePathSuggestions([]);
+                        }
+                      }}
+                      placeholder="/home/user/project"
+                    />
+                    {remotePathSuggestions.length > 0 && (
+                      <div className="modal-suggestions">
+                        {remotePathSuggestions.map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            className="modal-suggestion-item"
+                            onClick={() => {
+                              remotePathPromptResolve.current?.(s);
+                              setRemotePathPrompt(null);
+                              setRemotePathInput("");
+                              setRemotePathSuggestions([]);
+                            }}
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="modal-footer">
                   <button onClick={() => { remotePathPromptResolve.current?.(null); setRemotePathPrompt(null); }}>Cancel</button>
