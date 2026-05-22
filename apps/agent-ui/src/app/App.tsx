@@ -217,6 +217,25 @@ type SettingsViewProps = {
 
 type AppView = "workspace" | "skills" | "mcp" | "settings";
 
+function getActiveRemoteProfileBaseUrl(): string | null {
+  const profile = loadActiveRemoteProfileSnapshot();
+  return profile?.baseUrl ?? null;
+}
+
+async function clientDebugLog(level: string, message: string, data?: any) {
+  try {
+    const baseUrl = getActiveRemoteProfileBaseUrl();
+    if (!baseUrl) return;
+    await fetch(`${baseUrl}/debug/log`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ level, message, data }),
+    });
+  } catch {
+    // silent — logging should never break the app
+  }
+}
+
 function loadActiveRemoteProfileSnapshot(): RemoteProfile | null {
   try {
     const activeProfileId = getActiveRemoteProfileId();
@@ -3591,16 +3610,21 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      await clientDebugLog("info", "initialLoad.start", { remoteMode: !!activeRemoteProfile });
       const registry = await loadWorkspaceRegistry();
+      await clientDebugLog("info", "initialLoad.registry", { count: registry.workspaces.length });
       if (cancelled) return;
 
       // 如果注册表为空，尝试使用默认 workspace（当前目录）并注册它
       if (registry.workspaces.length === 0) {
         try {
+          await clientDebugLog("info", "initialLoad.getDefaultWorkspace");
           const defaultWs = await getDefaultWorkspace();
+          await clientDebugLog("info", "initialLoad.defaultWorkspace", { root: defaultWs.root, name: defaultWs.name });
           await addWorkspaceRegistryEntry(defaultWs.root);
           registry.workspaces = [{ root: defaultWs.root, name: defaultWs.name }];
-        } catch {
+        } catch (e) {
+          await clientDebugLog("error", "initialLoad.defaultWorkspaceFailed", { error: String(e) });
           // 静默失败，让用户通过"+"手动添加
         }
       }
@@ -3608,6 +3632,7 @@ export function App() {
       const loadedProjects = await Promise.all(
         registry.workspaces.map(async (workspace) => {
           const sessions = await listRuntimeSessions(workspace.root);
+          await clientDebugLog("info", "initialLoad.projectSessions", { root: workspace.root, sessionCount: sessions.length });
           return {
             id: projectIdFromRoot(workspace.root),
             name: workspace.name,
@@ -3623,6 +3648,7 @@ export function App() {
       if (cancelled) {
         return;
       }
+      await clientDebugLog("info", "initialLoad.projectsLoaded", { count: loadedProjects.length });
       setProjects(loadedProjects);
       const firstProject = loadedProjects[0] ?? null;
       const firstSessionId = firstProject?.sessions[0]?.id ?? null;
@@ -3642,6 +3668,7 @@ export function App() {
       }
     })().catch((reason) => {
       if (!cancelled) {
+        clientDebugLog("error", "initialLoad.catch", { error: String(reason) });
         setError(String(reason));
       }
     });
@@ -4182,14 +4209,19 @@ export function App() {
   async function handleAddProject() {
     try {
       let selected: string | null;
+      const remoteMode = !!activeRemoteProfile;
 
-      if (activeRemoteProfile) {
+      await clientDebugLog("info", "handleAddProject.start", { remoteMode, activeProfile: activeRemoteProfile?.name ?? null });
+
+      if (remoteMode) {
         // remote mode: 让用户输入远程服务器上的路径
         selected = window.prompt("Enter the remote project path (must exist on the remote server):");
+        await clientDebugLog("info", "handleAddProject.promptResult", { cancelled: selected === null, empty: selected != null && !selected.trim() });
         if (!selected || !selected.trim()) {
           return;
         }
         selected = selected.trim();
+        await clientDebugLog("info", "handleAddProject.path", { selected });
       } else {
         // local mode: 使用 Tauri 本地目录选择器
         selected = await openDialog({
@@ -4198,20 +4230,34 @@ export function App() {
           title: "Add project folder",
         });
         if (typeof selected !== "string") {
+          await clientDebugLog("info", "handleAddProject.dialogCancelled", { selected });
           return;
         }
       }
 
+      await clientDebugLog("info", "handleAddProject.openWorkspace", { selected });
       const workspace = await openWorkspace(selected);
+      await clientDebugLog("info", "handleAddProject.openWorkspaceResult", { workspace });
+
+      await clientDebugLog("info", "handleAddProject.addRegistryEntry", { root: workspace.root });
       await addWorkspaceRegistryEntry(workspace.root);
+
       const projectId = projectIdFromRoot(workspace.root);
+      await clientDebugLog("info", "handleAddProject.listSessions", { root: workspace.root });
       const existingSessions = await listRuntimeSessions(workspace.root);
+      await clientDebugLog("info", "handleAddProject.sessionsResult", { count: existingSessions.length });
+
       const initialSessions = sessionsFromRuntimeSummaries(
         workspace.root,
         existingSessions,
         hiddenSessions,
       );
       const firstSessionId = initialSessions[0]?.id ?? null;
+      await clientDebugLog("info", "handleAddProject.initialSessions", {
+        initialCount: initialSessions.length,
+        firstSessionId,
+        isPending: initialSessions[0]?.isPending ?? false,
+      });
       if (!firstSessionId) {
         throw new Error("failed to initialize runtime session");
       }
@@ -4247,7 +4293,9 @@ export function App() {
       setPreviewTabs([]);
       setActivePreviewId(null);
       setError(null);
+      await clientDebugLog("info", "handleAddProject.success", { projectId });
     } catch (reason) {
+      await clientDebugLog("error", "handleAddProject.error", { error: String(reason) });
       setError(String(reason));
     }
   }
