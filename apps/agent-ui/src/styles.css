@@ -5980,3 +5980,37 @@ button.message-file-reference-chip:hover,
   scrollbar-width: thin;
   scrollbar-color: #373a40 #1a1b1e;
 }
+
+/* Remote Terminal Placeholder */
+.terminal-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: #1a1b1e;
+  color: #909296;
+}
+
+.terminal-placeholder-content {
+  text-align: center;
+  padding: 2rem;
+}
+
+.terminal-placeholder-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.3;
+}
+
+.terminal-placeholder-content h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #c1c2c5;
+  margin-bottom: 0.5rem;
+}
+
+.terminal-placeholder-content p {
+  font-size: 0.875rem;
+  max-width: 24rem;
+  line-height: 1.5;
+}

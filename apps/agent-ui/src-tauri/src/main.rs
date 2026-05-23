@@ -2624,8 +2624,7 @@ fn astromere_mcp_config_path() -> Result<PathBuf, String> {
         .map_err(|_| "failed to resolve home directory for MCP settings".to_string())?;
 
     Ok(PathBuf::from(home)
-        .join(".claude")
-        .join("astromere")
+        .join(".agent-ui")
         .join("mcp.json"))
 }
 
@@ -2783,7 +2782,9 @@ fn ensure_agent_repl_process(
         .arg("--permission-mode")
         .arg(&permission_mode)
         .arg("--permission-prompt-tool")
-        .arg("stdio");
+        .arg("stdio")
+        .arg("--mcp-config")
+        .arg(astromere_mcp_config_path()?.to_string_lossy().to_string());
 
     if claude_session_file_exists(&root_path, &session_id) {
         cmd.arg("--resume").arg(&session_id);
@@ -4020,12 +4021,6 @@ fn apply_agent_ui_env(
         output_dir.to_string_lossy().to_string(),
     );
 
-    if let Ok(mcp_config_path) = astromere_mcp_config_path() {
-        command.env(
-            "ASTROMERE_MCP_CONFIG",
-            mcp_config_path.to_string_lossy().to_string(),
-        );
-    }
 
     if let Ok(home) = std::env::var("HOME") {
         let helper_bin = PathBuf::from(home).join(".agent-ui").join("bin");

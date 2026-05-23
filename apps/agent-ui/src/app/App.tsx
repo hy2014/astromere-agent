@@ -54,7 +54,7 @@ import type { AgentReplCapabilityItem,
   RemoteProfile } from "../runtime";
 import "./App.css";
 import { TerminalView } from "./Terminal";
-import { TerminalRemoteView } from "./TerminalRemote";
+import { RemoteTerminalPlaceholder } from "./RemoteTerminalPlaceholder";
 import type {
   AgentContextUsage,
   AgentPermissionState,
@@ -5590,10 +5590,7 @@ export function App() {
       </aside>
       {activeView === "terminal" ? (
         activeRemoteProfile ? (
-          <TerminalRemoteView
-            onClose={() => setActiveView("workspace")}
-            remoteBaseUrl={activeRemoteProfile.baseUrl}
-          />
+          <RemoteTerminalPlaceholder onClose={() => setActiveView("workspace")} />
         ) : (
           <TerminalView onClose={() => setActiveView("workspace")} />
         )
@@ -6815,9 +6812,16 @@ function SkillsView({ activeProject }: SkillsViewProps) {
   );
 }
 
+type McpEnvDraftRow = {
+  id: string;
+  key: string;
+  value: string;
+};
+
 type McpServerDraftRow = {
   id: string;
   name: string;
+  type: string;
   command: string;
   argsText: string;
   envRows: McpEnvDraftRow[];
@@ -6870,6 +6874,7 @@ function mcpDraftRowsFromSettings(settings: unknown): McpServerDraftRow[] {
     return {
       id: createMcpDraftId("server"),
       name,
+      type: typeof server.type === "string" ? server.type : "stdio",
       command: typeof server.command === "string" ? server.command : "",
       argsText: stringifyMcpArgs(server.args),
       envRows: parseMcpEnvRows(server.env),
@@ -6891,6 +6896,7 @@ function mcpSettingsFromDraftRows(rows: McpServerDraftRow[]): McpSettings {
       .filter(([key]) => Boolean(key));
 
     const server: McpSettings["mcpServers"][string] = { command, tools: [] };
+    if (row.type && row.type !== "stdio") server.type = row.type;
     if (args.length > 0) server.args = args;
     if (envEntries.length > 0) server.env = Object.fromEntries(envEntries);
 
@@ -6981,6 +6987,7 @@ function McpServersView() {
       {
         id: createMcpDraftId("server"),
         name: "",
+        type: "stdio",
         command: "",
         argsText: "",
         envRows: [],
@@ -6994,6 +7001,7 @@ function McpServersView() {
       {
         id: createMcpDraftId("server"),
         name: "my-server",
+        type: "stdio",
         command: "python",
         argsText: "path/to/mcp_server.py",
         envRows: [
@@ -7162,6 +7170,16 @@ function McpServersView() {
                       placeholder="my-server"
                       onChange={(event) => updateServerRow(row.id, { name: event.target.value })}
                     />
+                  </label>
+                  <label>
+                    <span>Type</span>
+                    <select
+                      value={row.type}
+                      onChange={(event) => updateServerRow(row.id, { type: event.target.value })}
+                    >
+                      <option value="stdio">stdio (recommended)</option>
+                      <option value="http">http</option>
+                    </select>
                   </label>
                   <label>
                     <span>Command</span>
