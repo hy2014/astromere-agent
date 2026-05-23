@@ -17,7 +17,7 @@ const debugLogDir = process.env.AGENT_UI_DEBUG_LOG ?? join(dataDir, "debug-logs"
 const workspaceRegistryPath = join(dataDir, "workspace-registry.json");
 const modelSettingsPath = join(dataDir, "model-settings.json");
 const mcpSettingsPath =
-  process.env.ASTROMERE_MCP_CONFIG ?? join(homedir(), ".claude", "astromere", "mcp.json");
+  join(homedir(), ".agent-ui", "mcp.json");
 
 type WorkspaceState = { root: string; name: string };
 type WorkspaceRegistry = { workspaces: WorkspaceState[] };
@@ -853,7 +853,7 @@ function applyAgentUiEnv(env: Record<string, string>, root: string, sessionId: s
   env.ASTROMERE_AGENT_UI_WORKSPACE_ROOT = root;
   env.ASTROMERE_AGENT_UI_SESSION_ID = effectiveSessionId;
   env.ASTROMERE_AGENT_UI_OUTPUT_DIR = outputDir;
-  env.ASTROMERE_MCP_CONFIG = mcpSettingsPath;
+
 }
 
 function processStatus(root: string, sessionId: string) {
@@ -1343,6 +1343,8 @@ function buildAgentReplArgs(
   if (model !== "default") {
     args.push("--model", model);
   }
+
+  args.push("--mcp-config", mcpSettingsPath);
 
   return args;
 }
