@@ -4,3 +4,5 @@ dist/
 bun.lock
 bun.lockb
 .DS_Store
+apps/agent-ui-stable
+.idea
