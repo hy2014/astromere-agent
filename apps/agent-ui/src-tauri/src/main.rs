@@ -2782,9 +2782,13 @@ fn ensure_agent_repl_process(
         .arg("--permission-mode")
         .arg(&permission_mode)
         .arg("--permission-prompt-tool")
-        .arg("stdio")
-        .arg("--mcp-config")
-        .arg(astromere_mcp_config_path()?.to_string_lossy().to_string());
+        .arg("stdio");
+
+    let mcp_config_path = astromere_mcp_config_path()?;
+    if mcp_config_path.is_file() {
+        cmd.arg("--mcp-config")
+            .arg(mcp_config_path.to_string_lossy().to_string());
+    }
 
     if claude_session_file_exists(&root_path, &session_id) {
         cmd.arg("--resume").arg(&session_id);

@@ -10,73 +10,8 @@ import type {
   SlashCommandMenuLevel,
   SlashRootItem,
 } from "../app/types";
-import { localFileReferenceName } from "../app/file-utils";
+import { localFileReferenceName, extractPromptSkillToken, detectFileMention, detectSlashCommandMenu } from "../app/file-utils";
 import { formatFileSize } from "../app/stream-processor";
-
-// --- Pure functions ---
-
-export function detectFileMention(value: string, cursor: number): FileMentionState {
-  const beforeCursor = value.slice(0, cursor);
-  const atIndex = beforeCursor.lastIndexOf("@");
-  if (atIndex < 0) {
-    return { active: false, query: "", start: 0, end: 0 };
-  }
-
-  const charBefore = atIndex > 0 ? beforeCursor[atIndex - 1] : null;
-  if (charBefore !== null && charBefore !== " " && charBefore !== "\n" && charBefore !== "\t") {
-    return { active: false, query: "", start: 0, end: 0 };
-  }
-
-  const afterAt = value.slice(atIndex + 1, cursor);
-  const hasSpace = /\s/.test(afterAt);
-  if (hasSpace) {
-    return { active: false, query: "", start: 0, end: 0 };
-  }
-
-  return {
-    active: true,
-    query: afterAt,
-    start: atIndex,
-    end: cursor,
-  };
-}
-
-export function detectSlashCommandMenu(
-  value: string,
-  cursor: number,
-): { active: boolean; query: string; start: number; end: number } {
-  const beforeCursor = value.slice(0, cursor);
-  const atIndex = beforeCursor.lastIndexOf("/");
-  if (atIndex < 0) {
-    return { active: false, query: "", start: 0, end: 0 };
-  }
-
-  const charBefore = atIndex > 0 ? beforeCursor[atIndex - 1] : null;
-  if (charBefore !== null && charBefore !== " " && charBefore !== "\n" && charBefore !== "\t") {
-    return { active: false, query: "", start: 0, end: 0 };
-  }
-
-  const afterSlash = value.slice(atIndex + 1, cursor);
-  const hasSpace = /\s/.test(afterSlash);
-  if (hasSpace) {
-    return { active: false, query: "", start: 0, end: 0 };
-  }
-
-  return {
-    active: true,
-    query: afterSlash,
-    start: atIndex,
-    end: cursor,
-  };
-}
-
-export function extractPromptSkillToken(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("/")) return null;
-  const spaceIndex = trimmed.indexOf(" ");
-  if (spaceIndex < 0) return trimmed.slice(1);
-  return trimmed.slice(1, spaceIndex);
-}
 
 export function renderPromptHighlightedText(value: string) {
   const parts: Array<string | JSX.Element> = [];
