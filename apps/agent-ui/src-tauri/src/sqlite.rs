@@ -31,8 +31,8 @@ fn sqlite_database_path() -> Result<PathBuf, String> {
         .map_err(|_| "failed to resolve home directory for SQLite database".to_string())?;
 
     Ok(PathBuf::from(home)
-        .join(".claw-agent-ui")
-        .join("sqllite")
+        .join(".agent-ui")
+        .join("sqlite")
         .join("agent-ui.db"))
 }
 

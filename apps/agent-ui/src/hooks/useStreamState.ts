@@ -62,6 +62,18 @@ import {
 } from "../app/stream-processor";
 import {
   rekeyDebugEvents,
+  assistantTurnDetails,
+  toolName,
+  commandFromToolUse,
+  summarizeToolUse,
+  isToolResultEvent,
+  isPermissionEvent,
+  summarizePermissionEvent,
+  textFromProcessEvent,
+  extractToolUsesFromRawJson,
+  truncateProcessDetail,
+  summarizeToolResultEvent,
+  toolUsesFromProcessEvent,
 } from "../app/debug-utils";
 import {
   isRecord,
@@ -74,6 +86,8 @@ import {
   permissionRequestIdFromEvent,
   permissionInputFromEvent,
   formatContextTokens,
+  debugStorageSource,
+  debugStorageSourceCounts,
 } from "../app/file-utils";
 
 // --- Types shared between hooks ---
@@ -546,7 +560,49 @@ export function useStreamState() {
       }
 
       try {
-        const payload = assistantDebugPayload(item, "copy");
+        const bundle = assistantDebugBundles[item.id];
+        const details = assistantTurnDetails(item, bundle ?? null);
+        const payload = {
+          kind: "agent-ui.assistant-message-debug",
+          action: "copy",
+          generatedAt: new Date().toISOString(),
+          sessionId: bundle?.sessionId ?? null,
+          root: bundle?.root ?? null,
+          messageId: item.id,
+          userMessage: bundle?.userMessage ?? null,
+          transportMessage: bundle?.transportMessage ?? null,
+          referencedFiles: bundle?.fileReferences ?? item.fileReferences ?? null,
+          displayedMessage: item.text,
+          displayedProgressText: item.progressText ?? null,
+          displayStatus: item.status ?? null,
+          summary: {
+            progressLineCount: details.progressLines.length,
+            commandCount: details.commandUses.length,
+            toolUseCount: details.toolUses.length,
+            toolResultCount: details.toolResults.length,
+            eventCount: details.eventCount,
+          },
+          debugSourceSummary: debugStorageSourceCounts(bundle?.events ?? []),
+          commands: details.commandUses.map((tool) => ({
+            name: toolName(tool),
+            command: commandFromToolUse(tool),
+            raw: tool,
+          })),
+          toolUses: details.toolUses.map((tool) => ({
+            name: toolName(tool),
+            summary: summarizeToolUse(tool),
+            raw: tool,
+          })),
+          bundleDisplayText: bundle?.displayText ?? null,
+          completed: bundle?.completed ?? null,
+          eventCount: bundle?.events.length ?? 0,
+          events: (bundle?.events ?? []).map((event) => ({
+            eventType: event.eventType,
+            receivedAt: new Date(event.receivedAt).toISOString(),
+            debugStorageSource: debugStorageSource(event),
+            payload: event.payload,
+          })),
+        };
         await navigator.clipboard.writeText(
           JSON.stringify(payload, null, 2),
         );
@@ -562,7 +618,7 @@ export function useStreamState() {
         // silent
       }
     },
-    [assistantDebugPayload],
+    [assistantDebugBundles],
   );
 
   const [isDebugOpen, setIsDebugOpen] = useState(false);

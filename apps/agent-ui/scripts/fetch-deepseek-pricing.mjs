@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
 const OFFICIAL_URL = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/";
-const settingsPath = join(homedir(), ".claw-agent-ui", "model-settings.json");
+const settingsPath = join(homedir(), ".agent-ui", "model-settings.json");
 
 function fail(message) {
   throw new Error(`[deepseek-pricing] ${message}`);

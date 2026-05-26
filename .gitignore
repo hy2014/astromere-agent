@@ -6,3 +6,4 @@ bun.lockb
 .DS_Store
 apps/agent-ui-stable
 .idea
+apps/agent-ui-s

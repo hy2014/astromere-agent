@@ -1,45 +1,78 @@
 use base64::{engine::general_purpose, Engine as _};
-use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::types::{
-    FileView, GitDiff, LocalImageMetadata, LocalImagePreview, ProjectEntry, ProjectEntryKind,
-    WorkspaceFileReference, WorkspaceRegistry, WorkspaceRegistryEntry, WorkspaceState,
+    FileView, GitDiff, LocalImageMetadata, LocalImagePreview, ProjectEntry,
+    ProjectEntryKind, WorkspaceFileReference, WorkspaceRegistry,
+    WorkspaceRegistryEntry, WorkspaceState,
 };
 use crate::utils::{
-    canonical_workspace_root, error_to_string, expand_absolute_or_home_reference,
-    is_absolute_or_home_reference, is_supported_image_path, image_mime_for_path,
+    canonical_workspace_root, display_local_reference_path, error_to_string,
+    expand_absolute_or_home_reference, is_absolute_or_home_reference,
+    is_supported_image_path, image_mime_for_path,
     language_for_path, read_workspace_registry, resolve_workspace_path,
     resolve_workspace_path_allow_missing, write_workspace_registry,
 };
 
+#[allow(dead_code)]
 fn is_ignored_dir(name: &str) -> bool {
     matches!(
         name,
         ".git"
             | "node_modules"
-            | "target"
-            | ".next"
-            | ".turbo"
             | "dist"
-            | ".claude"
-            | "__pycache__"
+            | "target"
+            | "build"
+            | ".next"
+            | ".nuxt"
+            | ".turbo"
+            | ".cache"
+            | ".bun"
             | ".venv"
             | "venv"
-            | ".mypy_cache"
-            | ".pytest_cache"
-            | ".DS_Store"
+            | "__pycache__"
+            | "coverage"
+            | "vendor"
+    )
+}
+
+fn is_ignored_file_reference_dir(name: &str) -> bool {
+    matches!(
+        name,
+        ".git"
+            | "node_modules"
+            | "dist"
+            | "target"
+            | "build"
+            | ".next"
+            | ".nuxt"
+            | ".turbo"
+            | ".cache"
+            | ".bun"
+            | ".venv"
+            | "venv"
+            | "__pycache__"
+            | "coverage"
+            | "vendor"
     )
 }
 
 fn normalize_reference_query(value: &str) -> String {
-    value.trim().to_lowercase()
+    value
+        .trim()
+        .trim_start_matches('@')
+        .replace('～', "~")
+        .to_ascii_lowercase()
+        .replace('\\', "/")
 }
 
 fn raw_reference_query(value: &str) -> String {
-    value.to_string()
+    value
+        .trim()
+        .trim_start_matches('@')
+        .replace('～', "~")
+        .replace('\\', "/")
 }
 
 fn resolve_local_reference_file_path(root: &Path, path: &str) -> Result<(PathBuf, String), String> {
@@ -66,307 +99,274 @@ fn resolve_local_reference_file_path(root: &Path, path: &str) -> Result<(PathBuf
     Ok((resolved, raw_path))
 }
 
+fn fuzzy_contains(value: &str, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let mut query_chars = query.chars();
+    let mut current = match query_chars.next() {
+        Some(ch) => ch,
+        None => return true,
+    };
+    for ch in value.chars() {
+        if ch == current {
+            match query_chars.next() {
+                Some(next) => current = next,
+                None => return true,
+            }
+        }
+    }
+    false
+}
+
 fn file_reference_from_absolute_path(path: &Path, score: i64) -> Option<WorkspaceFileReference> {
-    let path_str = path.to_string_lossy().to_string();
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
-    let directory = path
+    let canonical = path.canonicalize().ok()?;
+    let metadata = fs::metadata(&canonical).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+
+    let name = canonical.file_name()?.to_string_lossy().to_string();
+    let display_path = display_local_reference_path(&canonical);
+    let directory = canonical
         .parent()
-        .map(|p| p.to_string_lossy().to_string())
+        .map(display_local_reference_path)
         .unwrap_or_default();
-    let extension = path.extension().and_then(|e| e.to_str()).map(|e| e.to_string());
-    let metadata = fs::metadata(path).ok()?;
-    let size = metadata.len();
-    let modified = metadata
+    let extension = canonical
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_string());
+    let modified_epoch_millis = metadata
         .modified()
         .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis());
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis());
 
     Some(WorkspaceFileReference {
-        path: path_str,
+        path: display_path,
         name,
         directory,
         extension,
-        size_bytes: Some(size),
-        modified_epoch_millis: modified,
+        size_bytes: Some(metadata.len()),
+        modified_epoch_millis,
         score,
     })
 }
 
 fn search_absolute_or_home_file_references(
     query: &str,
-    max_results: usize,
-) -> Result<Vec<WorkspaceFileReference>, String> {
-    let base_path = expand_absolute_or_home_reference(query)
-        .ok_or_else(|| format!("invalid path: {query}"))?;
-
-    if base_path.is_file() {
-        if let Some(reference) = file_reference_from_absolute_path(&base_path, 1000) {
-            return Ok(vec![reference]);
-        }
-        return Ok(vec![]);
+    limit: usize,
+) -> Vec<WorkspaceFileReference> {
+    let raw_query = raw_reference_query(query);
+    if !is_absolute_or_home_reference(&raw_query) {
+        return Vec::new();
     }
 
-    if base_path.is_dir() {
-        let mut results = Vec::new();
-        let read_dir = fs::read_dir(&base_path)
-            .map_err(|e| format!("failed to read directory: {e}"))?;
+    let Some(expanded) = expand_absolute_or_home_reference(&raw_query) else {
+        return Vec::new();
+    };
 
-        for entry in read_dir.filter_map(|e| e.ok()).take(max_results) {
+    if let Some(reference) = file_reference_from_absolute_path(&expanded, 30_000) {
+        return vec![reference];
+    }
+
+    let (directory, partial_name) = if expanded.is_dir() {
+        (expanded, String::new())
+    } else {
+        let parent = expanded
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| expanded.clone());
+        let partial = expanded
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+        (parent, partial)
+    };
+
+    if !directory.is_dir() {
+        return Vec::new();
+    }
+
+    let normalized_partial = partial_name.to_ascii_lowercase();
+    let mut references = Vec::new();
+    if let Ok(entries) = fs::read_dir(&directory) {
+        for entry in entries.flatten() {
+            if references.len() >= limit.saturating_mul(3) {
+                break;
+            }
             let path = entry.path();
-            if path.is_file() {
-                if let Some(reference) = file_reference_from_absolute_path(&path, 500) {
-                    results.push(reference);
-                }
+            let Ok(metadata) = entry.metadata() else { continue };
+            if !metadata.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let normalized_name = name.to_ascii_lowercase();
+            if !normalized_partial.is_empty()
+                && !normalized_name.contains(&normalized_partial)
+                && !fuzzy_contains(&normalized_name, &normalized_partial)
+            {
+                continue;
+            }
+            let score = if normalized_partial.is_empty() {
+                10_000_i64.saturating_sub(name.len() as i64)
+            } else if normalized_name == normalized_partial {
+                24_000
+            } else if normalized_name.starts_with(&normalized_partial) {
+                20_000
+            } else if normalized_name.contains(&normalized_partial) {
+                16_000
+            } else {
+                12_000
+            };
+            if let Some(reference) = file_reference_from_absolute_path(&path, score) {
+                references.push(reference);
             }
         }
-        return Ok(results);
     }
 
-    Ok(vec![])
+    references.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    references.dedup_by(|a, b| a.path == b.path);
+    references.truncate(limit);
+    references
 }
 
 fn file_reference_score(path: &str, name: &str, query: &str) -> Option<i64> {
-    let lower_name = name.to_lowercase();
-    let lower_path = path.to_lowercase();
+    let normalized_path = path.to_ascii_lowercase().replace('\\', "/");
+    let normalized_name = name.to_ascii_lowercase();
+    let query = normalize_reference_query(query);
 
-    if lower_name == query {
-        return Some(1000);
+    if query.is_empty() {
+        return Some(10_000_i64.saturating_sub(path.len() as i64));
     }
-    if lower_name.starts_with(query) {
-        return Some(900);
+
+    let query_tokens: Vec<&str> = query
+        .split(|ch: char| ch.is_whitespace())
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    if query_tokens
+        .iter()
+        .any(|token| !normalized_path.contains(token) && !fuzzy_contains(&normalized_path, token))
+    {
+        return None;
     }
-    if lower_name.contains(query) {
-        return Some(700);
+
+    let mut score = 0_i64;
+    if normalized_path == query {
+        score += 20_000;
     }
-    if lower_path.contains(query) {
-        return Some(300);
+    if normalized_name == query {
+        score += 16_000;
     }
-    None
+    if normalized_name.starts_with(&query) {
+        score += 12_000;
+    }
+    if normalized_path.starts_with(&query) {
+        score += 10_000;
+    }
+    if normalized_path.contains(&format!("/{query}")) {
+        score += 8_000;
+    }
+    if normalized_path.contains(&query) {
+        score += 5_000;
+    } else if fuzzy_contains(&normalized_path, &query) {
+        score += 2_000;
+    }
+
+    score += (query_tokens.len() as i64) * 100;
+    score -= path.len().min(300) as i64;
+    Some(score)
 }
 
 fn workspace_file_reference_from_path(
     root: &Path,
-    path: &Path,
+    relative_path: &str,
     query: &str,
 ) -> Option<WorkspaceFileReference> {
-    let relative = path.strip_prefix(root).ok()?;
-    let path_str = relative.to_string_lossy().to_string();
-    let name = path
+    let normalized_relative = relative_path.trim().replace('\\', "/");
+    if normalized_relative.is_empty() || normalized_relative.ends_with('/') {
+        return None;
+    }
+    if normalized_relative
+        .split('/')
+        .any(|part| is_ignored_file_reference_dir(part))
+    {
+        return None;
+    }
+
+    let absolute = root.join(&normalized_relative);
+    let metadata = fs::metadata(&absolute).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+
+    let name = Path::new(&normalized_relative)
         .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
+        .and_then(|value| value.to_str())
+        .unwrap_or(&normalized_relative)
         .to_string();
-
-    let score = file_reference_score(&path_str, &name, query)?;
-
-    let directory = relative
+    let score = file_reference_score(&normalized_relative, &name, query)?;
+    let directory = Path::new(&normalized_relative)
         .parent()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let extension = path.extension().and_then(|e| e.to_str()).map(|e| e.to_string());
-    let metadata = fs::metadata(path).ok()?;
-    let size = metadata.len();
-    let modified = metadata
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| ".".to_string());
+    let extension = Path::new(&normalized_relative)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string());
+    let modified_epoch_millis = metadata
         .modified()
         .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis());
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis());
 
     Some(WorkspaceFileReference {
-        path: path_str,
+        path: normalized_relative,
         name,
         directory,
         extension,
-        size_bytes: Some(size),
-        modified_epoch_millis: modified,
+        size_bytes: Some(metadata.len()),
+        modified_epoch_millis,
         score,
     })
 }
 
 fn collect_workspace_file_references(
     root: &Path,
+    current: &Path,
     query: &str,
-    max_results: usize,
-) -> Result<Vec<WorkspaceFileReference>, String> {
-    let mut results = Vec::new();
-    let mut dirs_to_visit = vec![root.to_path_buf()];
-    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-
-    while let Some(dir) = dirs_to_visit.pop() {
-        if results.len() >= max_results {
-            break;
-        }
-        if !visited.insert(dir.clone()) {
-            continue;
-        }
-
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-
-        for entry in entries.filter_map(|e| e.ok()) {
-            if results.len() >= max_results {
-                break;
-            }
-
-            let path = entry.path();
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            if is_ignored_dir(&file_name) {
-                continue;
-            }
-
-            if path.is_dir() {
-                dirs_to_visit.push(path);
-            } else if path.is_file() {
-                if let Some(reference) = workspace_file_reference_from_path(root, &path, query) {
-                    results.push(reference);
-                }
-            }
-        }
-    }
-
-    results.sort_by(|a, b| b.score.cmp(&a.score));
-    results.truncate(max_results);
-    Ok(results)
-}
-
-#[tauri::command]
-pub fn default_workspace() -> Result<WorkspaceState, String> {
-    let registry = read_workspace_registry()?;
-    if let Some(entry) = registry.workspaces.first() {
-        return Ok(WorkspaceState {
-            root: entry.root.clone(),
-            name: entry.name.clone(),
-        });
-    }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| "HOME not set".to_string())?;
-    Ok(WorkspaceState {
-        root: home,
-        name: "Home".to_string(),
-    })
-}
-
-#[tauri::command]
-pub fn open_workspace(path: String) -> Result<WorkspaceState, String> {
-    let resolved = PathBuf::from(&path);
-    if !resolved.is_dir() {
-        return Err(format!("not a directory: {path}"));
-    }
-    let name = resolved
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace")
-        .to_string();
-
-    let mut registry = read_workspace_registry()?;
-    registry.workspaces.retain(|e| e.root != path);
-    registry.workspaces.insert(
-        0,
-        WorkspaceRegistryEntry {
-            root: path.clone(),
-            name: name.clone(),
-        },
-    );
-    write_workspace_registry(&registry)?;
-
-    Ok(WorkspaceState {
-        root: path,
-        name,
-    })
-}
-
-#[tauri::command]
-pub fn load_workspace_registry() -> Result<WorkspaceRegistry, String> {
-    read_workspace_registry()
-}
-
-#[tauri::command]
-pub fn add_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, String> {
-    let mut registry = read_workspace_registry()?;
-    let resolved = PathBuf::from(&path);
-    let name = resolved
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace")
-        .to_string();
-    registry.workspaces.retain(|e| e.root != path);
-    registry.workspaces.push(WorkspaceRegistryEntry {
-        root: path,
-        name,
-    });
-    write_workspace_registry(&registry)?;
-    Ok(registry)
-}
-
-#[tauri::command]
-pub fn remove_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, String> {
-    let mut registry = read_workspace_registry()?;
-    registry.workspaces.retain(|e| e.root != path);
-    write_workspace_registry(&registry)?;
-    Ok(registry)
-}
-
-#[tauri::command]
-pub fn list_project_entries(root: String) -> Result<Vec<ProjectEntry>, String> {
-    let root_path = canonical_workspace_root(&root)?;
-    let mut entries = Vec::new();
-    collect_directory_entries(&root_path, &root_path, &mut entries, 0)?;
-    Ok(entries)
-}
-
-fn collect_directory_entries(
-    root: &Path,
-    dir: &Path,
-    entries: &mut Vec<ProjectEntry>,
-    depth: usize,
+    out: &mut Vec<WorkspaceFileReference>,
+    scanned: &mut usize,
 ) -> Result<(), String> {
-    if depth > 2 {
+    if *scanned > 20_000 {
         return Ok(());
     }
-    let read_dir = fs::read_dir(dir)
-        .map_err(|e| format!("failed to read directory {}: {e}", dir.display()))?;
 
-    for entry in read_dir {
-        let entry = entry.map_err(|e| format!("failed to read entry: {e}"))?;
+    for entry in fs::read_dir(current).map_err(error_to_string)? {
+        let entry = entry.map_err(error_to_string)?;
         let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
 
-        if is_ignored_dir(path.file_name().and_then(|n| n.to_str()).unwrap_or("")) {
+        if path.is_dir() {
+            if !is_ignored_file_reference_dir(&name) {
+                collect_workspace_file_references(root, &path, query, out, scanned)?;
+            }
             continue;
         }
 
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        if path.is_dir() {
-            entries.push(ProjectEntry {
-                name: file_name,
-                path: path.to_string_lossy().to_string(),
-                kind: ProjectEntryKind::Directory,
-            });
-            collect_directory_entries(root, &path, entries, depth + 1)?;
-        } else {
-            entries.push(ProjectEntry {
-                name: file_name,
-                path: path.to_string_lossy().to_string(),
-                kind: ProjectEntryKind::File,
-            });
+        *scanned += 1;
+        if let Ok(relative) = path.strip_prefix(root) {
+            let relative_string = relative.to_string_lossy().replace('\\', "/");
+            if let Some(reference) =
+                workspace_file_reference_from_path(root, &relative_string, query)
+            {
+                out.push(reference);
+            }
         }
     }
+
     Ok(())
 }
 
@@ -377,93 +377,104 @@ pub fn search_workspace_files(
     max_results: Option<usize>,
 ) -> Result<Vec<WorkspaceFileReference>, String> {
     let root_path = canonical_workspace_root(&root)?;
-    let limit = max_results.unwrap_or(50);
-    let normalized_query = normalize_reference_query(&query);
-
-    let mut results = Vec::new();
-
-    if is_absolute_or_home_reference(&query) {
-        let refs = search_absolute_or_home_file_references(&query, limit)?;
-        results.extend(refs);
+    let limit = max_results.unwrap_or(20).clamp(1, 50);
+    let external_references = search_absolute_or_home_file_references(&query, limit);
+    if !external_references.is_empty() {
+        return Ok(external_references);
     }
+    let normalized_query = normalize_reference_query(&query);
+    let mut references = Vec::new();
 
-    if results.len() < limit {
-        let file_refs = collect_workspace_file_references(&root_path, &normalized_query, limit)?;
-        for r in file_refs {
-            if !results.iter().any(|existing: &WorkspaceFileReference| existing.path == r.path) {
-                results.push(r);
+    let git_output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root_path)
+        .arg("ls-files")
+        .arg("--cached")
+        .arg("--others")
+        .arg("--exclude-standard")
+        .output();
+
+    if let Ok(output) = git_output {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if let Some(reference) =
+                    workspace_file_reference_from_path(&root_path, line, &normalized_query)
+                {
+                    references.push(reference);
+                }
             }
         }
     }
 
-    results.truncate(limit);
-    Ok(results)
+    if references.is_empty() {
+        let mut scanned = 0_usize;
+        collect_workspace_file_references(
+            &root_path,
+            &root_path,
+            &normalized_query,
+            &mut references,
+            &mut scanned,
+        )?;
+    }
+
+    references.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    references.dedup_by(|a, b| a.path == b.path);
+    references.truncate(limit);
+    Ok(references)
 }
 
 #[tauri::command]
 pub fn read_workspace_file(root: String, path: String) -> Result<FileView, String> {
     let root_path = canonical_workspace_root(&root)?;
-    let file_path = resolve_workspace_path(&root_path, &path)?;
-
-    let metadata = fs::metadata(&file_path)
-        .map_err(|e| format!("failed to read file metadata: {e}"))?;
-    let size_bytes = metadata.len();
-
-    let content = fs::read_to_string(&file_path)
-        .map_err(|e| format!("failed to read file: {e}"))?;
-
-    let total_lines = content.lines().count();
-    let language = language_for_path(&path);
+    let resolved = resolve_workspace_path(&root_path, &path)?;
+    let metadata = fs::metadata(&resolved).map_err(error_to_string)?;
+    let content = fs::read_to_string(&resolved).map_err(error_to_string)?;
 
     Ok(FileView {
-        path: file_path.to_string_lossy().to_string(),
+        path,
+        total_lines: content.lines().count(),
+        size_bytes: metadata.len(),
+        language: language_for_path(&resolved.to_string_lossy()),
         content,
-        total_lines,
-        size_bytes,
-        language,
     })
 }
 
 #[tauri::command]
 pub fn read_local_reference_file(root: String, path: String) -> Result<FileView, String> {
     let root_path = canonical_workspace_root(&root)?;
-    let (file_path, _display_path) = resolve_local_reference_file_path(&root_path, &path)?;
-
-    let metadata = fs::metadata(&file_path)
-        .map_err(|e| format!("failed to read file metadata: {e}"))?;
-    let size_bytes = metadata.len();
-
-    let content = fs::read_to_string(&file_path)
-        .map_err(|e| format!("failed to read file: {e}"))?;
-
-    let total_lines = content.lines().count();
-    let language = language_for_path(&path);
+    let (resolved, display_path) = resolve_local_reference_file_path(&root_path, &path)?;
+    let metadata = fs::metadata(&resolved).map_err(error_to_string)?;
+    let content = fs::read_to_string(&resolved).map_err(error_to_string)?;
 
     Ok(FileView {
-        path: file_path.to_string_lossy().to_string(),
+        path: display_path,
+        total_lines: content.lines().count(),
+        size_bytes: metadata.len(),
+        language: language_for_path(&resolved.to_string_lossy()),
         content,
-        total_lines,
-        size_bytes,
-        language,
     })
 }
 
 #[tauri::command]
 pub fn read_local_image_metadata(root: String, path: String) -> Result<LocalImageMetadata, String> {
     let root_path = canonical_workspace_root(&root)?;
-    let file_path = resolve_workspace_path(&root_path, &path)?;
+    let resolved = crate::utils::resolve_local_reference_path(&root_path, &path)?;
 
-    if !is_supported_image_path(&file_path) {
-        return Err(format!("unsupported image format: {}", file_path.display()));
+    if !is_supported_image_path(&resolved) {
+        return Err(
+            "only png, jpg, jpeg, gif, webp, and svg image previews are supported".to_string(),
+        );
     }
 
-    let metadata = fs::metadata(&file_path)
-        .map_err(|e| format!("failed to read image metadata: {e}"))?;
-    let mime_type = image_mime_for_path(&file_path).to_string();
+    let metadata = fs::metadata(&resolved).map_err(error_to_string)?;
+    if !metadata.is_file() {
+        return Err("image preview path is not a file".to_string());
+    }
 
     Ok(LocalImageMetadata {
-        path: file_path.to_string_lossy().to_string(),
-        mime_type,
+        path: resolved.to_string_lossy().to_string(),
+        mime_type: image_mime_for_path(&resolved).to_string(),
         size_bytes: metadata.len(),
     })
 }
@@ -471,31 +482,39 @@ pub fn read_local_image_metadata(root: String, path: String) -> Result<LocalImag
 #[tauri::command]
 pub fn read_local_image_preview(root: String, path: String) -> Result<LocalImagePreview, String> {
     let root_path = canonical_workspace_root(&root)?;
-    let file_path = resolve_workspace_path(&root_path, &path)?;
+    let resolved = crate::utils::resolve_local_reference_path(&root_path, &path)?;
 
-    if !is_supported_image_path(&file_path) {
-        return Err(format!("unsupported image format: {}", file_path.display()));
+    if !is_supported_image_path(&resolved) {
+        return Err(
+            "only png, jpg, jpeg, gif, webp, and svg image previews are supported".to_string(),
+        );
     }
 
-    let metadata = fs::metadata(&file_path)
-        .map_err(|e| format!("failed to read image metadata: {e}"))?;
-    let mime_type = image_mime_for_path(&file_path);
+    let metadata = fs::metadata(&resolved).map_err(error_to_string)?;
+    if !metadata.is_file() {
+        return Err("image preview path is not a file".to_string());
+    }
 
-    let mut buffer = Vec::new();
-    fs::File::open(&file_path)
-        .map_err(|e| format!("failed to open image: {e}"))?
-        .read_to_end(&mut buffer)
-        .map_err(|e| format!("failed to read image: {e}"))?;
+    const MAX_IMAGE_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
+    if metadata.len() > MAX_IMAGE_PREVIEW_BYTES {
+        return Err(format!(
+            "image is too large to preview inline ({} bytes, max {} bytes)",
+            metadata.len(),
+            MAX_IMAGE_PREVIEW_BYTES
+        ));
+    }
 
+    let bytes = fs::read(&resolved).map_err(error_to_string)?;
+    let mime_type = image_mime_for_path(&resolved).to_string();
     let data_url = format!(
         "data:{};base64,{}",
         mime_type,
-        general_purpose::STANDARD.encode(&buffer)
+        general_purpose::STANDARD.encode(bytes)
     );
 
     Ok(LocalImagePreview {
-        path: file_path.to_string_lossy().to_string(),
-        mime_type: mime_type.to_string(),
+        path: resolved.to_string_lossy().to_string(),
+        mime_type,
         data_url,
         size_bytes: metadata.len(),
     })
@@ -504,17 +523,11 @@ pub fn read_local_image_preview(root: String, path: String) -> Result<LocalImage
 #[tauri::command]
 pub fn write_workspace_file(root: String, path: String, content: String) -> Result<(), String> {
     let root_path = canonical_workspace_root(&root)?;
-    let file_path = resolve_workspace_path_allow_missing(&root_path, &path)?;
-
-    if let Some(parent) = file_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create parent directories: {e}"))?;
+    let resolved = resolve_workspace_path_allow_missing(&root_path, &path)?;
+    if let Some(parent) = resolved.parent() {
+        fs::create_dir_all(parent).map_err(error_to_string)?;
     }
-
-    fs::write(&file_path, &content)
-        .map_err(|e| format!("failed to write file: {e}"))?;
-
-    Ok(())
+    fs::write(resolved, content).map_err(error_to_string)
 }
 
 #[tauri::command]
@@ -524,59 +537,132 @@ pub fn edit_workspace_file(
     old_string: String,
     new_string: String,
     replace_all: bool,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let root_path = canonical_workspace_root(&root)?;
-    let file_path = resolve_workspace_path(&root_path, &path)?;
+    let resolved = resolve_workspace_path(&root_path, &path)?;
+    let content = fs::read_to_string(&resolved).map_err(error_to_string)?;
 
-    let content = fs::read_to_string(&file_path)
-        .map_err(|e| format!("failed to read file: {e}"))?;
-
-    let new_content = if replace_all {
+    let updated = if replace_all {
         content.replace(&old_string, &new_string)
     } else {
-        match content.find(&old_string) {
-            Some(pos) => {
-                let mut result = content[..pos].to_string();
-                result.push_str(&new_string);
-                result.push_str(&content[pos + old_string.len()..]);
-                result
-            }
-            None => return Err(format!("old_string not found in file: {path}")),
-        }
+        content.replacen(&old_string, &new_string, 1)
     };
 
-    if new_content == content {
-        return Err("no changes made (old_string not found or replacement identical)".to_string());
+    if updated == content {
+        return Err("oldString not found".to_string());
     }
 
-    fs::write(&file_path, &new_content)
-        .map_err(|e| format!("failed to write file after edit: {e}"))?;
-
-    Ok(())
+    fs::write(&resolved, updated).map_err(error_to_string)?;
+    Ok(serde_json::json!({ "ok": true, "path": path }))
 }
 
 #[tauri::command]
 pub fn read_git_diff(root: String, path: Option<String>) -> Result<GitDiff, String> {
     let root_path = canonical_workspace_root(&root)?;
-
     let mut cmd = std::process::Command::new("git");
-    cmd.arg("-C")
-        .arg(&root_path)
-        .arg("diff")
-        .arg("--no-color");
+    cmd.arg("diff");
 
-    if let Some(ref p) = path {
+    if let Some(p) = &path {
         cmd.arg("--").arg(p);
     }
 
-    let output = cmd.output()
-        .map_err(|e| format!("failed to run git diff: {e}"))?;
-
+    let output = cmd
+        .current_dir(&root_path)
+        .output()
+        .map_err(error_to_string)?;
     let diff = String::from_utf8_lossy(&output.stdout).to_string();
 
     Ok(GitDiff {
         path,
-        is_empty: diff.is_empty(),
+        is_empty: diff.trim().is_empty(),
         diff,
     })
+}
+
+fn workspace_state_from_path(path: &Path) -> Result<WorkspaceState, String> {
+    let canonical = path.canonicalize().map_err(error_to_string)?;
+    if !canonical.is_dir() {
+        return Err("workspace path is not a directory".to_string());
+    }
+    Ok(WorkspaceState {
+        root: canonical.to_string_lossy().to_string(),
+        name: canonical
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn default_workspace() -> Result<WorkspaceState, String> {
+    let cwd = std::env::current_dir().map_err(error_to_string)?;
+    workspace_state_from_path(&cwd)
+}
+
+#[tauri::command]
+pub fn open_workspace(path: String) -> Result<WorkspaceState, String> {
+    workspace_state_from_path(Path::new(&path))
+}
+
+#[tauri::command]
+pub fn load_workspace_registry() -> Result<WorkspaceRegistry, String> {
+    read_workspace_registry()
+}
+
+#[tauri::command]
+pub fn add_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, String> {
+    let ws = workspace_state_from_path(Path::new(&path))?;
+    let mut registry = read_workspace_registry().unwrap_or_default();
+    if !registry.workspaces.iter().any(|w| w.root == ws.root) {
+        registry.workspaces.push(WorkspaceRegistryEntry {
+            root: ws.root,
+            name: ws.name,
+        });
+    }
+    write_workspace_registry(&registry)?;
+    Ok(registry)
+}
+
+#[tauri::command]
+pub fn remove_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, String> {
+    let mut registry = read_workspace_registry().unwrap_or_default();
+    registry.workspaces.retain(|w| w.root != path);
+    write_workspace_registry(&registry)?;
+    Ok(registry)
+}
+
+#[tauri::command]
+pub fn list_project_entries(root: String) -> Result<Vec<ProjectEntry>, String> {
+    let root_path = canonical_workspace_root(&root)?;
+    let mut entries = Vec::new();
+
+    for entry in fs::read_dir(&root_path).map_err(error_to_string)? {
+        let entry = entry.map_err(error_to_string)?;
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if name == ".git" || name == "node_modules" || name == "dist" || name == "target" {
+            continue;
+        }
+
+        let path = entry.path();
+        let kind = if path.is_dir() {
+            ProjectEntryKind::Directory
+        } else {
+            ProjectEntryKind::File
+        };
+
+        entries.push(ProjectEntry {
+            name,
+            path: path
+                .strip_prefix(&root_path)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string(),
+            kind,
+        });
+    }
+
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(entries)
 }

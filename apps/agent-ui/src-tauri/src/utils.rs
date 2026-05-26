@@ -32,7 +32,7 @@ pub fn generate_agent_ui_session_id() -> String {
 }
 
 pub fn process_key(root: &str, session_id: &str) -> String {
-    format!("{}::{}", root, session_id)
+    format!("{root}\n{session_id}")
 }
 
 pub fn now_millis() -> u128 {
@@ -59,10 +59,29 @@ pub fn value_summary_for_log(value: &Value) -> String {
         .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("<missing>");
+    let request_id = crate::control::control_response_request_id(value)
+        .or_else(|| value.get("request_id").and_then(|v| v.as_str()).map(|v| v.to_string()))
+        .unwrap_or_else(|| "<none>".to_string());
+    let session_id = crate::control::stream_value_session_id(value).unwrap_or_else(|| "<none>".to_string());
+    let subtype = value
+        .get("request")
+        .and_then(|request| request.get("subtype"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("subtype"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("<none>");
     let raw = serde_json::to_string(value).unwrap_or_else(|_| "<unserializable json>".to_string());
+
     format!(
-        "type={} raw={}",
+        "type={} request_id={} session_id={} subtype={} raw={}",
         event_type,
+        request_id,
+        session_id,
+        subtype,
         truncate_for_log(&raw, 1600)
     )
 }
@@ -72,6 +91,7 @@ pub fn repo_root() -> Result<PathBuf, String> {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo = manifest_dir
         .parent()
+        .and_then(|p| p.parent())
         .and_then(|p| p.parent())
         .ok_or_else(|| "Failed to resolve repo root from CARGO_MANIFEST_DIR".to_string())?;
     Ok(repo.to_path_buf())
@@ -92,10 +112,14 @@ pub fn claude_config_dir() -> Result<PathBuf, String> {
 }
 
 pub fn sanitize_claude_project_path(path: &Path) -> String {
+    // path.to_string_lossy()
+    //     .replace('/', "_")
+    //     .replace('\\', "_")
+    //     .replace(':', "_")
     path.to_string_lossy()
-        .replace('/', "_")
-        .replace('\\', "_")
-        .replace(':', "_")
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
 }
 
 pub fn claude_project_sessions_dir(root: &Path) -> Result<PathBuf, String> {
@@ -103,15 +127,11 @@ pub fn claude_project_sessions_dir(root: &Path) -> Result<PathBuf, String> {
     let project_name = sanitize_claude_project_path(root);
     Ok(config_dir
         .join("projects")
-        .join(project_name)
-        .join("sessions"))
+        .join(project_name))
 }
 
 pub fn canonical_workspace_root(root: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(root);
-    if path.is_relative() {
-        return Err(format!("workspace root must be an absolute path: {root}"));
-    }
+    let path = Path::new(root).canonicalize().map_err(error_to_string)?;
     if !path.is_dir() {
         return Err(format!("workspace root is not a directory: {root}"));
     }
@@ -157,34 +177,54 @@ pub fn resolve_local_reference_path(root: &Path, path: &str) -> Result<PathBuf, 
 }
 
 pub fn normalize_reference_path_input(path: &str) -> String {
-    let path = path.trim();
-    if let Some(stripped) = path.strip_prefix("./") {
-        stripped.to_string()
-    } else if let Some(stripped) = path.strip_prefix(".\\") {
-        stripped.to_string()
-    } else {
-        path.to_string()
-    }
+    path.trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .replace('～', "~")
 }
 
 pub fn model_settings_path() -> Result<PathBuf, String> {
     let dir = ui_config_dir()?;
-    Ok(dir.join("models.json"))
+    Ok(dir.join("model-settings.json"))
 }
 
 pub fn workspace_registry_path() -> Result<PathBuf, String> {
     let dir = ui_config_dir()?;
-    Ok(dir.join("workspaces.json"))
+    Ok(dir.join("workspace-registry.json"))
+}
+
+fn legacy_workspace_registry_path() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    PathBuf::from(home).join(".agent-ui").join("workspace-registry.json")
 }
 
 pub fn read_workspace_registry() -> Result<WorkspaceRegistry, String> {
     let path = workspace_registry_path()?;
-    if !path.is_file() {
-        return Ok(WorkspaceRegistry::default());
+    if path.is_file() {
+        let raw = fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read workspace registry: {e}"))?;
+        return serde_json::from_str(&raw)
+            .map_err(|e| format!("failed to parse workspace registry: {e}"));
     }
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| format!("failed to read workspace registry: {e}"))?;
-    serde_json::from_str(&raw).map_err(|e| format!("failed to parse workspace registry: {e}"))
+
+    // Migrate from legacy path (~/.claw-agent-ui/workspace-registry.json)
+    let legacy = legacy_workspace_registry_path();
+    if legacy.is_file() {
+        let raw = fs::read_to_string(&legacy)
+            .map_err(|e| format!("failed to read legacy workspace registry: {e}"))?;
+        let registry: WorkspaceRegistry = serde_json::from_str(&raw)
+            .map_err(|e| format!("failed to parse legacy workspace registry: {e}"))?;
+        // Write to new location
+        write_workspace_registry(&registry)?;
+        // Remove legacy file
+        let _ = fs::remove_file(&legacy);
+        return Ok(registry);
+    }
+
+    Ok(WorkspaceRegistry::default())
 }
 
 pub fn write_workspace_registry(registry: &WorkspaceRegistry) -> Result<(), String> {
@@ -202,6 +242,7 @@ pub fn write_workspace_registry(registry: &WorkspaceRegistry) -> Result<(), Stri
 pub fn home_dir_path() -> Option<PathBuf> {
     std::env::var("HOME")
         .ok()
+        .filter(|home| !home.trim().is_empty())
         .or_else(|| std::env::var("USERPROFILE").ok())
         .map(PathBuf::from)
 }
@@ -226,41 +267,45 @@ pub fn is_absolute_or_home_reference(value: &str) -> bool {
 }
 
 pub fn display_local_reference_path(path: &Path) -> String {
-    if let Ok(rel) = path.strip_prefix("/") {
-        format!("/{}", rel.display())
-    } else {
-        path.display().to_string()
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(home) = home_dir_path().and_then(|home| home.canonicalize().ok()) {
+        if let Ok(relative) = canonical.strip_prefix(&home) {
+            let suffix = relative.to_string_lossy().replace('\\', "/");
+            return if suffix.is_empty() {
+                "~".to_string()
+            } else {
+                format!("~/{suffix}")
+            };
+        }
     }
+    canonical.to_string_lossy().replace('\\', "/")
 }
 
 pub fn language_for_path(path: &str) -> String {
-    let ext = Path::new(path)
+    match Path::new(path)
         .extension()
-        .and_then(|e| e.to_str())
+        .and_then(|s| s.to_str())
         .unwrap_or("")
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "rs" => "rust".to_string(),
-        "ts" | "tsx" => "typescript".to_string(),
-        "js" | "jsx" | "mjs" => "javascript".to_string(),
-        "py" => "python".to_string(),
-        "json" => "json".to_string(),
-        "md" | "mdx" => "markdown".to_string(),
-        "css" => "css".to_string(),
-        "html" => "html".to_string(),
-        "yaml" | "yml" => "yaml".to_string(),
-        "sh" | "bash" | "zsh" => "shell".to_string(),
-        "toml" => "toml".to_string(),
-        "sql" => "sql".to_string(),
-        _ => "text".to_string(),
+    {
+        "rs" => "rust",
+        "ts" | "tsx" => "typescript",
+        "js" | "jsx" => "javascript",
+        "json" => "json",
+        "md" => "markdown",
+        "toml" => "toml",
+        "yaml" | "yml" => "yaml",
+        "html" => "html",
+        "css" => "css",
+        other => other,
     }
+    .to_string()
 }
 
 pub fn session_title(session_id: &str, message_count: usize) -> String {
-    if message_count > 0 {
-        format!("Session #{}", &session_id[..8])
+    if message_count == 0 {
+        "New session".to_string()
     } else {
-        "New Session".to_string()
+        format!("{session_id} ({message_count} messages)")
     }
 }
 
@@ -284,69 +329,75 @@ pub fn image_mime_for_path(path: &Path) -> &'static str {
 }
 
 pub fn collect_session_files(dir: &Path, out: &mut Vec<RuntimeSessionSummary>) -> Result<(), String> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
-    let mut entries: Vec<_> = fs::read_dir(dir)
-        .map_err(|e| format!("failed to read sessions dir: {e}"))?
-        .filter_map(|e| e.ok())
-        .collect();
-    entries.sort_by_key(|e| e.path());
-
-    for entry in entries {
+    for entry in fs::read_dir(dir).map_err(error_to_string)? {
+        let entry = entry.map_err(error_to_string)?;
         let path = entry.path();
-        if path.is_dir() && !is_subagent_transcript_path(&path) {
+
+        if path.is_dir() {
+            if path.file_name().and_then(|s| s.to_str()) == Some("subagents") {
+                continue;
+            }
+
             collect_session_files(&path, out)?;
             continue;
         }
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
             continue;
         }
-        let Ok(_metadata) = fs::metadata(&path) else { continue };
-        let modified_epoch = modified_epoch_millis(&path).unwrap_or(0);
-        let file_name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        let session_id = if file_name.contains('_') {
-            file_name.split('_').next().unwrap_or(&file_name).to_string()
-        } else {
-            file_name.clone()
-        };
+
+        if is_subagent_transcript_path(&path) {
+            continue;
+        }
+        let metadata = fs::metadata(&path).map_err(error_to_string)?;
+        let modified = metadata.modified().unwrap_or(SystemTime::now());
+        let modified_ms = modified
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+
         let content = fs::read_to_string(&path).unwrap_or_default();
-        let message_count = parse_jsonl_messages(&content).len();
-        let title = first_user_title_from_jsonl(&content)
-            .unwrap_or_else(|| session_title(&session_id, message_count));
-        let parent_session_id = extract_parent_session_id(&content);
-
-        let sub_dir = path.parent().and_then(|p| {
-            if p == dir { None } else { p.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()) }
-        });
-
-        let branch_name = sub_dir;
+        let message_count = content.lines().filter(|l| !l.trim().is_empty()).count();
+        let id = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
 
         out.push(RuntimeSessionSummary {
-            id: session_id,
-            title,
+            id: id.clone(),
+            title: first_user_title_from_jsonl(&content)
+                .unwrap_or_else(|| session_title(&id, message_count)),
             path: path.to_string_lossy().to_string(),
-            updated_at_ms: modified_epoch as u64,
-            modified_epoch_millis: modified_epoch,
+            updated_at_ms: modified_ms as u64,
+            modified_epoch_millis: modified_ms,
             message_count,
-            parent_session_id,
-            branch_name,
+            parent_session_id: None,
+            branch_name: None
         });
     }
+
     Ok(())
 }
 
 fn is_subagent_transcript_path(path: &Path) -> bool {
+    let under_subagents = path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .map(|name| name == "subagents")
+            .unwrap_or(false)
+    });
+    if under_subagents {
+        return true;
+    }
     path.file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| n.starts_with('.'))
+        .and_then(|s| s.to_str())
+        .map(|name| name.starts_with("agent-") && name.ends_with(".jsonl"))
         .unwrap_or(false)
 }
 
+#[allow(dead_code)]
 fn modified_epoch_millis(path: &Path) -> Option<u128> {
     let metadata = fs::metadata(path).ok()?;
     let modified = metadata.modified().ok()?;
@@ -358,6 +409,7 @@ fn modified_epoch_millis(path: &Path) -> Option<u128> {
     )
 }
 
+#[allow(dead_code)]
 fn extract_parent_session_id(content: &str) -> Option<String> {
     for line in content.lines() {
         if let Ok(value) = serde_json::from_str::<Value>(line) {
@@ -369,43 +421,81 @@ fn extract_parent_session_id(content: &str) -> Option<String> {
     None
 }
 
-fn parse_jsonl_messages(content: &str) -> Vec<Value> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() {
-                return None;
-            }
-            serde_json::from_str(line).ok()
-        })
-        .collect()
-}
-
 fn first_user_title_from_jsonl(content: &str) -> Option<String> {
     for line in content.lines() {
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
-            if let Some(text) = value
-                .get("message")
-                .and_then(|m| m.get("content"))
-                .and_then(|c| c.as_str())
-            {
-                let text = text.trim();
-                if !text.is_empty() && looks_like_real_user_title(text) {
-                    return Some(truncate_title(text, 80));
-                }
-            }
+        let value = serde_json::from_str::<Value>(line).ok()?;
+
+        if value
+            .get("isMeta")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            continue;
         }
+
+        let role = value
+            .get("message")
+            .and_then(|m| m.get("role"))
+            .or_else(|| value.get("role"))
+            .and_then(|v| v.as_str());
+
+        let event_type = value.get("type").and_then(|v| v.as_str());
+
+        if role != Some("user") && event_type != Some("user") {
+            continue;
+        }
+
+        let content_value = value
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .or_else(|| value.get("content"))
+            .or_else(|| value.get("text"));
+
+        let title = content_value
+            .map(extract_text_from_json_value)
+            .unwrap_or_default()
+            .trim()
+            .replace('\n', " ");
+
+        if title.is_empty() {
+            continue;
+        }
+
+        if !looks_like_real_user_title(&title) {
+            continue;
+        }
+
+        return Some(truncate_title(&title, 80));
     }
+
     None
 }
 
-fn looks_like_real_user_title(text: &str) -> bool {
-    let text = text.trim();
-    if text.len() < 3 {
+fn looks_like_real_user_title(title: &str) -> bool {
+    let trimmed = title.trim();
+    if trimmed.is_empty() || trimmed.starts_with('<') || trimmed.starts_with("[Request interrupted")
+    {
         return false;
     }
-    !text.starts_with('/')
+
+    let lower = trimmed.to_lowercase();
+    let skipped_prefixes = [
+        "<system-reminder",
+        "tool_result",
+        "tool result",
+        "system:",
+        "context:",
+        "cwd:",
+        "this session is being continued",
+        "we need continue",
+        "here is a summary",
+        "automatic context",
+        "auto context",
+    ];
+
+    !skipped_prefixes
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
 }
 
 fn truncate_title(value: &str, max_chars: usize) -> String {
@@ -418,3 +508,252 @@ fn truncate_title(value: &str, max_chars: usize) -> String {
 }
 
 use std::fs;
+
+// ─── jsonl session message parsing (migrated from stable) ──────────────────
+
+/// Extract text content from a Claude Code jsonl value.
+/// Handles both plain text strings and Anthropic API content blocks (array of {type, text}).
+pub fn extract_text_from_json_value(value: &Value) -> String {
+    if let Some(text) = value.as_str() {
+        return text.to_string();
+    }
+
+    if let Some(items) = value.as_array() {
+        let mut parts = Vec::new();
+        for item in items {
+            let item_type = item.get("type").and_then(|v| v.as_str());
+            if item_type == Some("text") {
+                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                    parts.push(text.to_string());
+                }
+            } else if item_type.is_none() {
+                let text = extract_text_from_json_value(item);
+                if !text.trim().is_empty() {
+                    parts.push(text);
+                }
+            }
+        }
+        return parts.join(" ");
+    }
+
+    String::new()
+}
+
+/// Check if a json value or any of its children contains a specific "type" field.
+fn json_value_contains_type(value: &Value, expected_type: &str) -> bool {
+    if value.get("type").and_then(|v| v.as_str()) == Some(expected_type) {
+        return true;
+    }
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .any(|item| json_value_contains_type(item, expected_type)),
+        Value::Object(map) => map
+            .values()
+            .any(|item| json_value_contains_type(item, expected_type)),
+        _ => false,
+    }
+}
+
+/// Extract message.id from the raw jsonl structure.
+fn canonical_message_id_from_raw_json(value: &Value) -> Option<&str> {
+    value
+        .get("message")
+        .and_then(|message| message.get("id"))
+        .and_then(|id| id.as_str())
+        .filter(|id| !id.trim().is_empty())
+}
+
+/// Parse a jsonl session file into normalized {id, role, text, event_type, raw_json} messages.
+pub fn parse_jsonl_messages(content: &str) -> Vec<Value> {
+    content
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+
+            if value
+                .get("isMeta")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return None;
+            }
+
+            let event_type = value
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("system")
+                .to_string();
+            let role = value
+                .get("message")
+                .and_then(|m| m.get("role"))
+                .or_else(|| value.get("role"))
+                .or_else(|| value.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("system");
+
+            let has_tool_result_content = json_value_contains_type(&value, "tool_result");
+            let normalized_role = if event_type == "tool_result" || has_tool_result_content {
+                "tool"
+            } else {
+                match role {
+                    "assistant" => "assistant",
+                    "result" => "assistant",
+                    "user" => "user",
+                    "tool" | "tool_result" => "tool",
+                    _ => "system",
+                }
+            };
+
+            let content_value = value
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .or_else(|| value.get("content"))
+                .or_else(|| value.get("text"))
+                .or_else(|| value.get("result"));
+
+            let text = content_value
+                .map(extract_text_from_json_value)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+
+            let has_tool_use = extract_tool_uses_from_jsonl(&value).len() > 0;
+            let keep_for_debug = has_tool_use
+                || matches!(
+                    event_type.as_str(),
+                    "assistant" | "result" | "tool_result" | "user"
+                )
+                || normalized_role == "tool";
+
+            if text.is_empty() && !keep_for_debug {
+                return None;
+            }
+
+            let message_id = canonical_message_id_from_raw_json(&value);
+            let uuid = value
+                .get("uuid")
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| v.to_string());
+            let parent_uuid = value
+                .get("parentUuid")
+                .or_else(|| value.get("parent_uuid"))
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| v.to_string());
+
+            Some(serde_json::json!({
+                "id": message_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| format!("missing-message-id-{index}")),
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "role": normalized_role,
+                "text": text,
+                "event_type": event_type,
+                "bind_status": if message_id.is_some() { "ok" } else { "missing_message_id" },
+                "raw_json": value
+            }))
+        })
+        .collect()
+}
+
+/// Extract tool_use blocks from a raw jsonl value (used by parse_jsonl_messages).
+pub fn extract_tool_uses_from_jsonl(value: &Value) -> Vec<Value> {
+    let mut tools = Vec::new();
+    if let Some(content) = value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    {
+        for block in content {
+            if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                tools.push(block.clone());
+            }
+        }
+    }
+    tools
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_jsonl_messages_have_text_field() {
+        // Use a real jsonl session file to verify the parser produces valid {id, role, text} output
+        let home = std::env::var("HOME").unwrap_or_default();
+        let possible_roots = [
+            format!("{}/workspace/astromere-infra", home),
+            format!("{}/workspace/claude-code/apps/agent-ui", home),
+        ];
+
+        // Verify that claude_project_sessions_dir resolves to the right path
+        // by checking that the test workspace root is found
+        let test_root = std::path::PathBuf::from("/Users/nazario.wang/workspace/astromere-infra");
+        let resolved = claude_project_sessions_dir(&test_root).unwrap();
+        assert!(resolved.exists(), "sessions dir should exist: {:?}", resolved);
+        eprintln!("VERIFIED: sessions dir {:?} exists", resolved);
+
+        // Try to find jsonl files from any claude project directory
+        let projects_dir = std::path::PathBuf::from(&home).join(".claude").join("projects");
+
+        let mut tested = false;
+        if projects_dir.is_dir() {
+            for project_entry in std::fs::read_dir(&projects_dir).unwrap() {
+                let project_entry = project_entry.unwrap();
+                let project_path = project_entry.path();
+                if !project_path.is_dir() {
+                    continue;
+                }
+                // Check project root (no /sessions subdir) and /sessions subdir
+                let search_dirs: Vec<std::path::PathBuf> = if project_path.join("sessions").is_dir() {
+                    vec![project_path.join("sessions"), project_path.clone()]
+                } else {
+                    vec![project_path.clone()]
+                };
+                for search_dir in &search_dirs {
+                for entry in std::fs::read_dir(search_dir).unwrap() {
+                    let entry = entry.unwrap();
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                        continue;
+                    }
+                    let content = std::fs::read_to_string(&path).unwrap();
+                    let messages = parse_jsonl_messages(&content);
+                    assert!(!messages.is_empty(), "should parse messages from {:?}", path);
+                    for msg in &messages {
+                        let text = msg.get("text");
+                        assert!(text.is_some(), "message missing 'text' field in {:?}: {:?}", path, msg.get("id"));
+                        assert!(text.unwrap().is_string(), "'text' should be string, got {:?}", text);
+                        assert!(msg.get("role").is_some(), "message missing 'role' field");
+                        assert!(msg.get("id").is_some(), "message missing 'id' field");
+                    }
+                    eprintln!(
+                        "PASS: parsed {} messages from {:?} (project {:?}), all have id+role+text",
+                        messages.len(),
+                        path.file_name().unwrap(),
+                        project_path.file_name().unwrap(),
+                    );
+                    tested = true;
+                    break;
+                }
+                if tested {
+                    break;
+                }
+            }
+            if tested {
+                break;
+            }
+            }
+        }
+
+        if !tested {
+            eprintln!("SKIP: no jsonl session files found (may run in CI without real data)");
+        }
+    }
+}
