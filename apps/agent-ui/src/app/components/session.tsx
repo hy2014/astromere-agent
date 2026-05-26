@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 import type {
   StreamItem,
@@ -23,6 +23,8 @@ import type { ProjectSession } from "../types";
 import { PreviewPanel } from "./PreviewPanel";
 import { PromptInputArea } from "./PromptInputArea";
 import { MessagesStream, renderPromptHighlightedText } from "./messages-stream";
+import { assistantTurnDetails, compactCountLabel } from "../debug-utils";
+import { formatDebugTime } from "../file-utils";
 
 // ─── SessionList ────────────────────────────────────────────────────────
 
@@ -426,17 +428,111 @@ export function SessionDialog({
         />
       </section>
 
-      {activeProject && activePreview ? (
-        <PreviewPanel
-          activePreview={activePreview}
-          previewTabs={previewTabs}
-          activeProject={activeProject}
-          onSetActivePreviewId={onSetActivePreviewId}
-          onClosePreviewTab={onClosePreviewTab}
-          onCloseAllPreviews={onCloseAllPreviews}
-          onOpenPreviewLink={onOpenPreviewLink}
-        />
-      ) : null}
+      {(() => {
+        // 确定当前显示的过程消息
+        const processMessageId =
+          openProcessMessageIds.size > 0
+            ? streamItems.find(
+                (s): s is Extract<StreamItem, { kind: "message" }> =>
+                  s.kind === "message" &&
+                  s.role === "assistant" &&
+                  openProcessMessageIds.has(s.id),
+              )?.id ?? null
+            : null;
+        const processItem =
+          processMessageId
+            ? streamItems.find(
+                (s): s is Extract<StreamItem, { kind: "message" }> =>
+                  s.kind === "message" && s.role === "assistant" && s.id === processMessageId,
+              ) ?? null
+            : null;
+        const processDetails =
+          processItem
+            ? assistantTurnDetails(processItem, assistantDebugBundles[processItem.id] ?? null)
+            : null;
+        const showProcess = Boolean(processDetails && processDetails.timeline.length > 0);
+        const showPreview = Boolean(activeProject && activePreview);
+
+        if (!showPreview && !showProcess) return null;
+
+        return (
+          <aside className="detail-panel" aria-label="Detail panel">
+            <div className="detail-content-base" style={{ display: showPreview && !showProcess ? undefined : 'none' }}>
+              {activePreview ? (
+                <PreviewPanel
+                  activePreview={activePreview}
+                  previewTabs={previewTabs}
+                  activeProject={activeProject}
+                  onSetActivePreviewId={onSetActivePreviewId}
+                  onClosePreviewTab={onClosePreviewTab}
+                  onCloseAllPreviews={onCloseAllPreviews}
+                  onOpenPreviewLink={onOpenPreviewLink}
+                />
+              ) : null}
+            </div>
+            {showProcess && processDetails ? (
+              <div className="detail-content-overlay">
+                <div style={{ position: 'sticky', top: 0, zIndex: 1, display: 'flex', justifyContent: 'flex-end', padding: '4px 8px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                  <button
+                    type="button"
+                    onClick={() => onToggleAssistantProcess(processMessageId!)}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#64748b', lineHeight: 1, padding: '2px 8px', borderRadius: 4 }}
+                    aria-label="Close process panel"
+                    onMouseOver={e => (e.currentTarget.style.background = '#e2e8f0')}
+                    onMouseOut={e => (e.currentTarget.style.background = 'none')}
+                  >
+                    ×
+                  </button>
+                </div>
+                <section className="file-workbench">
+                  <div className="detail-header">
+                    <div>
+                      <div className="eyebrow">Assistant Process</div>
+                      <h2>过程详情</h2>
+                    </div>
+                    <span className="count-label">
+                      {compactCountLabel(processDetails.progressLines.length, "行过程", "行过程")}
+                      {" · "}
+                      {compactCountLabel(processDetails.commandUses.length, "command")}
+                      {" · "}
+                      {compactCountLabel(processDetails.toolUses.length, "tool call")}
+                      {" · "}
+                      {compactCountLabel(processDetails.toolResults.length, "tool result")}
+                      {" · "}
+                      {compactCountLabel(processDetails.eventCount, "debug event")}
+                    </span>
+                  </div>
+                  <div className="process-panel-timeline">
+                    <div className="message-section-label">时间线</div>
+                    <ol className="message-process-timeline">
+                      {processDetails.timeline.map((entry) => (
+                        <li className={`process-timeline-item ${entry.kind}`} key={entry.id}>
+                          <div className="process-timeline-marker" aria-hidden="true" />
+                          <div className="process-timeline-content">
+                            <div className="process-timeline-title-row">
+                              <strong>{entry.title}</strong>
+                              <span>{formatDebugTime(entry.receivedAt)}</span>
+                            </div>
+                            {entry.kind === "tool_call" ? (
+                              <code>{entry.detail}</code>
+                            ) : entry.kind === "tool_result" ? (
+                              <pre>{entry.detail}</pre>
+                            ) : entry.kind === "permission" ? (
+                              <p>{entry.detail}</p>
+                            ) : (
+                              <pre>{entry.detail}</pre>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                </section>
+              </div>
+            ) : null}
+          </aside>
+        );
+      })()}
     </>
   );
 }
