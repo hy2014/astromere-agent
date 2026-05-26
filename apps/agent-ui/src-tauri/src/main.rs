@@ -1,26 +1,21 @@
 mod sqlite;
 mod terminal;
-mod types;
-mod utils;
-mod mcp;
-mod permissions;
-mod workspace;
-mod models;
-mod skills;
-mod runtime;
-mod repl;
-mod control;
-mod session;
 
-
-use tauri::Emitter;
-use terminal::{terminal_spawn, terminal_write, terminal_kill, terminal_resize, terminal_list};
+use claw_agent_ui::control;
+use claw_agent_ui::mcp;
+use claw_agent_ui::models;
+use claw_agent_ui::permissions;
+use claw_agent_ui::repl;
+use claw_agent_ui::runtime;
+use claw_agent_ui::skills;
+use claw_agent_ui::workspace;
 use sqlite::{
     sqlite_database_info, sqlite_execute, sqlite_query,
-    save_bundle_usage_snapshot,
     load_bundle_usage_snapshot,
     load_bundle_usage_snapshots_for_session,
+    save_bundle_usage_snapshot,
 };
+use terminal::{terminal_kill, terminal_list, terminal_resize, terminal_spawn, terminal_write};
 
 fn main() {
     tauri::Builder::default()
@@ -63,6 +58,7 @@ fn main() {
             workspace::read_git_diff,
             models::load_model_settings,
             models::save_model_settings,
+            models::load_deepseek_pricing,
             mcp::load_mcp_settings,
             mcp::save_mcp_settings,
             models::test_model_connection,
