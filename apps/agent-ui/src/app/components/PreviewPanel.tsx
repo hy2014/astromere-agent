@@ -24,7 +24,7 @@ export function PreviewPanel({
   onOpenPreviewLink,
 }: PreviewPanelProps) {
   return (
-    <aside className="detail-panel" aria-label="Preview panel">
+    <>
       <header className="preview-tabs">
         <div className="preview-tab-strip">
           {previewTabs.map((tab) => (
@@ -109,6 +109,6 @@ export function PreviewPanel({
       ) : (
         <ReferencePanel link={activePreview.link} root={activeProject?.root ?? ""} />
       )}
-    </aside>
+    </>
   );
 }

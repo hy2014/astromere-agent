@@ -13,7 +13,6 @@ import {
   localFileReferencesFromPromptText,
   localFileReferenceName,
   formatFileSize,
-  formatDebugTime,
   debugStorageSourceSummary,
   assistantUsageOutputDateTimeFromBundle,
   assistantUsageButtonTitle,
@@ -314,7 +313,7 @@ export function MessagesStream({
                             type="button"
                             onClick={() => onToggleAssistantProcess(item.id)}
                           >
-                            <span>{isProcessOpen ? "过程 ˅" : "过程 >>"}</span>
+                            <span>过程 &gt;&gt;</span>
                             <small>
                               {compactCountLabel(
                                 assistantDetails.progressLines.length,
@@ -343,40 +342,6 @@ export function MessagesStream({
                               )}
                             </small>
                           </button>
-                          {isProcessOpen ? (
-                            <div className="message-process-detail">
-                              {assistantDetails.timeline.length > 0 ? (
-                                <section>
-                                  <div className="message-section-label">时间线</div>
-                                  <ol className="message-process-timeline">
-                                    {assistantDetails.timeline.map((entry) => (
-                                      <li
-                                        className={`process-timeline-item ${entry.kind}`}
-                                        key={entry.id}
-                                      >
-                                        <div className="process-timeline-marker" aria-hidden="true" />
-                                        <div className="process-timeline-content">
-                                          <div className="process-timeline-title-row">
-                                            <strong>{entry.title}</strong>
-                                            <span>{formatDebugTime(entry.receivedAt)}</span>
-                                          </div>
-                                          {entry.kind === "tool_call" ? (
-                                            <code>{entry.detail}</code>
-                                          ) : entry.kind === "tool_result" ? (
-                                            <pre>{entry.detail}</pre>
-                                          ) : entry.kind === "permission" ? (
-                                            <p>{entry.detail}</p>
-                                          ) : (
-                                            <pre>{entry.detail}</pre>
-                                          )}
-                                        </div>
-                                      </li>
-                                    ))}
-                                  </ol>
-                                </section>
-                              ) : null}
-                            </div>
-                          ) : null}
                         </div>
                       ) : null}
                       <div

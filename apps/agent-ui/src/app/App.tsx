@@ -1108,6 +1108,7 @@ export function App() {
   }
 
   async function handleOpenPreviewLink(link: StreamLink) {
+    setOpenProcessMessageIds(new Set());
     if (!activeProject) {
       setError("Add a project folder first.");
       return;
@@ -1223,7 +1224,7 @@ export function App() {
 
   return (
     <main
-      className={`app-shell ${activeView === "settings" || activeView === "skills" ? "settings-mode" : activePreview ? "has-preview" : ""}`}
+      className={`app-shell ${activeView === "settings" || activeView === "skills" ? "settings-mode" : (activePreview || openProcessMessageIds.size > 0) ? "has-preview" : ""}`}
     >
       <aside className="side-panel" aria-label="Project and skills">
         <WorkspaceTree
