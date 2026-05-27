@@ -1,26 +1,21 @@
+import type {LocalFileReferenceSummary, RuntimeSessionDetail, StreamItem,} from "../types";
 import type {
-  StreamItem,
-  LocalFileReferenceSummary,
-  RuntimeSessionDetail,
-} from "../types";
-import type {
-  DebugStreamEvent,
   AssistantMessageDebugBundle,
-  RuntimeSessionArtifacts,
   AssistantProcessTimelineItem,
+  DebugStreamEvent,
+  RuntimeSessionArtifacts,
 } from "./types";
-import { mergeProgressText } from "./stream-processor";
+import {mergeProgressText} from "./stream-processor";
 import {
-  isRecord,
   addUniqueString,
-  displayPromptText,
   commandEnvelopeDisplayText,
+  displayPromptText,
   extractPreviewLinks,
   formatDateTimeNoLocale,
-  rawJsonFromDebugEvent,
-  modelCallIdFromRawJson,
+  isRecord,
   localFileReferencesFromPromptText,
-  isPermissionEventName,
+  modelCallIdFromRawJson,
+  rawJsonFromDebugEvent,
 } from "./file-utils";
 
 // ─── Debug event helpers ───────────────────────────────────────────────

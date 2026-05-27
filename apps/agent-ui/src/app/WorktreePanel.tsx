@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react"
-import { listWorktrees } from "../runtime"
-import type { WorktreeItem } from "../types"
+import {useEffect, useState} from "react"
+import {listWorktrees} from "../runtime"
+import type {WorktreeItem} from "../types"
 
 type Props = {
   root: string

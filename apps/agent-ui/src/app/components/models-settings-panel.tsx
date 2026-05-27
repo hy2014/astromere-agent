@@ -1,11 +1,7 @@
-import { useState, useEffect } from "react";
-import type { ModelEndpointConfig, ModelSettings } from "../../types";
-import { loadDeepseekPricing } from "../../tauri";
-import {
-  loadModelSettings,
-  saveModelSettings,
-  testModelConnection,
-} from "../../runtime";
+import {useEffect, useState} from "react";
+import type {ModelEndpointConfig, ModelSettings} from "../../types";
+import {loadDeepseekPricing} from "../../tauri";
+import {loadModelSettings, saveModelSettings, testModelConnection,} from "../../runtime";
 
 export function ModelsSettingsPanel() {
   const [savedSettings, setSavedSettings] = useState<ModelSettings | null>(null);

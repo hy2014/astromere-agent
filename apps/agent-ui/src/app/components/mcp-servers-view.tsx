@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
-import type { McpEnvDraftRow, McpServerDraftRow } from "../types";
-import type { McpSettings } from "../../types";
-import { loadMcpSettings, saveMcpSettings } from "../../runtime";
+import {useEffect, useMemo, useState} from "react";
+import type {McpEnvDraftRow, McpServerDraftRow} from "../types";
+import type {McpSettings} from "../../types";
+import {loadMcpSettings, saveMcpSettings} from "../../runtime";
 
 // ─── Pure helpers ──────────────────────────────────────────────────────
 

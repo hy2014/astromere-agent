@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Terminal as XTerm } from "xterm";
-import { FitAddon } from "xterm-addon-fit";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import React, {useCallback, useEffect, useRef, useState} from "react";
+import {Terminal as XTerm} from "xterm";
+import {FitAddon} from "xterm-addon-fit";
+import {invoke} from "@tauri-apps/api/core";
+import {listen, type UnlistenFn} from "@tauri-apps/api/event";
 import "xterm/css/xterm.css";
 
 interface TerminalTab {

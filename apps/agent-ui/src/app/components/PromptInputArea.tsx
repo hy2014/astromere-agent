@@ -1,15 +1,10 @@
-import type { FormEvent } from "react";
-import type { AgentContextUsage, StreamLink, WorkspaceFileReference } from "../../types";
-import { PermissionRequest } from "./PermissionRequest";
-import { FileReferenceTray } from "./FileReferenceTray";
-import { formatFileSize } from "../stream-processor";
-import type {
-  LocalFileReference,
-  FileMentionState,
-  SlashCommandMenuState,
-  SlashRootItem,
-} from "../types";
-import type { AgentReplCapabilityItem } from "../../runtime";
+import type {FormEvent} from "react";
+import type {AgentContextUsage, StreamLink, WorkspaceFileReference} from "../../types";
+import {PermissionRequest} from "./PermissionRequest";
+import {FileReferenceTray} from "./FileReferenceTray";
+import {formatFileSize} from "../stream-processor";
+import type {FileMentionState, LocalFileReference, SlashCommandMenuState, SlashRootItem,} from "../types";
+import type {AgentReplCapabilityItem} from "../../runtime";
 
 interface AgentPermissionState {
   currentMode: string;

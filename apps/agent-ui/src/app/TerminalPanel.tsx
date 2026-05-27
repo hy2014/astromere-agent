@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import type { RemoteProfile } from "../runtime";
+import {useCallback, useEffect, useRef, useState} from "react";
+import type {RemoteProfile} from "../runtime";
 
 interface TerminalTab {
   id: string;

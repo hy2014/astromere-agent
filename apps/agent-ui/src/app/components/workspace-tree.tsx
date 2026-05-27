@@ -1,8 +1,8 @@
-import { useState, useRef } from "react";
-import type { RemoteProfile } from "../../runtime";
-import type { ProjectSession, ProjectFolder } from "../types";
-import { listProjectEntries } from "../../runtime";
-import { SessionList } from "./session";
+import {useRef, useState} from "react";
+import type {RemoteProfile} from "../../runtime";
+import {listProjectEntries} from "../../runtime";
+import type {ProjectFolder, ProjectSession} from "../types";
+import {SessionList} from "./session";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 

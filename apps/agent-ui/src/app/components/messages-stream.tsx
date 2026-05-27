@@ -1,34 +1,23 @@
-import type { StreamItem, StreamLink } from "../../types";
-import type {
-  AssistantMessageDebugBundle,
-  ProjectFolder,
-} from "../types";
-import type { BundleUsageSnapshot } from "../../tauri";
-import { AssistantUsageMiniOverlay, SessionUsageDashboard } from "./usage-components";
-import { MessageImagePreviews } from "./image-reference-view";
-import { RichMarkdownMessage, MarkdownTablePreview } from "./preview-components";
+import type {StreamItem, StreamLink} from "../../types";
+import type {AssistantMessageDebugBundle, ProjectFolder,} from "../types";
+import type {BundleUsageSnapshot} from "../../tauri";
+import {AssistantUsageMiniOverlay, SessionUsageDashboard} from "./usage-components";
+import {MessageImagePreviews} from "./image-reference-view";
+import {MarkdownTablePreview, RichMarkdownMessage} from "./preview-components";
 import {
-  displayRole,
-  displayPromptText,
-  localFileReferencesFromPromptText,
-  localFileReferenceName,
-  formatFileSize,
-  debugStorageSourceSummary,
-  assistantUsageOutputDateTimeFromBundle,
-  assistantUsageButtonTitle,
-  localFileReferenceSummaryToStreamLink,
+    assistantUsageButtonTitle,
+    assistantUsageOutputDateTimeFromBundle,
+    debugStorageSourceSummary,
+    displayPromptText,
+    displayRole,
+    formatFileSize,
+    localFileReferenceName,
+    localFileReferencesFromPromptText,
+    localFileReferenceSummaryToStreamLink,
 } from "../file-utils";
-import {
-  compactCountLabel,
-  assistantTurnDetails,
-} from "../debug-utils";
-import {
-  pendingAssistantText,
-} from "../stream-processor";
-import {
-  bundleUsageStorageKey,
-  bundleUsageButtonLabel,
-} from "../usage-cost";
+import {assistantTurnDetails, compactCountLabel,} from "../debug-utils";
+import {pendingAssistantText,} from "../stream-processor";
+import {bundleUsageButtonLabel, bundleUsageStorageKey,} from "../usage-cost";
 
 function renderPromptHighlightedText(value: string) {
   const parts: Array<string | JSX.Element> = [];

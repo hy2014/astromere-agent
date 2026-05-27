@@ -1,14 +1,14 @@
-import type { ModelSettings, AgentReplStreamEvent, AgentContextUsage } from "../types";
-import type { BundleUsageSnapshot, BundleUsageTotals, ModelCallUsageSnapshot } from "../tauri";
+import type {AgentContextUsage, AgentReplStreamEvent, ModelSettings} from "../types";
+import type {BundleUsageSnapshot, BundleUsageTotals, ModelCallUsageSnapshot} from "../tauri";
 import type {
   AssistantMessageDebugBundle,
+  BundleUsageModelCost,
   DebugStreamEvent,
   ModelCallUsageCandidate,
   SessionUsageIndicatorKey,
-  BundleUsageModelCost,
 } from "./types";
-import { isRecord, rawJsonFromDebugEvent, modelCallIdFromRawJson, formatContextTokens } from "./file-utils";
-import { DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD } from "./constants";
+import {formatContextTokens, isRecord, modelCallIdFromRawJson, rawJsonFromDebugEvent} from "./file-utils";
+import {DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD} from "./constants";
 
 // ── Constants ──────────────────────────────────────────────────────────
 

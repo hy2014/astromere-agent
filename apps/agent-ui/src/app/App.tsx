@@ -1,230 +1,75 @@
-import {
-  open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FormEvent,
-  KeyboardEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState } from "react";
+import {open as openDialog} from "@tauri-apps/plugin-dialog";
+import {useEffect, useMemo, useRef, useState} from "react";
+import type {RemoteProfile} from "../runtime";
 import {
   addWorkspaceRegistryEntry,
-  ensureAgentReplProcess,
   forkAgentReplProcess,
   getAgentPermissionState,
-  getAgentReplCapabilities,
-  getAgentContextUsage,
   getAgentReplProcessStatus,
   getDefaultWorkspace,
   killAgentReplProcess,
-  interruptAgentTurn,
-  listSkills,
-  listenAgentReplEvents,
   listRuntimeSessions,
-  loadWorkspaceRegistry,
-  loadTypedRuntimeSession,
   loadModelSettings,
+  loadTypedRuntimeSession,
+  loadWorkspaceRegistry,
   openWorkspace,
   readGitDiff,
-  readLocalImageMetadata,
-  readLocalImagePreview,
   readLocalReferenceFile,
   readWorkspaceFile,
-  respondAgentPermission,
-  searchWorkspaceFiles,
-  saveModelSettings,
-  sendAgentReplInput,
-  setAgentPermissionMode,
-  testModelConnection,
-  clearActiveRemoteProfileId,
-  createRemoteProfileInput,
-  deleteRemoteProfile,
-  setActiveRemoteProfileId,
-  upsertRemoteProfile,
-  useLocalRuntime,
-  useRemoteRuntime,
   removeWorkspaceRegistryEntry,
-  } from "../runtime";
-import type { AgentReplCapabilityItem,
-  RemoteProfile } from "../runtime";
+  setAgentPermissionMode,
+} from "../runtime";
 import "./App.css";
-import { TerminalView } from "./Terminal";
-import { RemoteTerminalPlaceholder } from "./RemoteTerminalPlaceholder";
-import { SkillsView } from "./components/skills-view";
-import { McpServersView } from "./components/mcp-servers-view";
-import { SettingsView } from "./components/settings-view";
-import { SessionDialog } from "./components/session";
-import { WorkspaceTree } from "./components/workspace-tree";
-import { useStreamState } from "../hooks/useStreamState";
-import { useAgentTurn } from "../hooks/useAgentTurn";
-import { usePromptInput } from "../hooks/usePromptInput"
+import {TerminalView} from "./Terminal";
+import {RemoteTerminalPlaceholder} from "./RemoteTerminalPlaceholder";
+import {SkillsView} from "./components/skills-view";
+import {McpServersView} from "./components/mcp-servers-view";
+import {SettingsView} from "./components/settings-view";
+import {SessionDialog} from "./components/session";
+import {WorkspaceTree} from "./components/workspace-tree";
+import {useStreamState} from "../hooks/useStreamState";
+import {useAgentTurn} from "../hooks/useAgentTurn";
+import {usePromptInput} from "../hooks/usePromptInput"
 import {
-  projectIdFromRoot,
-  isNewSessionId,
   createPendingSession,
-  sessionKey,
-  loadHiddenSessions,
-  uniqueHiddenSessions,
-  sessionsFromRuntimeSummaries,
   dedupeSessions,
-  truncateSessionTitle,
   firstUserTitleFromStream,
-  welcomeStream,
   hiddenSessionsStorageKey,
+  isNewSessionId,
+  loadHiddenSessions,
+  projectIdFromRoot,
+  sessionKey,
+  sessionsFromRuntimeSummaries,
+  uniqueHiddenSessions,
+  welcomeStream,
 } from "./session";
 import {
-  addUniqueString,
-  cleanPreviewPath,
   clientDebugLog,
-  copyTextToClipboard,
-  displayRole,
-  extractPreviewLinks,
-  formatFileSize,
-  sanitizeFenceContent,
-  languageFence,
-  linkKindForPath,
-  extractPromptSkillToken,
-  parseLocalFileReferenceSummaries,
-  localFileReferencesFromPromptText,
-  buildPromptWithLocalFileReferences,
   debugStorageSource,
   debugStorageSourceCounts,
-  debugStorageSourceSummary,
-  isPermissionEventName,
-  permissionToolNameFromEvent,
-  permissionRequestIdFromEvent,
-  permissionInputFromEvent,
-  assistantOutputTimestampMsFromBundle,
-  assistantUsageOutputDateTimeFromBundle,
-  assistantUsageButtonTitle,
-  loadTypedRuntimeSessionWithRetry,
-  formatDateTimeNoLocale,
   loadActiveRemoteProfileSnapshot,
-  modelCallIdFromRawJson,
-  detectFileMention,
-  detectSlashCommandMenu,
-  localFileReferenceName,
-  stripLocalFileReferenceBlock,
-  commandEnvelopeDisplayText,
-  displayPromptText,
-  isCsvFilePath,
-  isLocalReferenceLink,
-  localReferenceToStreamLink,
-  localFileReferenceSummaryToStreamLink,
-  isAbsoluteOrHomeReferencePath,
+  loadTypedRuntimeSessionWithRetry,
   shouldReadAsLocalReference,
-  isRecord,
-  rawJsonFromDebugEvent,
-  formatDebugTime,
-  formatContextTokens,
 } from "./file-utils";
+import {bundleUsageStorageKey,} from "./usage-cost";
+import {collapseAssistantTurns,} from "./stream-processor";
 import {
-  usageTotalsFromUsage,
-  bundleUsageCostAmount,
-  bundleUsageHitRate,
-  bundleUsageCurrency,
-  bundleUsageDecimalValue,
-  bundleUsageButtonLabel,
-  bundleUsageStorageKey,
-  bundleUsageTimeMs,
-  bundleUsageIndicatorValue,
-  formatSessionUsageIndicatorValue,
-  sessionUsageSnapshotsForSession,
-  sessionUsageTotals,
-  sessionUsageHitRateFromTotals,
-  sessionUsageCostAmount,
-  sessionUsageCurrency,
-  sessionUsageModelCostByCallId,
-  formatModelCallCost,
-  usageNumberValue,
-  contextUsageAutoCompactEnabledLabel,
-  contextUsageLabel,
-  contextUsageFromBundleSnapshot,
-} from "./usage-cost";
-import {
-  modelCallIdFromEvent,
-  isAssistantBundleStartEvent,
-  isBundleCompletionEvent,
-  resolveRuntimeBundleEvent,
-  rekeyAssistantBundle,
-  mergeProgressText,
-  currentTurnAssistantMessageIndex,
-  collapseAssistantTurns,
-  upsertCurrentTurnProgressMessage,
-  completeCurrentTurnAssistantMessage,
-  applyRuntimeDebugEventToBundle,
-  rekeyAssistantStreamItem,
-  rekeyAssistantDebugBundles,
-  streamEventToItems,
-  payloadText,
-  pendingAssistantText,
-} from "./stream-processor";
-import {
-  compactCountLabel,
   assistantTurnDetails,
-  extractToolUsesFromRawJson,
-  toolName,
   commandFromToolUse,
-  summarizeToolUse,
-  isToolResultEvent,
-  truncateProcessDetail,
-  textFromContentBlocks,
-  textFromProcessEvent,
-  summarizeToolResultEvent,
-  isPermissionEvent,
-  summarizePermissionEvent,
-  toolUsesFromProcessEvent,
-  rawJsonFromRuntimeMessage,
-  checkpointUuidFromRuntimeMessage,
-  runtimeMessageRawType,
-  looksLikeRealRuntimeUserText,
-  isRuntimeRealUserMessage,
-  debugEventTypeForRuntimeMessage,
-  createHistoricalDebugEvent,
-  jsonContainsTypedBlock,
   runtimeSessionToArtifacts,
-  rekeyDebugEvents,
+  summarizeToolUse,
+  toolName,
 } from "./debug-utils";
+import type {AgentPermissionState, AgentReplStreamEvent, PermissionMode, StreamItem, StreamLink,} from "../types";
+import {loadBundleUsageSnapshotsForSession, sqliteDatabaseInfo,} from "../tauri";
 import type {
-  AgentContextUsage,
-  AgentPermissionState,
-  AgentReplStreamEvent,
-  FileView,
-  GitDiff,
-  LocalFileReferenceSummary,
-  LocalImagePreview,
-  ModelEndpointConfig,
-  ModelSettings,
-  PermissionMode,
-  RuntimeSessionDetail,
-  SkillSummary,
-  SkillsReport,
-  StreamItem,
-  StreamLink,
-  WorkspaceFileReference,
-  } from "../types";
-import {
-  sqliteDatabaseInfo,
-  saveBundleUsageSnapshot,
-  loadBundleUsageSnapshotsForSession,
-  type BundleUsageSnapshot,
-  type BundleUsageTotals,
-  type ModelCallUsageSnapshot,
-} from "../tauri";
-import { usageFormatValue } from "./usage-cost";
-import type {
-  PreviewTab,
-  ProjectSession,
-  ProjectFolder,
-  HiddenSession,
-  DebugStreamEvent,
-  AssistantMessageDebugBundle,
-  LocalFileReference,
-  FileMentionState,
-  SlashCommandMenuLevel,
-  SlashCommandMenuState,
-  SlashRootItem,
   AppView,
+  HiddenSession,
+  PreviewTab,
+  ProjectFolder,
+  ProjectSession,
   SessionUsageIndicatorKey,
+  SlashRootItem,
 } from "./types";
 
 // Types moved to ./types

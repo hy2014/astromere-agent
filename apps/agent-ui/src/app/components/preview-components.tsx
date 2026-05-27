@@ -1,8 +1,8 @@
-import { useState, useMemo } from "react";
-import type { FileView } from "../../types";
-import type { RichMarkdownBlock } from "../types";
-import { lineNumberPreview } from "../file-utils";
-import { formatFileSize } from "../stream-processor";
+import {useMemo, useState} from "react";
+import type {FileView} from "../../types";
+import type {RichMarkdownBlock} from "../types";
+import {lineNumberPreview} from "../file-utils";
+import {formatFileSize} from "../stream-processor";
 
 // ─── CSV helpers ───────────────────────────────────────────────────────
 

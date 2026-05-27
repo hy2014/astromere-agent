@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from "react";
-import { listSkills } from "../../runtime";
-import type { SkillSummary, SkillsReport } from "../../types";
-import type { SkillsViewProps, SkillViewMode } from "../types";
-import { formatFileSize } from "../stream-processor";
+import {useEffect, useMemo, useState} from "react";
+import {listSkills} from "../../runtime";
+import type {SkillsReport, SkillSummary} from "../../types";
+import type {SkillsViewProps, SkillViewMode} from "../types";
+import {formatFileSize} from "../stream-processor";
 
 // ─── Pure helpers ──────────────────────────────────────────────────────
 

@@ -1,8 +1,8 @@
-import type { StreamLink } from "../../types";
-import type { PreviewTab, ProjectFolder } from "../types";
-import { CsvDataPreview, HtmlRichPreview, CodePreview, MarkdownPreview, MarkdownTablePreview, isHtmlFilePath } from "./preview-components";
-import { ReferencePanel } from "./image-reference-view";
-import { isCsvFilePath, isMarkdownFile } from "../file-utils";
+import type {StreamLink} from "../../types";
+import type {PreviewTab, ProjectFolder} from "../types";
+import {CodePreview, CsvDataPreview, HtmlRichPreview, isHtmlFilePath, MarkdownPreview} from "./preview-components";
+import {ReferencePanel} from "./image-reference-view";
+import {isCsvFilePath, isMarkdownFile} from "../file-utils";
 
 interface PreviewPanelProps {
   activePreview: PreviewTab;

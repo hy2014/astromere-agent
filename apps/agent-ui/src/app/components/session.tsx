@@ -1,30 +1,29 @@
-import { useState, useMemo } from "react";
-import type { FormEvent, KeyboardEvent } from "react";
+import type {FormEvent, KeyboardEvent} from "react";
+import {useState} from "react";
 import type {
+  AgentContextUsage,
+  AgentPermissionState,
   StreamItem,
   StreamLink,
-  AgentPermissionState,
-  AgentContextUsage,
+  WorkspaceFileReference,
 } from "../../types";
 import type {
   AssistantMessageDebugBundle,
-  ProjectFolder,
-  PreviewTab,
-  LocalFileReference,
   FileMentionState,
+  LocalFileReference,
+  PreviewTab,
+  ProjectFolder,
+  ProjectSession,
   SlashCommandMenuState,
   SlashRootItem,
-  SessionUsageIndicatorKey,
 } from "../types";
-import type { WorkspaceFileReference } from "../../types";
-import type { BundleUsageSnapshot } from "../../tauri";
-import type { AgentReplCapabilityItem } from "../../runtime";
-import type { ProjectSession } from "../types";
-import { PreviewPanel } from "./PreviewPanel";
-import { PromptInputArea } from "./PromptInputArea";
-import { MessagesStream, renderPromptHighlightedText } from "./messages-stream";
-import { assistantTurnDetails, compactCountLabel } from "../debug-utils";
-import { formatDebugTime } from "../file-utils";
+import type {BundleUsageSnapshot} from "../../tauri";
+import type {AgentReplCapabilityItem} from "../../runtime";
+import {PreviewPanel} from "./PreviewPanel";
+import {PromptInputArea} from "./PromptInputArea";
+import {MessagesStream, renderPromptHighlightedText} from "./messages-stream";
+import {assistantTurnDetails, compactCountLabel} from "../debug-utils";
+import {formatDebugTime} from "../file-utils";
 
 // ─── SessionList ────────────────────────────────────────────────────────
 
