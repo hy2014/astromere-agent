@@ -22,50 +22,8 @@ export function checkDerivedValues(ctx: RuleContext) {
     }
     collectDepVars(ctx.sourceFile);
 
-    // 收集 state 变量名
-    const stateVars = new Set<string>();
-
-    function collectStateVars(node: ts.Node) {
-        if (ts.isCallExpression(node)) {
-            const callee = node.expression;
-            if (ts.isIdentifier(callee) && callee.text === "useState" && node.parent) {
-                const decl = node.parent.parent;
-                if (ts.isVariableDeclaration(decl) && ts.isArrayBindingPattern(decl.name)) {
-                    const stateName = decl.name.elements[0];
-                    if (stateName && ts.isIdentifier(stateName.name)) {
-                        stateVars.add(stateName.name.text);
-                    }
-                }
-            }
-        }
-        ts.forEachChild(node, collectStateVars);
-    }
-    collectStateVars(ctx.sourceFile);
-
-    // 收集 props 变量名
-    const propVars = new Set<string>();
-
-    function collectPropVars(node: ts.Node) {
-        // 找函数组件
-        if (ts.isFunctionDeclaration(node) || ts.isVariableDeclaration(node)) {
-            // 检查是否有参数解构
-            const body = ts.isFunctionDeclaration(node) ? node : undefined;
-            const arrowFn = ts.isVariableDeclaration(node) && node.initializer && ts.isArrowFunction(node.initializer) ? node.initializer : undefined;
-            const params = body?.parameters || arrowFn?.parameters;
-            if (params && params.length > 0) {
-                const firstParam = params[0];
-                if (ts.isObjectBindingPattern(firstParam.name)) {
-                    for (const el of firstParam.name.elements) {
-                        if (ts.isBindingElement(el) && ts.isIdentifier(el.name)) {
-                            propVars.add(el.name.text);
-                        }
-                    }
-                }
-            }
-        }
-        ts.forEachChild(node, collectPropVars);
-    }
-    collectPropVars(ctx.sourceFile);
+    const stateVars = ctx.stateVars;
+    const propVars = ctx.propVars;
 
     // 检查 JSX 中的变量引用
     function checkJsxVars(node: ts.Node) {
@@ -83,6 +41,8 @@ export function checkDerivedValues(ctx: RuleContext) {
                 // 跳过已经通过 dep() 派生的
                 if (depDerivedVars.has(varName)) return;
 
+                if (isInEventHandler(node)) return;
+
                 // 只有依赖了 state/props 的派生值才报错
                 if (isDerivedFromStateOrProps(varName, stateVars, propVars, ctx.sourceFile)) {
                     ctx.addViolation(
@@ -96,6 +56,18 @@ export function checkDerivedValues(ctx: RuleContext) {
         ts.forEachChild(node, checkJsxVars);
     }
     checkJsxVars(ctx.sourceFile);
+}
+
+function isInEventHandler(node: ts.Node): boolean {
+    let current = node.parent;
+    while (current) {
+        if (ts.isJsxAttribute(current)) {
+            const attrName = current.name.text;
+            if (attrName.startsWith("on")) return true;
+        }
+        current = current.parent;
+    }
+    return false;
 }
 
 /**
