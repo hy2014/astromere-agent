@@ -1,0 +1,767 @@
+
+/* === Reset clean sidebar icons === */
+
+/* Kill the original square pseudo-icon. */
+.nav-icon.plain::before,
+.nav-icon.plain::after,
+.tree-chevron.plain::before,
+.tree-chevron.plain::after {
+  display: none !important;
+  content: none !important;
+}
+
+/* Single clean text icon. */
+.nav-icon.plain,
+.tree-chevron.plain {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 auto !important;
+  overflow: visible !important;
+  margin-right: 12px !important;
+  color: currentColor !important;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  font-weight: 850 !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+
+.nav-icon.plain {
+  width: 20px !important;
+  height: 20px !important;
+  font-size: 18px !important;
+}
+
+.nav-icon.small.plain {
+  width: 16px !important;
+  height: 16px !important;
+  margin-right: 8px !important;
+  font-size: 15px !important;
+}
+
+.nav-icon.tiny.plain {
+  width: 14px !important;
+  height: 14px !important;
+  margin-right: 8px !important;
+  font-size: 14px !important;
+}
+
+.tree-chevron.plain {
+  width: 16px !important;
+  height: 16px !important;
+  margin-left: auto !important;
+  margin-right: 0 !important;
+  font-size: 18px !important;
+  opacity: 0.75 !important;
+}
+
+/* Kill the pseudo icons from previous failed attempt. */
+.workspace-select::before,
+.skills-nav::before,
+.sidebar-action::before {
+  display: none !important;
+  content: none !important;
+}
+
+.nav-icon.plain svg,
+.tree-chevron.plain svg {
+  display: none !important;
+}
+
+
+/* === Settings real SVG icons === */
+
+.settings-svg-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  flex: 0 0 22px !important;
+  margin-right: 14px !important;
+  color: currentColor !important;
+}
+
+.settings-svg-icon svg {
+  width: 22px !important;
+  height: 22px !important;
+  display: block !important;
+  fill: none !important;
+  stroke: currentColor !important;
+  stroke-width: 1.9 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+
+/* Kill all old settings icons. */
+.settings-groups button > .settings-icon,
+.settings-groups button > .nav-icon,
+.settings-groups button > .settings-letter-icon {
+  display: none !important;
+}
+
+.settings-groups button > .settings-icon::before,
+.settings-groups button > .settings-icon::after,
+.settings-groups button > .nav-icon::before,
+.settings-groups button > .nav-icon::after,
+.settings-groups button > .settings-letter-icon::before,
+.settings-groups button > .settings-letter-icon::after {
+  display: none !important;
+  content: none !important;
+}
+
+.settings-groups button {
+  display: flex !important;
+  align-items: center !important;
+}
+
+.settings-groups button.active .settings-svg-icon {
+  color: currentColor !important;
+}
+
+
+
+/* === DEBUGGED settings svg icons === */
+
+/*
+  Important:
+  The base stylesheet has:
+    .settings-groups button span::before { content: ""; border: ... }
+  That creates the old square icon on every span.
+  Kill it specifically for SVG icons.
+*/
+.settings-groups button .settings-svg-icon,
+.settings-groups button span.settings-svg-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  flex: 0 0 22px !important;
+  margin-right: 14px !important;
+  overflow: visible !important;
+  color: currentColor !important;
+  font-size: initial !important;
+  font-weight: normal !important;
+  text-transform: none !important;
+}
+
+.settings-groups button .settings-svg-icon::before,
+.settings-groups button .settings-svg-icon::after,
+.settings-groups button span.settings-svg-icon::before,
+.settings-groups button span.settings-svg-icon::after {
+  display: none !important;
+  content: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  border: 0 !important;
+}
+
+.settings-groups button .settings-svg-icon svg {
+  display: block !important;
+  width: 22px !important;
+  height: 22px !important;
+  fill: none !important;
+  stroke: currentColor !important;
+  stroke-width: 1.9 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+
+/* Hide only old direct icon spans, not our SVG span. */
+.settings-groups button > .settings-icon,
+.settings-groups button > .nav-icon,
+.settings-groups button > .settings-letter-icon {
+  display: none !important;
+}
+
+.settings-groups button {
+  display: flex !important;
+  align-items: center !important;
+}
+
+
+
+/* === SAFE repaired settings icons === */
+
+.settings-groups .settings-svg-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  flex: 0 0 22px !important;
+  margin-right: 14px !important;
+  overflow: visible !important;
+  color: currentColor !important;
+  font-size: initial !important;
+  font-weight: normal !important;
+  text-transform: none !important;
+}
+
+.settings-groups .settings-svg-icon::before,
+.settings-groups .settings-svg-icon::after {
+  display: none !important;
+  content: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  border: 0 !important;
+}
+
+.settings-groups .settings-svg-icon svg {
+  display: block !important;
+  width: 22px !important;
+  height: 22px !important;
+  fill: none !important;
+  stroke: currentColor !important;
+  stroke-width: 1.9 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+
+/* Hide only old direct icon spans if any remain. */
+.settings-groups button > .settings-icon,
+.settings-groups button > .nav-icon,
+.settings-groups button > .settings-letter-icon {
+  display: none !important;
+}
+
+.settings-groups button {
+  display: flex !important;
+  align-items: center !important;
+}
+
+.settings-groups button.active .settings-svg-icon {
+  color: currentColor !important;
+}
+
+
+
+/* === Fix session click area === */
+
+.tree-session-row {
+  cursor: pointer;
+}
+
+.tree-session-main {
+  width: 100% !important;
+  min-width: 0 !important;
+  justify-self: stretch !important;
+  cursor: pointer !important;
+  pointer-events: auto !important;
+}
+
+.tree-session-main .tree-label,
+.tree-session-main .session-status-dot {
+  pointer-events: none;
+}
+
+.session-menu-button {
+  cursor: pointer !important;
+  pointer-events: auto !important;
+}
+
+.tree-session-row:hover .tree-session-main {
+  color: #ffffff;
+}
+
+
+
+/* === Fixed settings groups click and icons === */
+
+/* Override old rule: .settings-groups button span::before draws a square. */
+.settings-groups button .settings-svg-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  flex: 0 0 22px !important;
+  margin-right: 14px !important;
+  overflow: visible !important;
+  color: currentColor !important;
+  font-size: initial !important;
+  font-weight: normal !important;
+  text-transform: none !important;
+}
+
+.settings-groups button .settings-svg-icon::before,
+.settings-groups button .settings-svg-icon::after {
+  display: none !important;
+  content: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  border: 0 !important;
+}
+
+.settings-groups button .settings-svg-icon svg {
+  display: block !important;
+  width: 22px !important;
+  height: 22px !important;
+  fill: none !important;
+  stroke: currentColor !important;
+  stroke-width: 1.9 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+
+.settings-groups button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.settings-groups button:not(:disabled) {
+  cursor: pointer;
+}
+
+.settings-groups button.active .settings-svg-icon {
+  color: currentColor !important;
+}
+
+
+
+/* === Slash skill command palette === */
+
+.prompt-input-wrap { position: relative; }
+
+.slash-command-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 50;
+  overflow: hidden;
+  border: 1px solid #d6deeb;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.18);
+}
+
+.slash-command-menu-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0 12px;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.slash-command-menu-header small {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.slash-command-menu-header button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.slash-command-option {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-bottom: 1px solid #eef2f7;
+  padding: 8px 12px;
+  background: #ffffff;
+  color: #0f172a;
+  text-align: left;
+}
+
+.slash-command-option:last-child { border-bottom: 0; }
+
+.slash-command-option:not(:disabled):hover,
+.slash-command-option.active:not(:disabled) {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.slash-command-option:disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+
+.slash-command-option strong,
+.slash-command-option small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-command-option strong {
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.slash-command-option small {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.slash-command-option em {
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.slash-command-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #fff1f2;
+  color: #e11d48;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.slash-command-icon.skill { background: #ffe4e6; }
+
+.slash-command-empty {
+  padding: 18px 12px;
+  color: #64748b;
+  font-size: 12px;
+  text-align: center;
+}
+
+.skill-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  border: 1px solid #fecdd3;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #fff1f2;
+  color: #be123c;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.skill-reference-chip-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #e11d48;
+  color: #ffffff;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.skill-reference-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* === Inline prompt skill/file token highlight === */
+
+.prompt-input-wrap {
+  position: relative;
+}
+
+.prompt-highlight-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  border: 0;
+  padding: 4px;
+  color: #0f172a;
+  background: transparent;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.prompt-highlight-layer .prompt-inline-skill-token {
+  color: #be123c;
+  font-weight: 850;
+  background: rgba(244, 63, 94, 0.10);
+  border-radius: 5px;
+  padding: 0 2px;
+}
+
+.prompt-highlight-layer .prompt-inline-file-token {
+  color: #1d4ed8;
+  font-weight: 800;
+  background: rgba(37, 99, 235, 0.10);
+  border-radius: 5px;
+  padding: 0 2px;
+}
+
+.prompt-frame textarea {
+  position: relative;
+  z-index: 1;
+  background: transparent !important;
+  color: transparent !important;
+  caret-color: #0f172a;
+}
+
+.prompt-frame textarea::selection {
+  background: rgba(37, 99, 235, 0.22);
+}
+
+.prompt-frame textarea::placeholder {
+  color: #94a3b8;
+}
+
+
+
+/* === Fix inline token caret alignment === */
+
+/*
+  The highlight layer must be metrically identical to the textarea.
+  Do NOT add padding/background/font-weight to inline tokens, otherwise
+  the visible text width differs from the textarea text width and the
+  caret appears in the wrong position.
+*/
+
+.prompt-highlight-layer {
+  box-sizing: border-box !important;
+  padding: 4px !important;
+  font: inherit !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+  letter-spacing: inherit !important;
+  white-space: pre-wrap !important;
+  overflow-wrap: break-word !important;
+}
+
+.prompt-highlight-layer .prompt-inline-skill-token {
+  color: #e11d48 !important;
+  font-weight: inherit !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+
+.prompt-highlight-layer .prompt-inline-file-token {
+  color: #2563eb !important;
+  font-weight: inherit !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+
+.prompt-frame textarea {
+  box-sizing: border-box !important;
+  padding: 4px !important;
+  font: inherit !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+  letter-spacing: inherit !important;
+  background: transparent !important;
+  color: transparent !important;
+  caret-color: #0f172a !important;
+}
+
+.prompt-frame textarea::selection {
+  background: rgba(37, 99, 235, 0.22) !important;
+}
+
+.prompt-frame textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+
+
+/* === HTML rich artifact preview === */
+
+.html-rich-preview {
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: #0f172a;
+}
+
+.html-rich-preview iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  border: 0;
+  background: #ffffff;
+}
+
+.message-fork-spinner {
+  width: 0.8em;
+  height: 0.8em;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  display: inline-block;
+  margin-right: 0.35rem;
+  vertical-align: -0.1em;
+  animation: message-fork-spin 0.7s linear infinite;
+}
+
+@keyframes message-fork-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Terminal View ── */
+.terminal-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #1a1b1e;
+}
+
+.terminal-tabs-bar {
+  display: flex;
+  align-items: center;
+  background: #25262b;
+  border-bottom: 1px solid #373a40;
+  padding: 0 4px;
+  min-height: 32px;
+}
+
+.terminal-tabs {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+  gap: 2px;
+}
+
+.terminal-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #909296;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+}
+
+.terminal-tab:hover {
+  background: #2c2e33;
+  color: #c1c2c5;
+}
+
+.terminal-tab.active {
+  background: #1a1b1e;
+  color: #e0e0e0;
+  border-color: #373a40;
+}
+
+.terminal-tab-close {
+  background: none;
+  border: none;
+  color: #909296;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 2px;
+}
+
+.terminal-tab-close:hover {
+  color: #e0e0e0;
+  background: #3a3d41;
+}
+
+.terminal-new-tab {
+  background: none;
+  border: none;
+  color: #909296;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.terminal-new-tab:hover {
+  color: #e0e0e0;
+  background: #2c2e33;
+}
+
+.terminal-container {
+  flex: 1;
+  padding: 4px;
+  overflow: hidden;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+}
+
+.terminal-container .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: #373a40 #1a1b1e;
+}
+
+/* Remote Terminal Placeholder */
+.terminal-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: #1a1b1e;
+  color: #909296;
+}
+
+.terminal-placeholder-content {
+  text-align: center;
+  padding: 2rem;
+}
+
+.terminal-placeholder-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.3;
+}
+
+.terminal-placeholder-content h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #c1c2c5;
+  margin-bottom: 0.5rem;
+}
+
+.terminal-placeholder-content p {
+  font-size: 0.875rem;
+  max-width: 24rem;
+  line-height: 1.5;
+}

@@ -1,0 +1,189 @@
+/* Agent UI permission card: neutral/blue style, clean and readable. */
+.permission-request {
+  position: relative !important;
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px !important;
+  padding: 14px !important;
+  border: 1px solid rgba(59, 130, 246, 0.25) !important;
+  border-radius: 14px !important;
+  background: rgba(239, 246, 255, 0.55) !important;
+  color: #1e293b !important;
+}
+
+.permission-request-topline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.permission-request-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #3b82f6;
+  color: #ffffff;
+  font-weight: 900;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.permission-request-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.permission-request-copy strong {
+  margin: 0 !important;
+  color: #1e3a8a !important;
+  font-size: 14px !important;
+  line-height: 18px !important;
+  letter-spacing: 0 !important;
+}
+
+.permission-tool-name {
+  color: #475569 !important;
+  font-size: 12px !important;
+  line-height: 16px !important;
+}
+
+.permission-prompt {
+  font-size: 13px;
+  line-height: 18px;
+  color: #334155;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.permission-request-details {
+  font-size: 12px;
+}
+
+.permission-request-details summary {
+  cursor: pointer;
+  color: #64748b;
+  font-weight: 600;
+  list-style: none;
+}
+
+.permission-request-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.permission-request-details summary::after {
+  content: " ›";
+}
+
+.permission-request-details[open] summary::after {
+  content: " ˅";
+}
+
+.permission-request-details pre {
+  margin: 8px 0 0 !important;
+  max-height: 220px !important;
+  overflow: auto !important;
+  padding: 10px !important;
+  border: 1px solid rgba(148, 163, 184, 0.3) !important;
+  border-radius: 10px !important;
+  background: rgba(15, 23, 42, 0.06) !important;
+  color: #334155 !important;
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 11px !important;
+  line-height: 17px !important;
+}
+
+.permission-request-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+}
+
+.permission-request-actions button {
+  min-width: 76px !important;
+  height: 34px !important;
+  border-radius: 10px !important;
+  padding: 0 13px !important;
+  border: 1px solid transparent !important;
+  font-size: 12px !important;
+  font-weight: 850 !important;
+  letter-spacing: 0 !important;
+  cursor: pointer !important;
+  transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease !important;
+}
+
+.permission-request-actions button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.permission-request-actions button:disabled {
+  cursor: not-allowed !important;
+  opacity: 0.5 !important;
+}
+
+.permission-allow-button {
+  background: #16a34a !important;
+  color: #f0fdf4 !important;
+  box-shadow: 0 10px 20px rgba(22, 163, 74, 0.2) !important;
+}
+
+.permission-deny-button {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border-color: rgba(185, 28, 28, 0.22) !important;
+  color: #991b1b !important;
+}
+
+.message-file-references {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.message-file-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.message-file-reference-chip.failed {
+  border-color: rgba(254, 202, 202, 0.65);
+  background: rgba(127, 29, 29, 0.24);
+}
+
+.message-file-reference-icon {
+  flex: 0 0 auto;
+  font-weight: 900;
+  opacity: 0.95;
+}
+
+.message-file-reference-name {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 750;
+}
+
+.message-file-reference-meta {
+  flex: 0 0 auto;
+  opacity: 0.8;
+  font-size: 11px;
+}
+
+

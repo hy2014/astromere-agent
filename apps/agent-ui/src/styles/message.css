@@ -1,0 +1,74 @@
+
+/* agent-ui @file reference chip display fix */
+.file-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(100%, 520px);
+}
+
+.file-reference-chip-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(460px, 70vw);
+}
+
+.file-reference-chip-icon {
+  flex: 0 0 auto;
+}
+
+.file-reference-chip-text {
+  display: inline-block;
+  min-width: 0;
+  max-width: min(380px, 60vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-reference-chip > button[type="button"]:last-child {
+  flex: 0 0 auto;
+}
+
+
+/* Fix @file chip label being flex-shrunk to 0 width. */
+.file-reference-chip-preview .file-reference-chip-text {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 1ch;
+  max-width: min(380px, 60vw);
+}
+
+.file-reference-chip-preview {
+  min-width: 0;
+  width: auto;
+}
+
+/* Final fix: prevent @file chip label from being flex-shrunk to one character. */
+.file-reference-chip-preview {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  width: fit-content !important;
+  max-width: min(460px, 70vw) !important;
+  flex: 0 0 auto !important;
+  overflow: visible !important;
+}
+
+.file-reference-chip-preview .file-reference-chip-icon {
+  flex: 0 0 auto !important;
+}
+
+.file-reference-chip-preview .file-reference-chip-text {
+  display: inline-block !important;
+  flex: 0 0 auto !important;
+  flex-shrink: 0 !important;
+  width: max-content !important;
+  min-width: unset !important;
+  max-width: min(380px, 60vw) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+

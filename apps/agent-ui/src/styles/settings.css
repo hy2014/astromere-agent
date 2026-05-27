@@ -1,0 +1,620 @@
+
+.app-shell.settings-mode {
+  grid-template-columns: 240px minmax(860px, 1fr);
+}
+
+.settings-view {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f7f8fc;
+  color: #0f172a;
+}
+
+.settings-topbar {
+  flex: 0 0 48px;
+  display: grid;
+  grid-template-columns: minmax(480px, 1fr) minmax(260px, 360px);
+  align-items: center;
+  gap: 24px;
+  border-bottom: 1px solid #dbe2ee;
+  padding: 0 24px;
+  background: #ffffff;
+}
+
+.settings-title-row {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  min-width: 0;
+}
+
+.settings-title-row > strong {
+  color: #030712;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+.settings-title-row nav {
+  display: flex;
+  align-items: stretch;
+  height: 48px;
+  gap: 2px;
+}
+
+.settings-title-row nav button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 0 16px;
+  background: transparent;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.settings-title-row nav button.active {
+  border-bottom-color: #2563eb;
+  color: #0b57d0;
+}
+
+.settings-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-toolbar input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 32px;
+  border: 1px solid #dbe2ee;
+  border-radius: 2px;
+  padding: 0 12px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 13px;
+}
+
+.settings-toolbar button {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.settings-toolbar button:hover {
+  background: #eef2f7;
+  color: #0f172a;
+}
+
+.settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px minmax(720px, 1fr);
+  overflow: hidden;
+}
+
+.settings-groups {
+  overflow-y: auto;
+  border-right: 1px solid #dbe2ee;
+  background: #ffffff;
+  padding: 28px 16px;
+}
+
+.settings-group-title {
+  margin: 0 0 14px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.settings-groups button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 42px;
+  border: 0;
+  border-radius: 2px;
+  padding: 0 14px;
+  background: transparent;
+  color: #334155;
+  text-align: left;
+}
+
+.settings-groups button + button {
+  margin-top: 6px;
+}
+
+.settings-groups button span {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 0;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.settings-groups button span::before {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  content: "";
+}
+
+.settings-groups button strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.settings-groups button.active {
+  background: #eef3ff;
+  color: #0b57d0;
+}
+
+.settings-groups button.active span {
+  color: #0b57d0;
+}
+
+.settings-content {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 28px 28px 32px;
+}
+
+.settings-content-inner {
+  max-width: 1060px;
+}
+
+.settings-heading h2 {
+  margin: 0 0 6px;
+  color: #030712;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 28px;
+}
+
+.settings-heading p,
+.settings-card-title p,
+.settings-row p,
+.settings-help p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.model-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 26px;
+}
+
+.model-card {
+  min-height: 126px;
+  border: 1px solid #dbe2ee;
+  border-radius: 4px;
+  padding: 14px;
+  background: #ffffff;
+  text-align: left;
+}
+
+.model-card.active {
+  border-color: #cbd5e1;
+}
+
+.model-card.muted {
+  opacity: 0.72;
+}
+
+.model-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.model-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 38px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.model-badge {
+  border-radius: 4px;
+  padding: 4px 8px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 12px;
+  text-transform: uppercase;
+}
+
+.model-card strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #111827;
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.model-card small {
+  color: #64748b;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.settings-card {
+  margin-top: 42px;
+  border: 1px solid #dbe2ee;
+  border-radius: 6px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.settings-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 66px;
+  border-bottom: 1px solid #eef2f7;
+  padding: 14px 28px;
+}
+
+.settings-card-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ds-logo {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  background: #050505;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+}
+
+.settings-card-title h3 {
+  margin: 0 0 2px;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.operational-badge {
+  border: 1px solid #86efac;
+  border-radius: 2px;
+  padding: 6px 10px;
+  background: #f0fdf4;
+  color: #15803d;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.settings-form {
+  padding: 8px 28px 0;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 260px minmax(360px, 1fr);
+  gap: 42px;
+  border-bottom: 1px solid #eef2f7;
+  padding: 24px 0 32px;
+}
+
+.settings-row h4 {
+  margin: 0 0 8px;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.settings-fields {
+  display: grid;
+  gap: 22px;
+}
+
+.settings-fields.two-column {
+  grid-template-columns: minmax(180px, 280px) minmax(260px, 1fr);
+  align-items: start;
+}
+
+.settings-fields label {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-fields label > span {
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+}
+
+.settings-fields input {
+  width: 100%;
+  height: 38px;
+  border: 1px solid #dbe2ee;
+  border-radius: 4px;
+  padding: 0 14px;
+  background: #f8fafc;
+  color: #111827;
+  font-size: 13px;
+}
+
+.secret-field,
+.token-field {
+  display: flex;
+  align-items: center;
+  border: 1px solid #dbe2ee;
+  border-radius: 4px;
+  background: #f8fafc;
+}
+
+.secret-field input,
+.token-field input {
+  border: 0;
+  background: transparent;
+}
+
+.secret-field button {
+  flex: 0 0 auto;
+  height: 36px;
+  border: 0;
+  padding: 0 14px;
+  background: transparent;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.token-field em {
+  flex: 0 0 auto;
+  padding-right: 12px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.temperature-range {
+  accent-color: #0b57d0;
+  padding: 0;
+}
+
+.range-labels {
+  display: flex;
+  justify-content: space-between;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.performance-graph {
+  position: relative;
+  height: 132px;
+  border: 1px solid #111827;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #1f2937;
+}
+
+.performance-graph::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 100% 24px, 40px 100%;
+  opacity: 0.5;
+}
+
+.graph-bars {
+  position: absolute;
+  inset: 14px 20px 16px;
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.graph-bars span {
+  flex: 1 1 auto;
+  min-width: 6px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.performance-graph svg {
+  position: absolute;
+  inset: 16px 22px;
+  width: calc(100% - 44px);
+  height: calc(100% - 32px);
+}
+
+.performance-graph polyline {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.28);
+  stroke-width: 3;
+}
+
+
+.deepseek-pricing-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid #dbe2ee;
+  border-radius: 4px;
+  padding: 14px;
+  background: #f8fafc;
+}
+
+.deepseek-pricing-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.deepseek-pricing-table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid #dbe2ee;
+  border-radius: 4px;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.deepseek-pricing-table th,
+.deepseek-pricing-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #111827;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.deepseek-pricing-table th {
+  color: #64748b;
+  background: #f1f5f9;
+  font-weight: 800;
+}
+
+.deepseek-pricing-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.deepseek-pricing-empty {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 28px;
+  background: #fbfdff;
+}
+
+.settings-actions > div {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.test-button,
+.discard-button,
+.save-button {
+  height: 42px;
+  border-radius: 4px;
+  padding: 0 22px;
+  font-size: 15px;
+}
+
+.test-button {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #1f2937;
+}
+
+.discard-button {
+  border: 0;
+  background: transparent;
+  color: #334155;
+}
+
+.save-button {
+  border: 0;
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.24);
+}
+
+.settings-help {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 28px;
+  border: 1px dashed #dbe2ee;
+  padding: 16px 20px;
+  background: #ffffff;
+}
+
+.settings-help > div {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-help > div > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: #eef3ff;
+  color: #0b57d0;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.settings-help strong {
+  display: block;
+  margin-bottom: 2px;
+  color: #111827;
+  font-size: 15px;
+}
+
+.settings-help button {
+  border: 0;
+  background: transparent;
+  color: #0b57d0;
+  font-size: 15px;
+}
