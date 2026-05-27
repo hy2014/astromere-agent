@@ -1,0 +1,268 @@
+
+.prompt-box {
+  flex: 0 0 auto;
+  border-top: 1px solid #e2e8f0;
+  padding: 16px;
+  background: #ffffff;
+}
+
+.prompt-frame {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+  background: #f8fafc;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+
+.prompt-frame:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
+
+.prompt-frame textarea {
+  display: block;
+  width: 100%;
+  height: 80px;
+  border: 0;
+  padding: 4px;
+  resize: none;
+  background: transparent;
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.prompt-frame textarea:focus {
+  outline: none;
+}
+
+
+.file-reference-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.file-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 28px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  padding: 0 4px 0 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.file-reference-chip-icon {
+  margin-right: 4px;
+  color: #2563eb;
+  font-weight: 900;
+}
+
+.file-reference-chip-text {
+  min-width: 0;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-reference-chip button {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  margin-left: 4px;
+  background: transparent;
+  color: #2563eb;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.file-reference-chip button:hover {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.prompt-input-wrap {
+  position: relative;
+}
+
+.file-mention-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  overflow: hidden;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+}
+
+.file-mention-menu-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border-bottom: 1px solid #eff6ff;
+  color: #1e3a8a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.file-mention-menu-header small {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.file-mention-option {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.42fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #f8fafc;
+  padding: 9px 10px;
+  background: #ffffff;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+
+.file-mention-option:hover,
+.file-mention-option.active {
+  background: #eff6ff;
+}
+
+.file-mention-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.file-mention-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.file-mention-meta {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.file-mention-empty {
+  padding: 14px 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.prompt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 8px;
+}
+
+.permission-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.permission-chip:hover {
+  border-color: #e2e8f0;
+  background: rgba(226, 232, 240, 0.5);
+}
+
+.permission-chip span {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.permission-chip select {
+  max-width: 168px;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+
+.context-usage-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: #475569;
+  background: rgba(248, 250, 252, 0.9);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.prompt-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.prompt-tools button {
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 8px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.send-button {
+  min-width: 76px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.send-button.stop {
+  background: #e2e8f0;
+  color: #334155;
+}

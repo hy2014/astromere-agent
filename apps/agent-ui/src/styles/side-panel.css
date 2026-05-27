@@ -1,0 +1,369 @@
+
+.side-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: #0f172a;
+  border-right: 1px solid #1e293b;
+  color: #cbd5e1;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 80px;
+  padding: 0 16px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.brand-title {
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 18px;
+}
+
+.brand-version {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workspace-nav {
+  flex-shrink: 0;
+  padding-top: 16px;
+}
+
+.workspace-active,
+.skills-nav,
+.tree-project,
+.tree-session {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.workspace-active {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  border-left: 2px solid transparent;
+  padding: 0 14px 0 0;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.workspace-active.active,
+.workspace-active:hover {
+  border-left-color: #2563eb;
+  background: #1e293b;
+  color: #ffffff;
+}
+
+.workspace-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  border: 0;
+  padding: 0 0 0 14px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.nav-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.project-add {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.project-add:hover {
+  border-color: #2563eb;
+  background: #263449;
+  color: #ffffff;
+}
+
+.nav-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
+  margin-right: 12px;
+  color: #60a5fa;
+  font-size: 0;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.nav-icon::before {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  content: "";
+}
+
+.nav-icon.small {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  color: #64748b;
+}
+
+.nav-icon.small::before {
+  width: 8px;
+  height: 8px;
+}
+
+.nav-icon.tiny {
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  color: #64748b;
+}
+
+.nav-icon.tiny::before {
+  width: 6px;
+  height: 6px;
+}
+
+.workspace-tree {
+  margin-top: 6px;
+  margin-left: 16px;
+}
+
+.tree-project {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 16px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-chevron {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tree-project:hover,
+.tree-session:hover,
+.skills-nav:hover {
+  background: rgba(30, 41, 59, 0.55);
+  color: #ffffff;
+}
+
+.tree-branch {
+  margin-left: 22px;
+  border-left: 1px solid #334155;
+}
+
+.tree-session {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 12px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.tree-session.active {
+  background: rgba(30, 41, 59, 0.5);
+  color: #ffffff;
+}
+
+.tree-session.create {
+  color: #60a5fa;
+}
+
+.tree-session.create:hover {
+  background: rgba(37, 99, 235, 0.14);
+}
+
+.sidebar-empty {
+  padding: 8px 16px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.skills-nav {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  margin-top: 18px;
+  padding: 0 16px;
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+.nav-count {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.panel-section {
+  flex: 0 0 auto;
+  max-height: 34vh;
+  overflow: hidden;
+  border-top: 1px solid #1e293b;
+  padding: 12px 0;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 24px;
+  padding: 0 16px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.count-label {
+  flex: 0 0 auto;
+  min-width: 24px;
+  padding: 2px 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #475569;
+  background: #f8fafc;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  text-transform: none;
+}
+
+.side-panel .count-label {
+  border-color: #334155;
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+.entry-list {
+  max-height: calc(34vh - 36px);
+  overflow-y: auto;
+  margin-top: 4px;
+}
+
+.entry-row {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 26px;
+  border: 0;
+  padding: 3px 16px 3px 20px;
+  background: transparent;
+  color: #94a3b8;
+  text-align: left;
+}
+
+.entry-row:not(:disabled):hover {
+  background: rgba(30, 41, 59, 0.7);
+  color: #ffffff;
+}
+
+.entry-kind {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.entry-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.sidebar-footer {
+  flex: 0 0 auto;
+  border-top: 1px solid #1e293b;
+  padding: 8px;
+}
+
+.sidebar-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 8px;
+  background: transparent;
+  color: #94a3b8;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sidebar-action.active,
+.sidebar-action:not(:disabled):hover {
+  background: #1e293b;
+  color: #ffffff;
+}

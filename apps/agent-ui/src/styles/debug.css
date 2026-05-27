@@ -1,0 +1,126 @@
+/* Per-assistant Debug copy controls */
+.stream-message.assistant {
+  margin-right: auto;
+}
+
+.stream-message.user {
+  margin-left: auto;
+  flex-direction: row-reverse;
+  max-width: 760px;
+}
+
+.stream-message.user .message-body {
+  justify-items: end;
+}
+
+.stream-message.user .message-bubble {
+  border-top-left-radius: 8px;
+  border-top-right-radius: 0;
+}
+
+.stream-label-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+}
+
+.stream-message.user .stream-label-row {
+  justify-content: flex-end;
+}
+
+.message-debug-button {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.message-debug-button:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.message-debug-button.copied {
+  border-color: #22c55e;
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+.copy-toast {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  z-index: 80;
+  transform: translateX(-50%);
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 13px;
+  font-weight: 750;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
+}
+
+.message-debug-button.active {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.message-debug-panel {
+  margin-top: 8px;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #020617;
+  color: #cbd5e1;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.18);
+}
+
+.message-debug-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #1e293b;
+  padding: 7px 10px;
+  background: #0f172a;
+  font-size: 11px;
+  font-weight: 800;
+  color: #93c5fd;
+}
+
+.message-debug-panel-header button {
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #111827;
+  color: #bfdbfe;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.message-debug-panel-header button:hover {
+  border-color: #60a5fa;
+  color: #ffffff;
+}
+
+.message-debug-panel pre {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px;
+  color: #dbeafe;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+
