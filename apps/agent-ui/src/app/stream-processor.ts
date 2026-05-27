@@ -1,20 +1,17 @@
+import type {AgentReplStreamEvent, StreamItem,} from "../types";
 import type {
-  AgentReplStreamEvent,
-  StreamItem,
-} from "../types";
-import type {
-  DebugStreamEvent,
   AssistantMessageDebugBundle,
+  DebugStreamEvent,
   FileMentionState,
-  SlashCommandMenuState,
   ResolvedRuntimeBundleEvent,
+  SlashCommandMenuState,
 } from "./types";
 import {
-  isRecord,
   addUniqueString,
   extractPreviewLinks,
-  modelCallIdFromRawJson,
   isPermissionEventName,
+  isRecord,
+  modelCallIdFromRawJson,
 } from "./file-utils";
 
 // ─── Event utilities ────────────────────────────────────────────────────

@@ -1,8 +1,5 @@
-import type { StreamItem } from "../types";
-import type {
-  ProjectSession,
-  HiddenSession,
-} from "./types";
+import type {StreamItem} from "../types";
+import type {HiddenSession, ProjectSession,} from "./types";
 
 export const hiddenSessionsStorageKey = "agent-ui.hiddenSessions.v1";
 

@@ -1,15 +1,15 @@
-import { useState } from "react";
-import type { RemoteProfile } from "../../runtime";
+import {useState} from "react";
+import type {RemoteProfile} from "../../runtime";
 import {
-  loadRemoteProfiles,
-  getActiveRemoteProfileId,
-  createRemoteProfileInput,
-  useRemoteRuntime,
-  useLocalRuntime,
-  clearActiveRemoteProfileId,
-  deleteRemoteProfile,
-  upsertRemoteProfile,
-  setActiveRemoteProfileId,
+    clearActiveRemoteProfileId,
+    createRemoteProfileInput,
+    deleteRemoteProfile,
+    getActiveRemoteProfileId,
+    loadRemoteProfiles,
+    setActiveRemoteProfileId,
+    upsertRemoteProfile,
+    useLocalRuntime,
+    useRemoteRuntime,
 } from "../../runtime";
 
 export function RemoteSettingsPanel() {

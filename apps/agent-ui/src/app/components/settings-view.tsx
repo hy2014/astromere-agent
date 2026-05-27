@@ -1,8 +1,8 @@
-import { useState } from "react";
-import type { SettingsViewProps, SettingsSection } from "../types";
-import { sessionKey } from "../file-utils";
-import { RemoteSettingsPanel } from "./remote-settings-panel";
-import { ModelsSettingsPanel } from "./models-settings-panel";
+import {useState} from "react";
+import type {SettingsSection, SettingsViewProps} from "../types";
+import {sessionKey} from "../file-utils";
+import {RemoteSettingsPanel} from "./remote-settings-panel";
+import {ModelsSettingsPanel} from "./models-settings-panel";
 
 // ─── SessionsSettingsPanel ─────────────────────────────────────────────
 

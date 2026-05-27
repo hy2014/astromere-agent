@@ -1,13 +1,9 @@
-import { useState, useEffect } from "react";
-import type { StreamLink } from "../../types";
-import type { LocalImageMetadata } from "../types";
-import type { LocalImagePreview } from "../../types";
-import {
-  readLocalImageMetadata,
-  readLocalImagePreview,
-} from "../../runtime";
-import { formatPreviewBytes } from "../file-utils";
-import { INLINE_IMAGE_PREVIEW_BYTES } from "../constants";
+import {useEffect, useState} from "react";
+import type {LocalImagePreview, StreamLink} from "../../types";
+import type {LocalImageMetadata} from "../types";
+import {readLocalImageMetadata, readLocalImagePreview,} from "../../runtime";
+import {formatPreviewBytes} from "../file-utils";
+import {INLINE_IMAGE_PREVIEW_BYTES} from "../constants";
 
 // ─── MessageImagePreviews ──────────────────────────────────────────────
 

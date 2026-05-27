@@ -1,6 +1,6 @@
-import type { HiddenSession, ProjectSession } from "./types";
-import { hiddenSessionsStorageKey, createPendingSession, sessionKey } from "./file-utils";
-import { getActiveRemoteProfileId, loadRemoteProfiles } from "../runtime";
+import type {HiddenSession, ProjectSession} from "./types";
+import {createPendingSession, hiddenSessionsStorageKey, sessionKey} from "./file-utils";
+import {getActiveRemoteProfileId, loadRemoteProfiles} from "../runtime";
 
 export function getActiveRemoteProfileBaseUrl(): string | null {
   const profile = loadActiveRemoteProfileSnapshot();

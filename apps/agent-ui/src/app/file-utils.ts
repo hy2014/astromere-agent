@@ -1,13 +1,24 @@
-import type { StreamLink, LocalFileReferenceSummary, WorkspaceFileReference, StreamItem, AgentReplStreamEvent } from "../types";
-import type { LocalFileReference, ProjectSession, DebugStreamEvent, AssistantMessageDebugBundle } from "./types";
-import type { FileMentionState, SlashCommandMenuState } from "./types";
-import type { RemoteProfile } from "../runtime";
-import type { RuntimeSessionDetail } from "../types";
+import type {
+  AgentReplStreamEvent,
+  LocalFileReferenceSummary,
+  RuntimeSessionDetail,
+  StreamItem,
+  StreamLink
+} from "../types";
+import type {
+  AssistantMessageDebugBundle,
+  DebugStreamEvent,
+  FileMentionState,
+  LocalFileReference,
+  ProjectSession,
+  SlashCommandMenuState
+} from "./types";
+import type {RemoteProfile} from "../runtime";
 import {
   getActiveRemoteProfileId,
   loadRemoteProfiles,
-  readLocalReferenceFile,
   loadTypedRuntimeSession,
+  readLocalReferenceFile,
 } from "../runtime";
 
 // ── Storage keys ──────────────────────────────────────────────────────────

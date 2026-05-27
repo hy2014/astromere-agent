@@ -1,6 +1,6 @@
-import type { StreamLink } from "../../types";
-import type { LocalFileReference } from "../types";
-import { localFileReferenceName, localReferenceToStreamLink } from "../file-utils";
+import type {StreamLink} from "../../types";
+import type {LocalFileReference} from "../types";
+import {localFileReferenceName, localReferenceToStreamLink} from "../file-utils";
 
 interface FileReferenceTrayProps {
   fileReferences: LocalFileReference[];

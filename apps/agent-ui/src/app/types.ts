@@ -1,6 +1,5 @@
-import type { WorkspaceFileReference, FileView, GitDiff, StreamLink, LocalFileReferenceSummary } from "../types";
-import type { AgentReplCapabilityItem } from "../runtime";
-import type { BundleUsageTotals } from "../tauri";
+import type {FileView, GitDiff, LocalFileReferenceSummary, StreamLink, WorkspaceFileReference} from "../types";
+import type {AgentReplCapabilityItem} from "../runtime";
 
 export type LocalImageMetadata = {
   path?: string;

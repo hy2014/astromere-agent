@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Terminal as XTerm } from "xterm";
-import { FitAddon } from "xterm-addon-fit";
+import React, {useCallback, useEffect, useRef, useState} from "react";
+import {Terminal as XTerm} from "xterm";
+import {FitAddon} from "xterm-addon-fit";
 import "xterm/css/xterm.css";
-import { createLocalBackend, createRemoteBackend, type ITerminalBackend } from "./TerminalBackend";
+import {createLocalBackend, createRemoteBackend, type ITerminalBackend} from "./TerminalBackend";
 
 interface TerminalTab {
   id: string;
