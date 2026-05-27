@@ -61,6 +61,35 @@ export function SessionList({
           session.processStatus === "active"
             ? `running${session.processPid ? ` · pid ${session.processPid}` : ""}`
             : "not running";
+
+        const handleSelectSession = (event: React.MouseEvent) => {
+          event.stopPropagation();
+          onSelectSession(project, session.id);
+        };
+
+        const handleToggleMenu = (event: React.MouseEvent) => {
+          event.stopPropagation();
+          setOpenSessionMenu((current) =>
+            current?.root === project.root &&
+            current.sessionId === session.id
+              ? null
+              : {
+                  root: project.root,
+                  sessionId: session.id,
+                },
+          );
+        };
+
+        const handleForkSession = (event: React.MouseEvent) => {
+          event.stopPropagation();
+          void onForkSession(project, session);
+        };
+
+        const handleHideSession = (event: React.MouseEvent) => {
+          event.stopPropagation();
+          void onHideSession(project, session);
+        };
+
         return (
           <div
             key={session.id}
@@ -69,10 +98,7 @@ export function SessionList({
             <button
               className="tree-session-main"
               type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onSelectSession(project, session.id);
-              }}
+              onClick={handleSelectSession}
             >
               <span
                 className={`session-status-dot ${session.processStatus === "active" ? "active" : "stopped"}`}
@@ -91,18 +117,7 @@ export function SessionList({
               type="button"
               aria-label={`Open menu for ${session.title}`}
               aria-expanded={isMenuOpen}
-              onClick={(event) => {
-                event.stopPropagation();
-                setOpenSessionMenu((current) =>
-                  current?.root === project.root &&
-                  current.sessionId === session.id
-                    ? null
-                    : {
-                        root: project.root,
-                        sessionId: session.id,
-                      },
-                );
-              }}
+              onClick={handleToggleMenu}
             >
               ...
             </button>
@@ -111,20 +126,14 @@ export function SessionList({
                 <button
                   type="button"
                   role="menuitem"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void onForkSession(project, session);
-                  }}
+                  onClick={handleForkSession}
                 >
                   Fork
                 </button>
                 <button
                   type="button"
                   role="menuitem"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void onHideSession(project, session);
-                  }}
+                  onClick={handleHideSession}
                 >
                   删除
                 </button>

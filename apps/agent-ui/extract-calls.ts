@@ -324,7 +324,7 @@ function findFirstJsxInParen(node: Node): string {
   return result;
 }
 
-function extractRenderBindings(sourceFile: ReturnType<typeof project.getSourceFile>, states: StateInfo[]): RenderBinding[] {
+function extractRenderBindings(sourceFile: ReturnType<typeof project.getSourceFile>, states: StateInfo[], props: PropInfo[]): RenderBinding[] {
   const results: RenderBinding[] = [];
   if (!sourceFile) return results;
 
@@ -346,6 +346,11 @@ function extractRenderBindings(sourceFile: ReturnType<typeof project.getSourceFi
         states.forEach(s => {
           if (initText.includes(s.name) || initText.includes(s.setter)) {
             results.push({ type: "className", state: s.name, element: getElementTag(node.getParent()) });
+          }
+        });
+        props.forEach(p => {
+          if (initText.includes(p.name)) {
+            results.push({ type: "className", state: p.name, element: getElementTag(node.getParent()) });
           }
         });
       }
@@ -495,7 +500,19 @@ function extractUseEffects(sourceFile: ReturnType<typeof project.getSourceFile>,
 
 // ========== Main ==========
 
-for (const filePath of TARGET_FILES) {
+// 解析命令行参数 --file
+const args = process.argv.slice(2);
+const fileIndex = args.indexOf("--file");
+const fIndex = args.indexOf("-f");
+const cliFilePath = fileIndex !== -1 && args.length > fileIndex + 1
+  ? args[fileIndex + 1]
+  : fIndex !== -1 && args.length > fIndex + 1
+  ? args[fIndex + 1]
+  : null;
+
+const filesToAnalyze = cliFilePath ? [cliFilePath] : TARGET_FILES;
+
+for (const filePath of filesToAnalyze) {
   const sourceFile = project.getSourceFile(filePath);
   if (!sourceFile) {
     console.log(`\n=== ${filePath} NOT FOUND ===`);
@@ -536,7 +553,7 @@ for (const filePath of TARGET_FILES) {
   });
 
   console.log("\n-- Render Bindings --");
-  const bindings = extractRenderBindings(sourceFile, states);
+  const bindings = extractRenderBindings(sourceFile, states, props);
   bindings.forEach(b => {
     console.log(`  [${b.type}] state=${b.state} -> ${b.element}`);
   });
