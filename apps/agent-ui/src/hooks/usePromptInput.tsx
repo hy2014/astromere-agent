@@ -212,7 +212,7 @@ export function usePromptInput({
     return () => {
       cancelled = true;
     };
-  }, [slashCommandMenu.active, slashCommandMenu.level, activeProject, activeSessionId, selectedChatModel, permissionMode]);
+  }, [slashCommandMenu.active, slashCommandMenu.level, activeProject?.root, activeSessionId, selectedChatModel, permissionMode]);
 
   // --- Search files when file mention is active ---
   useEffect(() => {
