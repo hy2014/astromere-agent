@@ -1,6 +1,7 @@
 // checker/rules/derived-value.ts
 import * as ts from "typescript";
 import { RuleContext } from "../types";
+import { isDepCall } from "../utils";  // ← 加这行
 
 /**
  * JSX 中引用的派生值必须通过 dep() 计算
@@ -29,6 +30,10 @@ export function checkDerivedValues(ctx: RuleContext) {
     function checkJsxVars(node: ts.Node) {
         if (ts.isJsxExpression(node) && node.expression) {
             const expr = node.expression;
+
+            // dep() 调用直接允许
+            if (isDepCall(expr)) return;
+
             if (ts.isIdentifier(expr)) {
                 const varName = expr.text;
 
@@ -51,6 +56,12 @@ export function checkDerivedValues(ctx: RuleContext) {
                         node
                     );
                 }
+            } else {
+                ctx.addViolation(
+                    "派生值来源",
+                    "JSX 中 `{...}` 必须是单一变量引用或 dep() 调用，禁止表达式、逻辑运算。",
+                    node
+                );
             }
         }
         ts.forEachChild(node, checkJsxVars);
