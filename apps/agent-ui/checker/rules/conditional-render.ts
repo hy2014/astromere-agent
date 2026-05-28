@@ -1,6 +1,7 @@
 // checker/rules/conditional-render.ts
 import * as ts from "typescript";
 import { RuleContext } from "../types";
+import {isInsideDep} from "../utils";
 
 /**
  * 条件渲染白名单：
@@ -12,6 +13,7 @@ export function checkConditionalRender(ctx: RuleContext) {
     function visit(node: ts.Node) {
         if (ts.isJsxExpression(node) && node.expression) {
             const expr = node.expression;
+            if (isInsideDep(node)) return;
 
             // 检查 && 表达式
             if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {

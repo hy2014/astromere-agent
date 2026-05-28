@@ -24,6 +24,7 @@ import {PromptInputArea} from "./PromptInputArea";
 import {MessagesStream, renderPromptHighlightedText} from "./messages-stream";
 import {assistantTurnDetails, compactCountLabel} from "../debug-utils";
 import {formatDebugTime} from "../file-utils";
+import {dep} from "../../core/dep";
 
 // ─── SessionList ────────────────────────────────────────────────────────
 
@@ -37,119 +38,119 @@ export interface SessionListProps {
 }
 
 export function SessionList({
-  project,
-  activeSessionId,
-  onSelectSession,
-  onCreateSession,
-  onForkSession,
-  onHideSession,
-}: SessionListProps) {
+                              project,
+                              activeSessionId,
+                              onSelectSession,
+                              onCreateSession,
+                              onForkSession,
+                              onHideSession,
+                            }: SessionListProps) {
   const [openSessionMenu, setOpenSessionMenu] = useState<{
     root: string;
     sessionId: string;
   } | null>(null);
 
   return (
-    <div className="tree-branch">
-      {project.sessions.map((session) => {
-        const isMenuOpen =
-          openSessionMenu?.root === project.root &&
-          openSessionMenu.sessionId === session.id;
-        const isActiveSession = activeSessionId === session.id;
-        const statusTitle =
-          session.processStatus === "active"
-            ? `running${session.processPid ? ` · pid ${session.processPid}` : ""}`
-            : "not running";
+      <div className="tree-branch">
+        {project.sessions.map((session) => {
+          const isMenuOpen =
+              openSessionMenu?.root === project.root &&
+              openSessionMenu.sessionId === session.id;
+          const isActiveSession = activeSessionId === session.id;
+          const statusTitle =
+              session.processStatus === "active"
+                  ? `running${session.processPid ? ` · pid ${session.processPid}` : ""}`
+                  : "not running";
 
-        const handleSelectSession = (event: React.MouseEvent) => {
-          event.stopPropagation();
-          onSelectSession(project, session.id);
-        };
+          const handleSelectSession = (event: React.MouseEvent) => {
+            event.stopPropagation();
+            onSelectSession(project, session.id);
+          };
 
-        const handleToggleMenu = (event: React.MouseEvent) => {
-          event.stopPropagation();
-          setOpenSessionMenu((current) =>
-            current?.root === project.root &&
-            current.sessionId === session.id
-              ? null
-              : {
-                  root: project.root,
-                  sessionId: session.id,
-                },
-          );
-        };
+          const handleToggleMenu = (event: React.MouseEvent) => {
+            event.stopPropagation();
+            setOpenSessionMenu((current) =>
+                current?.root === project.root &&
+                current.sessionId === session.id
+                    ? null
+                    : {
+                      root: project.root,
+                      sessionId: session.id,
+                    },
+            );
+          };
 
-        const handleForkSession = (event: React.MouseEvent) => {
-          event.stopPropagation();
-          void onForkSession(project, session);
-        };
+          const handleForkSession = (event: React.MouseEvent) => {
+            event.stopPropagation();
+            void onForkSession(project, session);
+          };
 
-        const handleHideSession = (event: React.MouseEvent) => {
-          event.stopPropagation();
-          void onHideSession(project, session);
-        };
+          const handleHideSession = (event: React.MouseEvent) => {
+            event.stopPropagation();
+            void onHideSession(project, session);
+          };
 
-        return (
-          <div
-            key={session.id}
-            className={`tree-session-row ${isActiveSession ? "active" : ""}`}
-          >
-            <button
-              className="tree-session-main"
-              type="button"
-              onClick={handleSelectSession}
-            >
-              <span
-                className={`session-status-dot ${session.processStatus === "active" ? "active" : "stopped"}`}
-                title={statusTitle}
-                aria-label={statusTitle}
-              />
-              <span
-                className="tree-label"
-                title={session.title}
+          return (
+              <div
+                  key={session.id}
+                  className={`tree-session-row ${isActiveSession ? "active" : ""}`}
               >
+                <button
+                    className="tree-session-main"
+                    type="button"
+                    onClick={handleSelectSession}
+                >
+              <span
+                  className={`session-status-dot ${session.processStatus === "active" ? "active" : "stopped"}`}
+                  title={statusTitle}
+                  aria-label={statusTitle}
+              />
+                  <span
+                      className="tree-label"
+                      title={session.title}
+                  >
                 {session.title}
               </span>
-            </button>
-            <button
-              className="session-menu-button"
-              type="button"
-              aria-label={`Open menu for ${session.title}`}
-              aria-expanded={isMenuOpen}
-              onClick={handleToggleMenu}
-            >
-              ...
-            </button>
-            {isMenuOpen ? (
-              <div className="session-menu" role="menu">
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={handleForkSession}
-                >
-                  Fork
                 </button>
                 <button
-                  type="button"
-                  role="menuitem"
-                  onClick={handleHideSession}
+                    className="session-menu-button"
+                    type="button"
+                    aria-label={`Open menu for ${session.title}`}
+                    aria-expanded={isMenuOpen}
+                    onClick={handleToggleMenu}
                 >
-                  删除
+                  ...
                 </button>
+                {isMenuOpen ? (
+                    <div className="session-menu" role="menu">
+                      <button
+                          type="button"
+                          role="menuitem"
+                          onClick={handleForkSession}
+                      >
+                        Fork
+                      </button>
+                      <button
+                          type="button"
+                          role="menuitem"
+                          onClick={handleHideSession}
+                      >
+                        删除
+                      </button>
+                    </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
-        );
-      })}
-      <button
-        className="tree-session create"
-        type="button"
-        onClick={() => onCreateSession(project)}
-      >
-        <span className="nav-icon tiny plain" aria-hidden="true">+</span>
-        <span className="tree-label">新建会话</span>
-      </button>
-    </div>
+          );
+        })}
+        <button
+            className="tree-session create"
+            type="button"
+            onClick={() => onCreateSession(project)}
+        >
+          <span className="nav-icon tiny plain" aria-hidden="true">+</span>
+          <span className="tree-label">新建会话</span>
+        </button>
+      </div>
   );
 }
 
@@ -163,8 +164,8 @@ export interface SessionDialogProps {
   onToggleSessionUsage: () => void;
   onSetIsDebugOpen: (open: boolean) => void;
   sessionUsageSnapshotsForSession: (
-    usageByKey: Record<string, BundleUsageSnapshot>,
-    sessionId: string | null,
+      usageByKey: Record<string, BundleUsageSnapshot>,
+      sessionId: string | null,
   ) => BundleUsageSnapshot[];
   streamUsageByBundleKey: Record<string, BundleUsageSnapshot>;
 
@@ -199,8 +200,8 @@ export interface SessionDialogProps {
   onSetOpenAssistantUsageMessageId: (id: string | null) => void;
   onForkFromMessage: (item: Extract<StreamItem, { kind: "message" }>) => void;
   assistantDebugPayload: (
-    item: Extract<StreamItem, { kind: "message" }>,
-    action: "view" | "copy",
+      item: Extract<StreamItem, { kind: "message" }>,
+      action: "view" | "copy",
   ) => Record<string, unknown>;
 
   // PromptInputArea props
@@ -233,7 +234,7 @@ export interface SessionDialogProps {
   slashLeafDescription: string;
   slashLeafEmptyText: string;
   onSetSlashCommandMenu: (
-    updater: (current: SlashCommandMenuState) => SlashCommandMenuState,
+      updater: (current: SlashCommandMenuState) => SlashCommandMenuState,
   ) => void;
   onSelectSlashRootItem: (item: SlashRootItem) => void;
   onSelectSlashItem: (item: AgentReplCapabilityItem) => void;
@@ -257,290 +258,295 @@ export interface SessionDialogProps {
 }
 
 export function SessionDialog({
-  activeSessionTitle,
-  activeSessionId,
-  isDebugOpen,
-  onToggleSessionUsage,
-  onSetIsDebugOpen,
-  sessionUsageSnapshotsForSession,
-  streamUsageByBundleKey,
-  streamItems,
-  assistantDebugBundles,
-  openAssistantUsageMessageId,
-  openAssistantDebugMessageId,
-  openProcessMessageIds,
-  copiedDebugMessageId,
-  copyToast,
-  error,
-  activeProject,
-  isRunningTurn,
-  isInterruptingTurn,
-  forkingMessageId,
-  pendingPermission,
-  isResolvingFileReferences,
-  onViewAssistantDebug,
-  onCopyAssistantDebug,
-  onViewAssistantUsage,
-  onToggleAssistantProcess,
-  onOpenPreviewLink,
-  onSetOpenAssistantUsageMessageId,
-  onForkFromMessage,
-  assistantDebugPayload,
-  prompt,
-  onPromptChange,
-  onPromptKeyDown,
-  onSubmit,
-  canSendPrompt,
-  onInterruptTurn,
-  textareaRef,
-  promptHighlightRef,
-  promptImeStateRef,
-  markPromptImeActive,
-  fileReferences,
-  onRemoveFileReference,
-  fileMention,
-  fileSuggestions,
-  fileSuggestionIndex,
-  isSearchingFiles,
-  onSelectFileSuggestion,
-  onUpdateFileMentionFromInput,
-  onUpdateSlashCommandMenuFromInput,
-  slashCommandMenu,
-  slashRootOptions,
-  slashLeafOptions,
-  slashLeafTitle,
-  slashLeafDescription,
-  slashLeafEmptyText,
-  onSetSlashCommandMenu,
-  onSelectSlashRootItem,
-  onSelectSlashItem,
-  onPermissionAllow,
-  onPermissionDeny,
-  onPermissionModeChange,
-  permissionState,
-  selectedChatModel,
-  chatModelOptions,
-  onChatModelChange,
-  contextUsageError,
-  activeContextUsage,
-  contextUsageLabel,
-  previewTabs,
-  activePreview,
-  onSetActivePreviewId,
-  onClosePreviewTab,
-  onCloseAllPreviews,
-}: SessionDialogProps) {
+                                activeSessionTitle,
+                                activeSessionId,
+                                isDebugOpen,
+                                onToggleSessionUsage,
+                                onSetIsDebugOpen,
+                                sessionUsageSnapshotsForSession,
+                                streamUsageByBundleKey,
+                                streamItems,
+                                assistantDebugBundles,
+                                openAssistantUsageMessageId,
+                                openAssistantDebugMessageId,
+                                openProcessMessageIds,
+                                copiedDebugMessageId,
+                                copyToast,
+                                error,
+                                activeProject,
+                                isRunningTurn,
+                                isInterruptingTurn,
+                                forkingMessageId,
+                                pendingPermission,
+                                isResolvingFileReferences,
+                                onViewAssistantDebug,
+                                onCopyAssistantDebug,
+                                onViewAssistantUsage,
+                                onToggleAssistantProcess,
+                                onOpenPreviewLink,
+                                onSetOpenAssistantUsageMessageId,
+                                onForkFromMessage,
+                                assistantDebugPayload,
+                                prompt,
+                                onPromptChange,
+                                onPromptKeyDown,
+                                onSubmit,
+                                canSendPrompt,
+                                onInterruptTurn,
+                                textareaRef,
+                                promptHighlightRef,
+                                promptImeStateRef,
+                                markPromptImeActive,
+                                fileReferences,
+                                onRemoveFileReference,
+                                fileMention,
+                                fileSuggestions,
+                                fileSuggestionIndex,
+                                isSearchingFiles,
+                                onSelectFileSuggestion,
+                                onUpdateFileMentionFromInput,
+                                onUpdateSlashCommandMenuFromInput,
+                                slashCommandMenu,
+                                slashRootOptions,
+                                slashLeafOptions,
+                                slashLeafTitle,
+                                slashLeafDescription,
+                                slashLeafEmptyText,
+                                onSetSlashCommandMenu,
+                                onSelectSlashRootItem,
+                                onSelectSlashItem,
+                                onPermissionAllow,
+                                onPermissionDeny,
+                                onPermissionModeChange,
+                                permissionState,
+                                selectedChatModel,
+                                chatModelOptions,
+                                onChatModelChange,
+                                contextUsageError,
+                                activeContextUsage,
+                                contextUsageLabel,
+                                previewTabs,
+                                activePreview,
+                                onSetActivePreviewId,
+                                onClosePreviewTab,
+                                onCloseAllPreviews,
+                              }: SessionDialogProps) {
+  const getDebugToggleClassName = (state: Record<string, never>, props: { isDebugOpen: boolean }) =>
+      props.isDebugOpen ? "debug-toggle active" : "debug-toggle";
+  const debugToggleClassName = dep({}, { isDebugOpen }, getDebugToggleClassName);
+
   return (
-    <>
-      <section className="exploration-panel" aria-label="Exploration stream">
-        <header className="workspace-header">
-          <div className="session-title-area">
-            <div className="session-title">
+      <>
+        <section className="exploration-panel" aria-label="Exploration stream">
+          <header className="workspace-header">
+            <div className="session-title-area">
+              <div className="session-title">
               <span className="header-icon" aria-hidden="true">
                 chat
               </span>
-              <h1>{activeSessionTitle}</h1>
-            </div>
-            <button
-              className={`debug-toggle ${isDebugOpen ? "active" : ""}`}
-              type="button"
-              onClick={onToggleSessionUsage}
-              disabled={!activeSessionId}
-            >
-              Usage <span>{sessionUsageSnapshotsForSession(streamUsageByBundleKey, activeSessionId).length}</span>
-            </button>
-          </div>
-          <input
-            className="session-search"
-            placeholder="Search session content..."
-            aria-label="Search session content"
-          />
-        </header>
-
-        <MessagesStream
-          streamItems={streamItems}
-          activeSessionId={activeSessionId}
-          assistantDebugBundles={assistantDebugBundles}
-          streamUsageByBundleKey={streamUsageByBundleKey}
-          openAssistantUsageMessageId={openAssistantUsageMessageId}
-          openAssistantDebugMessageId={openAssistantDebugMessageId}
-          openProcessMessageIds={openProcessMessageIds}
-          isDebugOpen={isDebugOpen}
-          copiedDebugMessageId={copiedDebugMessageId}
-          copyToast={copyToast}
-          error={error}
-          activeProject={activeProject}
-          isRunningTurn={isRunningTurn}
-          forkingMessageId={forkingMessageId}
-          pendingPermission={pendingPermission}
-          isResolvingFileReferences={isResolvingFileReferences}
-          onToggleSessionUsage={onToggleSessionUsage}
-          onViewAssistantDebug={onViewAssistantDebug}
-          onCopyAssistantDebug={onCopyAssistantDebug}
-          onViewAssistantUsage={onViewAssistantUsage}
-          onToggleAssistantProcess={onToggleAssistantProcess}
-          onOpenPreviewLink={onOpenPreviewLink}
-          onSetOpenAssistantUsageMessageId={onSetOpenAssistantUsageMessageId}
-          onSetIsDebugOpen={onSetIsDebugOpen}
-          onForkFromMessage={onForkFromMessage}
-          assistantDebugPayload={assistantDebugPayload}
-        />
-
-        <PromptInputArea
-          activeProject={!!activeProject}
-          activeSessionId={activeSessionId}
-          isRunningTurn={isRunningTurn}
-          pendingPermission={pendingPermission}
-          isInterruptingTurn={isInterruptingTurn}
-          isResolvingFileReferences={isResolvingFileReferences}
-          permissionState={permissionState}
-          onPermissionModeChange={onPermissionModeChange}
-          selectedChatModel={selectedChatModel}
-          chatModelOptions={chatModelOptions}
-          onChatModelChange={onChatModelChange}
-          contextUsageError={contextUsageError}
-          activeContextUsage={activeContextUsage}
-          contextUsageLabel={contextUsageLabel}
-          prompt={prompt}
-          onPromptChange={onPromptChange}
-          onPromptKeyDown={onPromptKeyDown}
-          onSubmit={onSubmit}
-          canSendPrompt={canSendPrompt}
-          onInterruptTurn={onInterruptTurn}
-          textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
-          promptHighlightRef={promptHighlightRef as React.RefObject<HTMLDivElement>}
-          renderPromptHighlightedText={renderPromptHighlightedText}
-          promptImeStateRef={promptImeStateRef}
-          markPromptImeActive={markPromptImeActive}
-          fileReferences={fileReferences}
-          onRemoveFileReference={onRemoveFileReference}
-          onOpenPreviewLink={onOpenPreviewLink}
-          fileMention={fileMention}
-          fileSuggestions={fileSuggestions}
-          fileSuggestionIndex={fileSuggestionIndex}
-          isSearchingFiles={isSearchingFiles}
-          onSelectFileSuggestion={onSelectFileSuggestion}
-          onUpdateFileMentionFromInput={onUpdateFileMentionFromInput}
-          onUpdateSlashCommandMenuFromInput={onUpdateSlashCommandMenuFromInput}
-          slashCommandMenu={slashCommandMenu}
-          slashRootOptions={slashRootOptions}
-          slashLeafOptions={slashLeafOptions}
-          slashLeafTitle={slashLeafTitle}
-          slashLeafDescription={slashLeafDescription}
-          slashLeafEmptyText={slashLeafEmptyText}
-          onSetSlashCommandMenu={onSetSlashCommandMenu}
-          onSelectSlashRootItem={onSelectSlashRootItem}
-          onSelectSlashItem={onSelectSlashItem}
-          onPermissionAllow={onPermissionAllow}
-          onPermissionDeny={onPermissionDeny}
-        />
-      </section>
-
-      {(() => {
-        // 确定当前显示的过程消息
-        const processMessageId =
-          openProcessMessageIds.size > 0
-            ? streamItems.find(
-                (s): s is Extract<StreamItem, { kind: "message" }> =>
-                  s.kind === "message" &&
-                  s.role === "assistant" &&
-                  openProcessMessageIds.has(s.id),
-              )?.id ?? null
-            : null;
-        const processItem =
-          processMessageId
-            ? streamItems.find(
-                (s): s is Extract<StreamItem, { kind: "message" }> =>
-                  s.kind === "message" && s.role === "assistant" && s.id === processMessageId,
-              ) ?? null
-            : null;
-        const processDetails =
-          processItem
-            ? assistantTurnDetails(processItem, assistantDebugBundles[processItem.id] ?? null)
-            : null;
-        const showProcess = Boolean(processDetails && processDetails.timeline.length > 0);
-        const showPreview = Boolean(activeProject && activePreview);
-
-        if (!showPreview && !showProcess) return null;
-
-        return (
-          <aside className="detail-panel" aria-label="Detail panel">
-            <div className="detail-content-base" style={{ display: showPreview && !showProcess ? undefined : 'none' }}>
-              {activePreview ? (
-                <PreviewPanel
-                  activePreview={activePreview}
-                  previewTabs={previewTabs}
-                  activeProject={activeProject}
-                  onSetActivePreviewId={onSetActivePreviewId}
-                  onClosePreviewTab={onClosePreviewTab}
-                  onCloseAllPreviews={onCloseAllPreviews}
-                  onOpenPreviewLink={onOpenPreviewLink}
-                />
-              ) : null}
-            </div>
-            {showProcess && processDetails ? (
-              <div className="detail-content-overlay">
-                <div style={{ position: 'sticky', top: 0, zIndex: 1, display: 'flex', justifyContent: 'flex-end', padding: '4px 8px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                  <button
-                    type="button"
-                    onClick={() => onToggleAssistantProcess(processMessageId!)}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#64748b', lineHeight: 1, padding: '2px 8px', borderRadius: 4 }}
-                    aria-label="Close process panel"
-                    onMouseOver={e => (e.currentTarget.style.background = '#e2e8f0')}
-                    onMouseOut={e => (e.currentTarget.style.background = 'none')}
-                  >
-                    ×
-                  </button>
-                </div>
-                <section className="file-workbench">
-                  <div className="detail-header">
-                    <div>
-                      <div className="eyebrow">Assistant Process</div>
-                      <h2>过程详情</h2>
-                    </div>
-                    <span className="count-label">
-                      {compactCountLabel(processDetails.progressLines.length, "行过程", "行过程")}
-                      {" · "}
-                      {compactCountLabel(processDetails.commandUses.length, "command")}
-                      {" · "}
-                      {compactCountLabel(processDetails.toolUses.length, "tool call")}
-                      {" · "}
-                      {compactCountLabel(processDetails.toolResults.length, "tool result")}
-                      {" · "}
-                      {compactCountLabel(processDetails.eventCount, "debug event")}
-                    </span>
-                  </div>
-                  <div className="process-panel-timeline">
-                    <div className="message-section-label">时间线</div>
-                    <ol className="message-process-timeline">
-                      {processDetails.timeline.map((entry) => (
-                        <li className={`process-timeline-item ${entry.kind}`} key={entry.id}>
-                          <div className="process-timeline-marker" aria-hidden="true" />
-                          <div className="process-timeline-content">
-                            <div className="process-timeline-title-row">
-                              <strong>{entry.title}</strong>
-                              <span>{formatDebugTime(entry.receivedAt)}</span>
-                            </div>
-                            {entry.kind === "tool_call" ? (
-                              <code>{entry.detail}</code>
-                            ) : entry.kind === "tool_result" ? (
-                              <pre>{entry.detail}</pre>
-                            ) : entry.kind === "permission" ? (
-                              <p>{entry.detail}</p>
-                            ) : (
-                              <pre>{entry.detail}</pre>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-                </section>
+                <h1>{activeSessionTitle}</h1>
               </div>
-            ) : null}
-          </aside>
-        );
-      })()}
-    </>
+              <button
+                  className={debugToggleClassName}
+                  type="button"
+                  onClick={onToggleSessionUsage}
+                  disabled={!activeSessionId}
+              >
+                Usage <span>{sessionUsageSnapshotsForSession(streamUsageByBundleKey, activeSessionId).length}</span>
+              </button>
+            </div>
+            <input
+                className="session-search"
+                placeholder="Search session content..."
+                aria-label="Search session content"
+            />
+          </header>
+
+          <MessagesStream
+              streamItems={streamItems}
+              activeSessionId={activeSessionId}
+              assistantDebugBundles={assistantDebugBundles}
+              streamUsageByBundleKey={streamUsageByBundleKey}
+              openAssistantUsageMessageId={openAssistantUsageMessageId}
+              openAssistantDebugMessageId={openAssistantDebugMessageId}
+              openProcessMessageIds={openProcessMessageIds}
+              isDebugOpen={isDebugOpen}
+              copiedDebugMessageId={copiedDebugMessageId}
+              copyToast={copyToast}
+              error={error}
+              activeProject={activeProject}
+              isRunningTurn={isRunningTurn}
+              forkingMessageId={forkingMessageId}
+              pendingPermission={pendingPermission}
+              isResolvingFileReferences={isResolvingFileReferences}
+              onToggleSessionUsage={onToggleSessionUsage}
+              onViewAssistantDebug={onViewAssistantDebug}
+              onCopyAssistantDebug={onCopyAssistantDebug}
+              onViewAssistantUsage={onViewAssistantUsage}
+              onToggleAssistantProcess={onToggleAssistantProcess}
+              onOpenPreviewLink={onOpenPreviewLink}
+              onSetOpenAssistantUsageMessageId={onSetOpenAssistantUsageMessageId}
+              onSetIsDebugOpen={onSetIsDebugOpen}
+              onForkFromMessage={onForkFromMessage}
+              assistantDebugPayload={assistantDebugPayload}
+          />
+
+          <PromptInputArea
+              activeProject={!!activeProject}
+              activeSessionId={activeSessionId}
+              isRunningTurn={isRunningTurn}
+              pendingPermission={pendingPermission}
+              isInterruptingTurn={isInterruptingTurn}
+              isResolvingFileReferences={isResolvingFileReferences}
+              permissionState={permissionState}
+              onPermissionModeChange={onPermissionModeChange}
+              selectedChatModel={selectedChatModel}
+              chatModelOptions={chatModelOptions}
+              onChatModelChange={onChatModelChange}
+              contextUsageError={contextUsageError}
+              activeContextUsage={activeContextUsage}
+              contextUsageLabel={contextUsageLabel}
+              prompt={prompt}
+              onPromptChange={onPromptChange}
+              onPromptKeyDown={onPromptKeyDown}
+              onSubmit={onSubmit}
+              canSendPrompt={canSendPrompt}
+              onInterruptTurn={onInterruptTurn}
+              textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
+              promptHighlightRef={promptHighlightRef as React.RefObject<HTMLDivElement>}
+              renderPromptHighlightedText={renderPromptHighlightedText}
+              promptImeStateRef={promptImeStateRef}
+              markPromptImeActive={markPromptImeActive}
+              fileReferences={fileReferences}
+              onRemoveFileReference={onRemoveFileReference}
+              onOpenPreviewLink={onOpenPreviewLink}
+              fileMention={fileMention}
+              fileSuggestions={fileSuggestions}
+              fileSuggestionIndex={fileSuggestionIndex}
+              isSearchingFiles={isSearchingFiles}
+              onSelectFileSuggestion={onSelectFileSuggestion}
+              onUpdateFileMentionFromInput={onUpdateFileMentionFromInput}
+              onUpdateSlashCommandMenuFromInput={onUpdateSlashCommandMenuFromInput}
+              slashCommandMenu={slashCommandMenu}
+              slashRootOptions={slashRootOptions}
+              slashLeafOptions={slashLeafOptions}
+              slashLeafTitle={slashLeafTitle}
+              slashLeafDescription={slashLeafDescription}
+              slashLeafEmptyText={slashLeafEmptyText}
+              onSetSlashCommandMenu={onSetSlashCommandMenu}
+              onSelectSlashRootItem={onSelectSlashRootItem}
+              onSelectSlashItem={onSelectSlashItem}
+              onPermissionAllow={onPermissionAllow}
+              onPermissionDeny={onPermissionDeny}
+          />
+        </section>
+
+        {(() => {
+          // 确定当前显示的过程消息
+          const processMessageId =
+              openProcessMessageIds.size > 0
+                  ? streamItems.find(
+                  (s): s is Extract<StreamItem, { kind: "message" }> =>
+                      s.kind === "message" &&
+                      s.role === "assistant" &&
+                      openProcessMessageIds.has(s.id),
+              )?.id ?? null
+                  : null;
+          const processItem =
+              processMessageId
+                  ? streamItems.find(
+                  (s): s is Extract<StreamItem, { kind: "message" }> =>
+                      s.kind === "message" && s.role === "assistant" && s.id === processMessageId,
+              ) ?? null
+                  : null;
+          const processDetails =
+              processItem
+                  ? assistantTurnDetails(processItem, assistantDebugBundles[processItem.id] ?? null)
+                  : null;
+          const showProcess = Boolean(processDetails && processDetails.timeline.length > 0);
+          const hasDetailContent = showProcess && Boolean(processDetails);
+          const showPreview = Boolean(activeProject && activePreview);
+
+          if (!showPreview && !showProcess) return null;
+
+          return (
+              <aside className="detail-panel" aria-label="Detail panel">
+                <div className="detail-content-base" style={{ display: showPreview && !showProcess ? undefined : 'none' }}>
+                  {(activePreview) && (
+                      <PreviewPanel
+                          activePreview={activePreview}
+                          previewTabs={previewTabs}
+                          activeProject={activeProject}
+                          onSetActivePreviewId={onSetActivePreviewId}
+                          onClosePreviewTab={onClosePreviewTab}
+                          onCloseAllPreviews={onCloseAllPreviews}
+                          onOpenPreviewLink={onOpenPreviewLink}
+                      />
+                  )}
+                </div>
+                {(hasDetailContent) && (
+                    <div className="detail-content-overlay">
+                      <div style={{ position: 'sticky', top: 0, zIndex: 1, display: 'flex', justifyContent: 'flex-end', padding: '4px 8px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                        <button
+                            type="button"
+                            onClick={() => onToggleAssistantProcess(processMessageId!)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#64748b', lineHeight: 1, padding: '2px 8px', borderRadius: 4 }}
+                            aria-label="Close process panel"
+                            onMouseOver={e => (e.currentTarget.style.background = '#e2e8f0')}
+                            onMouseOut={e => (e.currentTarget.style.background = 'none')}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <section className="file-workbench">
+                        <div className="detail-header">
+                          <div>
+                            <div className="eyebrow">Assistant Process</div>
+                            <h2>过程详情</h2>
+                          </div>
+                          <span className="count-label">
+                      {compactCountLabel(processDetails.progressLines.length, "行过程", "行过程")}
+                            {" · "}
+                            {compactCountLabel(processDetails.commandUses.length, "command")}
+                            {" · "}
+                            {compactCountLabel(processDetails.toolUses.length, "tool call")}
+                            {" · "}
+                            {compactCountLabel(processDetails.toolResults.length, "tool result")}
+                            {" · "}
+                            {compactCountLabel(processDetails.eventCount, "debug event")}
+                    </span>
+                        </div>
+                        <div className="process-panel-timeline">
+                          <div className="message-section-label">时间线</div>
+                          <ol className="message-process-timeline">
+                            {processDetails.timeline.map((entry) => (
+                                <li className={`process-timeline-item ${entry.kind}`} key={entry.id}>
+                                  <div className="process-timeline-marker" aria-hidden="true" />
+                                  <div className="process-timeline-content">
+                                    <div className="process-timeline-title-row">
+                                      <strong>{entry.title}</strong>
+                                      <span>{formatDebugTime(entry.receivedAt)}</span>
+                                    </div>
+                                    {entry.kind === "tool_call" ? (
+                                        <code>{entry.detail}</code>
+                                    ) : entry.kind === "tool_result" ? (
+                                        <pre>{entry.detail}</pre>
+                                    ) : entry.kind === "permission" ? (
+                                        <p>{entry.detail}</p>
+                                    ) : (
+                                        <pre>{entry.detail}</pre>
+                                    )}
+                                  </div>
+                                </li>
+                            ))}
+                          </ol>
+                        </div>
+                      </section>
+                    </div>
+                )}
+              </aside>
+          );
+        })()}
+      </>
   );
 }

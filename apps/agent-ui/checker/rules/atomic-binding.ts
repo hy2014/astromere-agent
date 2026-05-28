@@ -1,6 +1,8 @@
 // checker/rules/atomic-binding.ts
 import * as ts from "typescript";
 import { RuleContext } from "../types";
+import { isDepCall } from "../utils";
+
 
 /**
  * 原子属性绑定：
@@ -30,6 +32,9 @@ export function checkAtomicBinding(ctx: RuleContext) {
                     if (ts.isPrefixUnaryExpression(expr) && expr.operator === ts.SyntaxKind.ExclamationToken && ts.isIdentifier(expr.operand)) {
                         return;
                     }
+
+                    // dep() 调用
+                    if (isDepCall(expr)) return;  // ← 加这行
 
                     // 其他一律禁止
                     ctx.addViolation(

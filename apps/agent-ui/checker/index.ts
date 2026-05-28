@@ -49,12 +49,24 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
         },
     };
 
-    // ...
+    // 按优先级检查，发现违规立即退出
+    checkDerivedValues(ctx);
+    if (violations.length > 0) return violations;
+
     checkDepCalls(ctx);
+    if (violations.length > 0) return violations;
+
     checkClassNameBinding(ctx);
-    checkConditionalRender(ctx);
+    if (violations.length > 0) return violations;
+
     checkAtomicBinding(ctx);
-    checkDerivedValues(ctx)
+    if (violations.length > 0) return violations;
+    // ...
+    // checkDepCalls(ctx);
+    // checkClassNameBinding(ctx);
+    // // checkConditionalRender(ctx);
+    // checkAtomicBinding(ctx);
+    // checkDerivedValues(ctx)
 
     return violations;
 }
