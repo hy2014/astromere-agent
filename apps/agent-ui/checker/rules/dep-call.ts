@@ -35,16 +35,44 @@ function isStateVar(node: ts.Node, stateVars: Set<string>): boolean {
     return false;
 }
 
+// isStateVar 和 isPropVar 改返回不匹配的变量名
+function getNonStateVars(node: ts.Node, stateVars: Set<string>): string[] {
+    if (ts.isIdentifier(node)) {
+        return stateVars.has(node.text) ? [] : [node.text];
+    }
+    if (ts.isObjectLiteralExpression(node)) {
+        const nonVars: string[] = [];
+        for (const prop of node.properties) {
+            if (ts.isShorthandPropertyAssignment(prop) && !stateVars.has(prop.name.text)) {
+                nonVars.push(prop.name.text);
+            }
+        }
+        return nonVars;
+    }
+    return ["<非变量>"];
+}
+
+function getNonPropVars(node: ts.Node, propVars: Set<string>): string[] {
+    if (ts.isIdentifier(node)) {
+        return propVars.has(node.text) ? [] : [node.text];
+    }
+    if (ts.isObjectLiteralExpression(node)) {
+        const nonVars: string[] = [];
+        for (const prop of node.properties) {
+            if (ts.isShorthandPropertyAssignment(prop) && !propVars.has(prop.name.text)) {
+                nonVars.push(prop.name.text);
+            }
+        }
+        return nonVars;
+    }
+    return ["<非变量>"];
+}
+
 function isPropVar(node: ts.Node, propVars: Set<string>): boolean {
     // 单一 props 变量: dep(state, props, fn)
     if (ts.isIdentifier(node)) return propVars.has(node.text);
     // props 子集对象: dep(state, { session, project }, fn)
     if (ts.isObjectLiteralExpression(node)) {
-        // return node.properties.every((prop) =>
-        //     ts.isPropertyAssignment(prop) &&
-        //     ts.isIdentifier(prop.initializer) &&
-        //     propVars.has(prop.initializer.text)
-        // );
         return node.properties.every(
             (prop) => ts.isShorthandPropertyAssignment(prop) && propVars.has(prop.name.text)
         );
@@ -75,14 +103,14 @@ function checkDepCall(call: ts.CallExpression, ctx: RuleContext) {
 
     // 第二个参数必须是 props 变量或 props 子集对象
     const secondArg = call.arguments[1];
-    if (!isPropVar(secondArg, ctx.propVars)) {
+    const nonPropVars = getNonPropVars(secondArg, ctx.propVars);
+    if (nonPropVars.length > 0) {
         ctx.addViolation(
             "dep 调用规范",
-            "dep() 第二个参数必须是 props 变量或 props 子集对象 `{ session, project }`。",
+            `dep() 第二个参数包含非 props 变量: ${nonPropVars.join(", ")}。当前 props: [${[...ctx.propVars].join(", ")}]。`,
             secondArg
         );
     }
-
     // 禁止内联函数
     const thirdArg = call.arguments[2];
     if (ts.isArrowFunction(thirdArg) || ts.isFunctionExpression(thirdArg)) {

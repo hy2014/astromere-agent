@@ -4,6 +4,8 @@ import * as path from "path";
 import * as fs from "fs";
 
 import * as ts from "typescript";
+import { checkJsxExpression } from "./rules/jsx-expression";
+
 // import { RuleContext, Violation } from "./types";
 // import { checkDepCalls } from "./rules/dep-call";
 // import { getCodeLine } from "./utils";
@@ -27,7 +29,14 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
     const violations: Violation[] = [];
     const sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const stateVars = collectStateVars(sourceFile);
-    const propVars = collectPropVars(sourceFile);
+    const { propVars, propsInterfaceCount } = collectPropVars(sourceFile);
+
+    if (propsInterfaceCount === 0) {
+        ctx.addViolation("Props 定义规范", "组件必须定义 export interface XxxxProps。");
+    }
+    if (propsInterfaceCount > 1) {
+        ctx.addViolation("Props 定义规范", `一个文件只能有一个 export interface Props，发现 ${propsInterfaceCount} 个。`);
+    }
 
     const ctx: RuleContext = {
         sourceFile,
@@ -50,17 +59,25 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
     };
 
     // 按优先级检查，发现违规立即退出
-    checkDerivedValues(ctx);
-    if (violations.length > 0) return violations;
+    // 按优先级
+    checkJsxExpression(ctx);
+    // if (violations.length > 0) return violations;
 
     checkDepCalls(ctx);
-    if (violations.length > 0) return violations;
 
-    checkClassNameBinding(ctx);
-    if (violations.length > 0) return violations;
+    violations.sort((a, b) => (a.line || 0) - (b.line || 0));
+    return violations.slice(0, 10);
 
-    checkAtomicBinding(ctx);
-    if (violations.length > 0) return violations;
+    // if (violations.length > 0) return violations;
+
+    // checkDepCalls(ctx);
+    // if (violations.length > 0) return violations;
+
+    // checkClassNameBinding(ctx);
+    // if (violations.length > 0) return violations;
+    //
+    // checkAtomicBinding(ctx);
+    // if (violations.length > 0) return violations;
     // ...
     // checkDepCalls(ctx);
     // checkClassNameBinding(ctx);
@@ -68,7 +85,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
     // checkAtomicBinding(ctx);
     // checkDerivedValues(ctx)
 
-    return violations;
+    // return violations;
 }
 
 // checker/index.ts 末尾加上

@@ -93,26 +93,17 @@ export function collectStateVars(sourceFile: ts.SourceFile): Set<string> {
     }
     visit(sourceFile);
     return stateVars;
-}
-
-/**
- * 收集函数组件 props 解构的变量名
- */
-export function collectPropVars(sourceFile: ts.SourceFile): Set<string> {
+}export function collectPropVars(sourceFile: ts.SourceFile): { propVars: Set<string>; propsInterfaceCount: number } {
     const propVars = new Set<string>();
+    let propsInterfaceCount = 0;
 
     function visit(node: ts.Node) {
-        if (ts.isFunctionDeclaration(node) || ts.isVariableDeclaration(node)) {
-            const body = ts.isFunctionDeclaration(node) ? node : undefined;
-            const arrowFn = ts.isVariableDeclaration(node) && node.initializer && ts.isArrowFunction(node.initializer) ? node.initializer : undefined;
-            const params = body?.parameters || arrowFn?.parameters;
-            if (params && params.length > 0) {
-                const firstParam = params[0];
-                if (firstParam.name && ts.isObjectBindingPattern(firstParam.name)) {
-                    for (const el of firstParam.name.elements) {
-                        if (ts.isBindingElement(el) && ts.isIdentifier(el.name)) {
-                            propVars.add(el.name.text);
-                        }
+        if (ts.isInterfaceDeclaration(node) && node.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+            if (/Props$/.test(node.name.text)) {
+                propsInterfaceCount++;
+                for (const member of node.members) {
+                    if (ts.isPropertySignature(member) && ts.isIdentifier(member.name)) {
+                        propVars.add(member.name.text);
                     }
                 }
             }
@@ -120,7 +111,13 @@ export function collectPropVars(sourceFile: ts.SourceFile): Set<string> {
         ts.forEachChild(node, visit);
     }
     visit(sourceFile);
-    return propVars;
+
+    return { propVars, propsInterfaceCount };
+}
+
+function isExportNode(node: ts.Node): boolean {
+    if (!node.modifiers) return false;
+    return node.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword);
 }
 
 /**
