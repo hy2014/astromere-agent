@@ -27,12 +27,11 @@ import {checkDerivedValues} from "./rules/derived-value";
 
 // ...
 export function check(sourceCode: string, fileName: string = "component.tsx"): Violation[] {
-    const violations: Violation[] = [];
     const sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const stateVars = collectStateVars(sourceFile);
-    const { propVars, propsInterfaceCount } = collectPropVars(sourceFile);
 
-
+    const violations: Violation[] = [];
+    const propVars = new Set<string>();
 
     const ctx: RuleContext = {
         sourceFile,
@@ -54,12 +53,12 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
         },
     };
 
-    if (propsInterfaceCount === 0) {
-        ctx.addViolation("Props 定义规范", "组件必须定义 interface XxxxProps。");
-    }
-    if (propsInterfaceCount > 1) {
-        ctx.addViolation("Props 定义规范", `一个文件只能有一个 export interface Props，发现 ${propsInterfaceCount} 个。`);
-    }
+    const result = collectPropVars(sourceFile, ctx);
+    result.propVars.forEach(v => ctx.propVars.add(v));
+    // const viewFn = result.viewFn;
+
+
+
     // 按优先级检查，发现违规立即退出
     // 按优先级
     // checkJsxExpression(ctx);
@@ -67,7 +66,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
 
     // checkDepCalls(ctx);
 
-    checkAllFunctions(ctx);
+    checkAllFunctions(ctx, result.viewFn);
 
     violations.sort((a, b) => (a.line || 0) - (b.line || 0));
     return violations.slice(0, 10);

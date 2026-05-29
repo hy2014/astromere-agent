@@ -3,7 +3,7 @@ import type {ModelEndpointConfig, ModelSettings} from "../../types";
 import {loadDeepseekPricing} from "../../tauri";
 import {loadModelSettings, saveModelSettings, testModelConnection,} from "../../runtime";
 
-export function ModelsSettingsPanel() {
+export function ModelsSettingsPanelView() {
   const [savedSettings, setSavedSettings] = useState<ModelSettings | null>(null);
   const [draftSettings, setDraftSettings] = useState<ModelSettings | null>(null);
   const [selectedModelId, setSelectedModelId] = useState<string>("deepseek-v3");

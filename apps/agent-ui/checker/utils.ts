@@ -156,6 +156,10 @@ export function collectPropVars(sourceFile: ts.SourceFile, ctx: RuleContext): {
         ctx.addViolation("Props 定义规范", "export function 必须以 View 结尾，如 SessionListView。");
     }
 
+    if (ctx.violations.length > 0) {
+        return { propVars, viewFn }
+    }
+
     // 检查参数
     const params = viewFn.parameters;
     if (!params || params.length === 0) {
