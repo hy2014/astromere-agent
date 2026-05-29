@@ -100,7 +100,110 @@ function summarizeMcpRows(rows: McpServerDraftRow[]) {
   };
 }
 
+// ─── Data helpers extracted to avoid lint violations on map/filter inside JSX functions ──
+
+function updateRowInList(rows: McpServerDraftRow[], id: string, patch: Partial<McpServerDraftRow>) {
+  return rows.map((row) => (row.id === id ? { ...row, ...patch } : row));
+}
+
+function removeRowFromList(rows: McpServerDraftRow[], id: string) {
+  return rows.filter((row) => row.id !== id);
+}
+
+function addEnvToRow(rows: McpServerDraftRow[], serverId: string) {
+  return rows.map((row) =>
+    row.id === serverId
+      ? {
+          ...row,
+          envRows: [...row.envRows, { id: createMcpDraftId("env"), key: "", value: "" }],
+        }
+      : row,
+  );
+}
+
+function updateEnvInRow(
+  rows: McpServerDraftRow[],
+  serverId: string,
+  envId: string,
+  patch: Partial<McpEnvDraftRow>,
+) {
+  return rows.map((row) =>
+    row.id === serverId
+      ? {
+          ...row,
+          envRows: row.envRows.map((env) => (env.id === envId ? { ...env, ...patch } : env)),
+        }
+      : row,
+  );
+}
+
+function removeEnvFromRow(rows: McpServerDraftRow[], serverId: string, envId: string) {
+  return rows.map((row) =>
+    row.id === serverId ? { ...row, envRows: row.envRows.filter((env) => env.id !== envId) } : row,
+  );
+}
+
 // ─── McpServersView component ─────────────────────────────────────────
+
+function McpServerRow({ row, editingId, onEdit, onRemove }: {
+  row: McpServerDraftRow;
+  editingId: string | null;
+  onEdit: (id: string | null) => void;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className={`mcp-clean-table-row${editingId === row.id ? " expanded" : ""}`} key={row.id}>
+      <span className="mcp-clean-table-name">{row.name.trim() || "Untitled"}</span>
+      <span className="mcp-clean-table-type">{row.type || "stdio"}</span>
+      <span className="mcp-clean-table-command">{row.command.trim() || "—"}</span>
+      <span className={`mcp-clean-table-status${row.name.trim() && row.command.trim() ? " valid" : ""}`}>
+        {row.name.trim() && row.command.trim() ? "ready" : "draft"}
+      </span>
+      <span className="mcp-clean-table-actions">
+        <button
+          type="button"
+          className="mcp-clean-secondary"
+          onClick={() => onEdit(editingId === row.id ? null : row.id)}
+        >
+          {editingId === row.id ? "Close" : "Edit"}
+        </button>
+        <button className="mcp-clean-danger" type="button" onClick={() => { onRemove(row.id); if (editingId === row.id) onEdit(null); }}>
+          Remove
+        </button>
+      </span>
+    </div>
+  );
+}
+
+function McpEnvRow({ env, rowId, onUpdate, onRemove }: {
+  env: McpEnvDraftRow;
+  rowId: string;
+  onUpdate: (serverId: string, envId: string, patch: Partial<McpEnvDraftRow>) => void;
+  onRemove: (serverId: string, envId: string) => void;
+}) {
+  return (
+    <div className="mcp-clean-env-row" key={env.id}>
+      <input
+        value={env.key}
+        placeholder="PG_HOST"
+        onChange={(event) => onUpdate(rowId, env.id, { key: event.target.value })}
+      />
+      <input
+        value={env.value}
+        placeholder="localhost"
+        onChange={(event) => onUpdate(rowId, env.id, { value: event.target.value })}
+      />
+      <button
+        className="mcp-clean-icon-button"
+        type="button"
+        onClick={() => onRemove(rowId, env.id)}
+        aria-label="Remove environment variable"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
 
 export function McpServersView() {
   const [configPath, setConfigPath] = useState("");
@@ -194,45 +297,23 @@ export function McpServersView() {
   }
 
   function updateServerRow(id: string, patch: Partial<McpServerDraftRow>) {
-    setRows((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+    setRows((current) => updateRowInList(current, id, patch));
   }
 
   function removeServerRow(id: string) {
-    setRows((current) => current.filter((row) => row.id !== id));
+    setRows((current) => removeRowFromList(current, id));
   }
 
   function addEnvRow(serverId: string) {
-    setRows((current) =>
-      current.map((row) =>
-        row.id === serverId
-          ? {
-              ...row,
-              envRows: [...row.envRows, { id: createMcpDraftId("env"), key: "", value: "" }],
-            }
-          : row,
-      ),
-    );
+    setRows((current) => addEnvToRow(current, serverId));
   }
 
   function updateEnvRow(serverId: string, envId: string, patch: Partial<McpEnvDraftRow>) {
-    setRows((current) =>
-      current.map((row) =>
-        row.id === serverId
-          ? {
-              ...row,
-              envRows: row.envRows.map((env) => (env.id === envId ? { ...env, ...patch } : env)),
-            }
-          : row,
-      ),
-    );
+    setRows((current) => updateEnvInRow(current, serverId, envId, patch));
   }
 
   function removeEnvRow(serverId: string, envId: string) {
-    setRows((current) =>
-      current.map((row) =>
-        row.id === serverId ? { ...row, envRows: row.envRows.filter((env) => env.id !== envId) } : row,
-      ),
-    );
+    setRows((current) => removeEnvFromRow(current, serverId, envId));
   }
 
   async function handleSaveMcpSettings() {
@@ -339,26 +420,13 @@ export function McpServersView() {
                   <span>Actions</span>
                 </div>
                 {rows.map((row) => (
-                  <div className={`mcp-clean-table-row${editingId === row.id ? " expanded" : ""}`} key={row.id}>
-                    <span className="mcp-clean-table-name">{row.name.trim() || "Untitled"}</span>
-                    <span className="mcp-clean-table-type">{row.type || "stdio"}</span>
-                    <span className="mcp-clean-table-command">{row.command.trim() || "—"}</span>
-                    <span className={`mcp-clean-table-status${row.name.trim() && row.command.trim() ? " valid" : ""}`}>
-                      {row.name.trim() && row.command.trim() ? "ready" : "draft"}
-                    </span>
-                    <span className="mcp-clean-table-actions">
-                      <button
-                        type="button"
-                        className="mcp-clean-secondary"
-                        onClick={() => setEditingId(editingId === row.id ? null : row.id)}
-                      >
-                        {editingId === row.id ? "Close" : "Edit"}
-                      </button>
-                      <button className="mcp-clean-danger" type="button" onClick={() => { removeServerRow(row.id); if (editingId === row.id) setEditingId(null); }}>
-                        Remove
-                      </button>
-                    </span>
-                  </div>
+                  <McpServerRow
+                    key={row.id}
+                    row={row}
+                    editingId={editingId}
+                    onEdit={setEditingId}
+                    onRemove={removeServerRow}
+                  />
                 ))}
               </div>
             )}
@@ -430,26 +498,13 @@ export function McpServersView() {
 
                       <div className="mcp-clean-env-list">
                         {row.envRows.map((env) => (
-                          <div className="mcp-clean-env-row" key={env.id}>
-                            <input
-                              value={env.key}
-                              placeholder="PG_HOST"
-                              onChange={(event) => updateEnvRow(row.id, env.id, { key: event.target.value })}
-                            />
-                            <input
-                              value={env.value}
-                              placeholder="localhost"
-                              onChange={(event) => updateEnvRow(row.id, env.id, { value: event.target.value })}
-                            />
-                            <button
-                              className="mcp-clean-icon-button"
-                              type="button"
-                              onClick={() => removeEnvRow(row.id, env.id)}
-                              aria-label="Remove environment variable"
-                            >
-                              ×
-                            </button>
-                          </div>
+                          <McpEnvRow
+                            key={env.id}
+                            env={env}
+                            rowId={row.id}
+                            onUpdate={updateEnvRow}
+                            onRemove={removeEnvRow}
+                          />
                         ))}
                       </div>
                     </section>

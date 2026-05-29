@@ -5,6 +5,7 @@ import * as fs from "fs";
 
 import * as ts from "typescript";
 import { checkJsxExpression } from "./rules/jsx-expression";
+import { checkAllFunctions } from "./rules/check-all-fns";
 
 // import { RuleContext, Violation } from "./types";
 // import { checkDepCalls } from "./rules/dep-call";
@@ -61,10 +62,12 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
     }
     // 按优先级检查，发现违规立即退出
     // 按优先级
-    checkJsxExpression(ctx);
+    // checkJsxExpression(ctx);
     // if (violations.length > 0) return violations;
 
-    checkDepCalls(ctx);
+    // checkDepCalls(ctx);
+
+    checkAllFunctions(ctx);
 
     violations.sort((a, b) => (a.line || 0) - (b.line || 0));
     return violations.slice(0, 10);

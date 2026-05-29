@@ -19,6 +19,7 @@ import {
   removeWorkspaceRegistryEntry,
   setAgentPermissionMode,
 } from "../runtime";
+import "../styles/mcp.css";
 import "./App.css";
 import {TerminalView} from "./Terminal";
 import {RemoteTerminalPlaceholder} from "./RemoteTerminalPlaceholder";
