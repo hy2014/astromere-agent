@@ -31,12 +31,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
     const stateVars = collectStateVars(sourceFile);
     const { propVars, propsInterfaceCount } = collectPropVars(sourceFile);
 
-    if (propsInterfaceCount === 0) {
-        ctx.addViolation("Props 定义规范", "组件必须定义 export interface XxxxProps。");
-    }
-    if (propsInterfaceCount > 1) {
-        ctx.addViolation("Props 定义规范", `一个文件只能有一个 export interface Props，发现 ${propsInterfaceCount} 个。`);
-    }
+
 
     const ctx: RuleContext = {
         sourceFile,
@@ -58,6 +53,12 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
         },
     };
 
+    if (propsInterfaceCount === 0) {
+        ctx.addViolation("Props 定义规范", "组件必须定义 interface XxxxProps。");
+    }
+    if (propsInterfaceCount > 1) {
+        ctx.addViolation("Props 定义规范", `一个文件只能有一个 export interface Props，发现 ${propsInterfaceCount} 个。`);
+    }
     // 按优先级检查，发现违规立即退出
     // 按优先级
     checkJsxExpression(ctx);
