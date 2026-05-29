@@ -1,43 +1,25 @@
 // checker/rules/jsx-expression.ts
 import * as ts from "typescript";
 import { RuleContext } from "../types";
-import { isDepCall, isInsideEventHandler, isInsideDep } from "../utils";
+import { isInsideEventHandler} from "../utils";
 
-/**
- * JSX 表达式统一检查：
- * {...} 只允许 state/props 变量、取反、dep() 调用
- */
-export function checkJsxExpression(ctx: RuleContext) {
-    // 收集 dep 引用的函数名，用于豁免函数体
-    const depFnNames = new Set<string>();
-    function collectDepFns(node: ts.Node) {
-        if (isDepCall(node) && node.arguments.length === 3) {
-            const thirdArg = (node as ts.CallExpression).arguments[2];
-            if (ts.isIdentifier(thirdArg)) {
-                depFnNames.add(thirdArg.text);
-            }
-        }
-        ts.forEachChild(node, collectDepFns);
-    }
-    collectDepFns(ctx.sourceFile);
+export function checkJsxExpression(ctx: RuleContext, viewFn: ts.Node | null) {
+    if (!viewFn) return;
 
     function visit(node: ts.Node) {
-        // 跳过 dep 注册的函数定义
-        if (ts.isFunctionDeclaration(node) && node.name && depFnNames.has(node.name.text)) return;
-        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && depFnNames.has(node.name.text)) return;
-
-        // 检查 JSX 表达式
         if (ts.isJsxExpression(node) && node.expression) {
-            // dep 内部豁免
-            if (isInsideDep(node)) return;
-
             const expr = node.expression;
 
-            // 事件处理器跳过
             if (isInsideEventHandler(node)) return;
 
-            // dep() 调用
-            if (isDepCall(expr)) return;
+            // render_when / render_case
+            if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression)) {
+                const name = expr.expression.text;
+                if (name === "render_when" || name === "render_case") return;
+            }
+
+            // 属性访问 xxx.yyy
+            if (ts.isPropertyAccessExpression(expr)) return;
 
             // 单一变量
             if (ts.isIdentifier(expr)) {
@@ -56,10 +38,9 @@ export function checkJsxExpression(ctx: RuleContext) {
                 if (ctx.propVars.has(name)) return;
             }
 
-            // 其他一律禁止
             ctx.addViolation(
                 "JSX 表达式规范",
-                "JSX 中 `{...}` 只允许 state/props 变量、取反或 dep() 调用。请将逻辑封装进 dep(state, props, fn)。",
+                "JSX 中 `{...}` 只允许 state/props 变量、取反、属性访问、render_when() 或 render_case() 调用。",
                 node
             );
         }
@@ -67,5 +48,5 @@ export function checkJsxExpression(ctx: RuleContext) {
         ts.forEachChild(node, visit);
     }
 
-    visit(ctx.sourceFile);
+    visit(viewFn);
 }

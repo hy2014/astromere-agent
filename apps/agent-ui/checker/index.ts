@@ -7,23 +7,8 @@ import * as ts from "typescript";
 import { checkJsxExpression } from "./rules/jsx-expression";
 import { checkAllFunctions } from "./rules/check-all-fns";
 
-// import { RuleContext, Violation } from "./types";
-// import { checkDepCalls } from "./rules/dep-call";
-// import { getCodeLine } from "./utils";
-// import {checkClassNameBinding} from "./rules/className-bindings";
-// // checker/index.ts
-// import { checkConditionalRender } from "./rules/conditional-render";
-// import { checkAtomicBinding } from "./rules/atomic-binding";
-
-
-
 import { Violation, RuleContext } from "./types";
 import { getCodeLine, collectStateVars, collectPropVars } from "./utils";
-import { checkDepCalls } from "./rules/dep-call";
-import { checkClassNameBinding } from "./rules/className-bindings";
-import { checkConditionalRender } from "./rules/conditional-render";
-import { checkAtomicBinding } from "./rules/atomic-binding";
-import {checkDerivedValues} from "./rules/derived-value";
 
 // ...
 export function check(sourceCode: string, fileName: string = "component.tsx"): Violation[] {
@@ -57,16 +42,9 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
     result.propVars.forEach(v => ctx.propVars.add(v));
     // const viewFn = result.viewFn;
 
-
-
-    // 按优先级检查，发现违规立即退出
-    // 按优先级
-    // checkJsxExpression(ctx);
-    // if (violations.length > 0) return violations;
-
-    // checkDepCalls(ctx);
-
     checkAllFunctions(ctx, result.viewFn);
+
+    checkJsxExpression(ctx, result.viewFn);
 
     violations.sort((a, b) => (a.line || 0) - (b.line || 0));
     return violations.slice(0, 10);
