@@ -53,24 +53,6 @@ export function isInsideEventHandler(node: ts.Node): boolean {
     }
     return false;
 }
-
-// utils.ts
-export function isInsideDep(node: ts.Node): boolean {
-    let current = node.parent;
-    while (current) {
-        if (ts.isCallExpression(current)) {
-            const callee = current.expression;
-            if (ts.isIdentifier(callee) && callee.text === "dep") {
-                // 确认 node 在第三个参数内，而不是前两个
-                const thirdArg = current.arguments[2];
-                return isNodeInside(node, thirdArg);
-            }
-        }
-        current = current.parent;
-    }
-    return false;
-}
-
 /**
  * 收集 useState 声明的 state 变量名
  */

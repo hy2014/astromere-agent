@@ -36,3 +36,11 @@ export function dep<
 ): TResult {
     return fn(state, props);
 }
+
+function render_when(condition: boolean, fn: () => JSX.Element): JSX.Element | null {
+    return condition ? fn() : null;
+}
+
+function render_case(condition: boolean, trueFn: () => JSX.Element, falseFn: () => JSX.Element): JSX.Element {
+    return condition ? trueFn() : falseFn();
+}
