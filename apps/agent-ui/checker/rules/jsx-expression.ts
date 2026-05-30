@@ -7,6 +7,8 @@ export function checkJsxExpression(ctx: RuleContext, viewFn: ts.Node | null) {
     if (!viewFn) return;
 
     function visit(node: ts.Node) {
+        if (ts.isArrowFunction(node)) return;
+
         if (ts.isJsxExpression(node) && node.expression) {
             const expr = node.expression;
 
@@ -18,7 +20,7 @@ export function checkJsxExpression(ctx: RuleContext, viewFn: ts.Node | null) {
                 if (name === "render_when" || name === "render_case") return;
             }
 
-            // 属性访问 xxx.yyy
+            // 属性访问
             if (ts.isPropertyAccessExpression(expr)) return;
 
             // 单一变量
@@ -29,7 +31,7 @@ export function checkJsxExpression(ctx: RuleContext, viewFn: ts.Node | null) {
                 if (name.startsWith("set")) return;
             }
 
-            // 取反 !var
+            // 取反
             if (ts.isPrefixUnaryExpression(expr) &&
                 expr.operator === ts.SyntaxKind.ExclamationToken &&
                 ts.isIdentifier(expr.operand)) {
