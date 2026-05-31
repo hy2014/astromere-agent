@@ -4,11 +4,11 @@ import * as path from "path";
 import * as fs from "fs";
 
 import * as ts from "typescript";
-import { checkJsxExpression } from "./rules/jsx-expression";
-import { checkAllFunctions } from "./rules/check-all-fns";
+import { checkRenderFns } from "./rules/check-render-fns";
 
 import { Violation, RuleContext } from "./types";
 import { getCodeLine, collectStateVars, collectPropVars } from "./utils";
+import {checkViewLayer} from "./rules/check-view-layer";
 
 // ...
 export function check(sourceCode: string, fileName: string = "component.tsx"): Violation[] {
@@ -42,31 +42,16 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
     result.propVars.forEach(v => ctx.propVars.add(v));
     // const viewFn = result.viewFn;
 
-    checkAllFunctions(ctx, result.viewFn);
+    checkRenderFns(ctx);
 
-    checkJsxExpression(ctx, result.viewFn);
+    if (violations.length > 0) {
+        violations.sort((a, b) => (a.line || 0) - (b.line || 0));
+        return violations.slice(0, 100);
+    }
 
+    checkViewLayer(ctx, result.viewFn)
     violations.sort((a, b) => (a.line || 0) - (b.line || 0));
-    return violations.slice(0, 10);
-
-    // if (violations.length > 0) return violations;
-
-    // checkDepCalls(ctx);
-    // if (violations.length > 0) return violations;
-
-    // checkClassNameBinding(ctx);
-    // if (violations.length > 0) return violations;
-    //
-    // checkAtomicBinding(ctx);
-    // if (violations.length > 0) return violations;
-    // ...
-    // checkDepCalls(ctx);
-    // checkClassNameBinding(ctx);
-    // // checkConditionalRender(ctx);
-    // checkAtomicBinding(ctx);
-    // checkDerivedValues(ctx)
-
-    // return violations;
+    return violations.slice(0, 100);
 }
 
 // checker/index.ts 末尾加上

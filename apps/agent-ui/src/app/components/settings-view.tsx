@@ -1,7 +1,7 @@
 import {useState} from "react";
 import type {SettingsSection, SettingsViewProps} from "../types";
 import {sessionKey} from "../file-utils";
-import {RemoteSettingsPanel} from "./remote-settings-panel";
+import {RemoteSettingsPanelView} from "./remote-settings-panel";
 import {ModelsSettingsPanelView} from "./models-settings-panel";
 
 // ─── SessionsSettingsPanel ─────────────────────────────────────────────
@@ -192,7 +192,7 @@ export function SettingsView({ hiddenSessions, onRestoreSession }: SettingsViewP
         <section className="settings-content" aria-label="Models configuration">
           <div className="settings-content-inner">
             {settingsSection === "remote" ? (
-              <RemoteSettingsPanel />
+              <RemoteSettingsPanelView />
             ) : settingsSection === "sessions" ? (
               <SessionsSettingsPanel
                 hiddenSessions={hiddenSessions}
