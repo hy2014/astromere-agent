@@ -12,7 +12,7 @@ import {
     useRemoteRuntime,
 } from "../../runtime";
 
-export function RemoteSettingsPanel() {
+export function RemoteSettingsPanelView() {
   const [profiles, setProfiles] = useState<RemoteProfile[]>(() => loadRemoteProfiles());
   const [activeProfileId, setActiveProfileIdState] = useState<string | null>(() =>
     getActiveRemoteProfileId(),
@@ -204,43 +204,59 @@ export function RemoteSettingsPanel() {
         {profiles.length === 0 ? (
           <div className="hidden-session-empty">No remote profiles saved.</div>
         ) : (
-          <div className="remote-profile-list">
-            {profiles.map((profile) => {
-              const isActive = activeProfileId === profile.id;
-              return (
-                <article className={`remote-profile-row ${isActive ? "active" : ""}`} key={profile.id}>
-                  <div className="remote-profile-main">
-                    <div className="remote-profile-title-row">
-                      <strong>{profile.name}</strong>
-                      <span className={`remote-profile-status ${isActive ? "active" : ""}`}>
-                        {isActive ? "Active" : "Saved"}
-                      </span>
-                    </div>
-                    <span className="remote-profile-url">{profile.baseUrl}</span>
-                  </div>
-                  <div className="remote-profile-actions">
-                    <button
-                      className="remote-button compact primary"
-                      type="button"
-                      onClick={() => handleUseRemote(profile)}
-                      disabled={isActive}
-                    >
-                      {isActive ? "In use" : "Use"}
-                    </button>
-                    <button
-                      className="remote-button compact ghost danger"
-                      type="button"
-                      onClick={() => handleDeleteRemote(profile)}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+          <RemoteProfileList
+            profiles={profiles}
+            activeProfileId={activeProfileId}
+            onUseRemote={handleUseRemote}
+            onDeleteRemote={handleDeleteRemote}
+          />
         )}
       </section>
     </>
+  );
+}
+
+function RemoteProfileList({ profiles, activeProfileId, onUseRemote, onDeleteRemote }: {
+  profiles: RemoteProfile[];
+  activeProfileId: string | null;
+  onUseRemote: (profile: RemoteProfile) => void;
+  onDeleteRemote: (profile: RemoteProfile) => void;
+}) {
+  return (
+    <div className="remote-profile-list">
+      {profiles.map((profile) => {
+        const isActive = activeProfileId === profile.id;
+        return (
+          <article className={`remote-profile-row ${isActive ? "active" : ""}`} key={profile.id}>
+            <div className="remote-profile-main">
+              <div className="remote-profile-title-row">
+                <strong>{profile.name}</strong>
+                <span className={`remote-profile-status ${isActive ? "active" : ""}`}>
+                  {isActive ? "Active" : "Saved"}
+                </span>
+              </div>
+              <span className="remote-profile-url">{profile.baseUrl}</span>
+            </div>
+            <div className="remote-profile-actions">
+              <button
+                className="remote-button compact primary"
+                type="button"
+                onClick={() => onUseRemote(profile)}
+                disabled={isActive}
+              >
+                {isActive ? "In use" : "Use"}
+              </button>
+              <button
+                className="remote-button compact ghost danger"
+                type="button"
+                onClick={() => onDeleteRemote(profile)}
+              >
+                Delete
+              </button>
+            </div>
+          </article>
+        );
+      })}
+    </div>
   );
 }

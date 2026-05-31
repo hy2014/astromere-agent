@@ -22,8 +22,6 @@ import {PromptInputArea} from "./PromptInputArea";
 import {MessagesStream, renderPromptHighlightedText} from "./messages-stream";
 import {assistantTurnDetails, compactCountLabel} from "../debug-utils";
 import {formatDebugTime} from "../file-utils";
-import {dep} from "../../core/dep";
-
 // ─── SessionDialog ──────────────────────────────────────────────────────
 
 export interface SessionDialogProps {
@@ -203,7 +201,7 @@ export function SessionDialog({
                               }: SessionDialogProps) {
   const getDebugToggleClassName = (state: Record<string, never>, props: { isDebugOpen: boolean }) =>
       props.isDebugOpen ? "debug-toggle active" : "debug-toggle";
-  const debugToggleClassName = dep({}, { isDebugOpen }, getDebugToggleClassName);
+  const debugToggleClassName = getDebugToggleClassName({}, {isDebugOpen})
 
   return (
       <>

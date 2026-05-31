@@ -3,6 +3,55 @@ import type {ModelEndpointConfig, ModelSettings} from "../../types";
 import {loadDeepseekPricing} from "../../tauri";
 import {loadModelSettings, saveModelSettings, testModelConnection,} from "../../runtime";
 
+function DeepseekPricingBody({ models }: {
+  models: NonNullable<ModelSettings["deepseekPricing"]>["models"];
+}) {
+  return (
+    <tbody>
+      {models.flatMap((model) =>
+        model.items.map((item) => (
+          <tr key={`${model.model}:${item.item}`}>
+            <td>{model.model}</td>
+            <td>{item.item}</td>
+            <td>¥{item.pricePerMTokens}</td>
+          </tr>
+        )),
+      )}
+    </tbody>
+  );
+}
+
+function ModelCards({ models, activeModelId, onSelect }: {
+  models: ModelEndpointConfig[];
+  activeModelId: string | undefined;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="model-grid">
+      {models.map((model) => {
+        const isActive = activeModelId === model.id;
+        return (
+          <button
+            key={model.id}
+            className={`model-card ${isActive ? "active" : "muted"}`}
+            type="button"
+            onClick={() => onSelect(model.id)}
+          >
+            <div className="model-card-top">
+              <span className="model-icon">{model.provider}</span>
+              {isActive ? (
+                <span className="model-badge">Active</span>
+              ) : null}
+            </div>
+            <strong>{model.name}</strong>
+            <small>{model.model}</small>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ModelsSettingsPanelView() {
   const [savedSettings, setSavedSettings] = useState<ModelSettings | null>(null);
   const [draftSettings, setDraftSettings] = useState<ModelSettings | null>(null);
@@ -134,28 +183,11 @@ export function ModelsSettingsPanelView() {
         </p>
       </header>
 
-      <div className="model-grid">
-        {modelCards.map((model) => {
-          const isActive = draftSettings?.activeModelId === model.id;
-          return (
-            <button
-              key={model.id}
-              className={`model-card ${isActive ? "active" : "muted"}`}
-              type="button"
-              onClick={() => selectModel(model.id)}
-            >
-              <div className="model-card-top">
-                <span className="model-icon">{model.provider}</span>
-                {isActive ? (
-                  <span className="model-badge">Active</span>
-                ) : null}
-              </div>
-              <strong>{model.name}</strong>
-              <small>{model.model}</small>
-            </button>
-          );
-        })}
-      </div>
+      <ModelCards
+        models={modelCards}
+        activeModelId={draftSettings?.activeModelId}
+        onSelect={selectModel}
+      />
 
       <section className="settings-card">
         <header className="settings-card-header">
@@ -334,17 +366,7 @@ export function ModelsSettingsPanelView() {
                       <th>RMB / 1M tokens</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {(draftSettings?.deepseekPricing?.models ?? []).flatMap((model) =>
-                      model.items.map((item) => (
-                        <tr key={`${model.model}:${item.item}`}>
-                          <td>{model.model}</td>
-                          <td>{item.item}</td>
-                          <td>¥{item.pricePerMTokens}</td>
-                        </tr>
-                      )),
-                    )}
-                  </tbody>
+                  <DeepseekPricingBody models={draftSettings!.deepseekPricing!.models} />
                 </table>
               ) : (
                 <div className="deepseek-pricing-empty">
