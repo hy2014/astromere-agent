@@ -16,6 +16,8 @@ interface PermissionRequestProps {
 }
 
 export function PermissionRequest({ permission, onAllow, onDeny }: PermissionRequestProps) {
+  const filePath = extractFilePath(permission.input);
+
   return (
     <div className="permission-request">
       <div className="permission-request-topline">
@@ -26,6 +28,12 @@ export function PermissionRequest({ permission, onAllow, onDeny }: PermissionReq
         </div>
       </div>
       <div className="permission-prompt">{permission.prompt}</div>
+      {filePath ? (
+        <div className="permission-file-path-row">
+          <span className="permission-file-path-icon">📄</span>
+          <span className="permission-file-path-value">{filePath}</span>
+        </div>
+      ) : null}
       <details className="permission-request-details">
         <summary>查看详情</summary>
         <pre>
@@ -56,4 +64,14 @@ export function PermissionRequest({ permission, onAllow, onDeny }: PermissionReq
       </div>
     </div>
   );
+}
+
+function extractFilePath(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const obj = input as Record<string, unknown>;
+  const candidate =
+    obj.file_path ??
+    obj.filePath ??
+    obj.path;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }

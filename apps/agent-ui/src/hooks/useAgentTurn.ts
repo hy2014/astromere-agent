@@ -29,6 +29,13 @@ export type PendingPermission = {
   toolName?: string;
   input?: unknown;
   rawJson?: unknown;
+  isQuestion?: boolean;
+  questions?: Array<{
+    question: string;
+    header?: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>;
 };
 
 interface AgentTurnDeps {
@@ -613,7 +620,7 @@ export function useAgentTurn(deps: AgentTurnDeps) {
   );
 
   const handlePermissionDecision = useCallback(
-    (approved: boolean) => {
+    (approved: boolean, answers?: Record<string, string>) => {
       if (!pendingPermission) {
         return;
       }
@@ -621,11 +628,16 @@ export function useAgentTurn(deps: AgentTurnDeps) {
       setError(null);
       removePendingPermission(target.sessionId, target.requestId);
       setIsRunningTurn(true);
+      const updatedInput =
+        target.isQuestion && approved && answers && target.input
+          ? { ...(target.input as Record<string, unknown>), answers }
+          : undefined;
       respondAgentPermission(
         target.root,
         target.sessionId,
         target.requestId,
         approved,
+        updatedInput,
       ).catch((reason) => {
         setError(String(reason));
         enqueuePendingPermission(target);

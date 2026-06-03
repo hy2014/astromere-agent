@@ -2151,6 +2151,7 @@ async function handle(request: Request): Promise<Response> {
       sessionId: string;
       requestId: string;
       approved: boolean;
+      updatedInput?: Record<string, unknown>;
     }>(request);
 
     const root = canonicalWorkspaceRoot(body.root);
@@ -2164,7 +2165,7 @@ async function handle(request: Request): Promise<Response> {
         request_id: body.requestId,
         response: {
           behavior: body.approved ? "allow" : "deny",
-          updatedInput: {},
+          updatedInput: body.updatedInput ?? {},
         },
       },
     });
