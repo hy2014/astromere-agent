@@ -51,9 +51,24 @@ function getJSXRootClassName(jsx: ts.JsxElement | ts.JsxSelfClosingElement): str
     const classNameAttr = opening.attributes.properties.find(
         prop => ts.isJsxAttribute(prop) && prop.name.text === "className"
     ) as ts.JsxAttribute | undefined;
-    if (classNameAttr?.initializer && ts.isStringLiteral(classNameAttr.initializer)) {
+
+    if (!classNameAttr?.initializer) return undefined;
+
+    // 字符串字面量：className="xxx"
+    if (ts.isStringLiteral(classNameAttr.initializer)) {
         return classNameAttr.initializer.text;
     }
+
+    // 模板字符串：className={`mcp-clean-table-row ${expr}`}
+    // 取模板头部第一个静态部分
+    if (ts.isJsxExpression(classNameAttr.initializer)) {
+        const expr = classNameAttr.initializer.expression;
+        if (expr && ts.isTemplateExpression(expr)) {
+            const head = expr.head.text.trim();
+            return head || undefined;
+        }
+    }
+
     return undefined;
 }
 
@@ -235,8 +250,11 @@ export function checkRenderFns(ctx: RuleContext): void {
 
     // 针对每个配置的 className 检查
     for (const cn of checkClassNames) {
-        const matched = renderFns.filter(rf => rf.rootClassName === cn);
+        // const matched = renderFns.filter(rf => rf.rootClassName === cn);
 
+        const matched = renderFns.filter(rf =>
+            rf.rootClassName?.split(/\s+/).includes(cn)
+        );
         if (matched.length === 0) {
             ctx.addViolation(
                 "renderFn 检查",
@@ -325,6 +343,28 @@ export function checkRenderFns(ctx: RuleContext): void {
                 `renderFn "${renderFn.name}" 中 props 变量未使用: ${unusedProps.join(", ")}`,
                 renderFn.node
             );
+        }
+
+        // 检查 state 字段是否来自 View 层
+        const unknownStates = renderFn.stateParams.filter(v => !ctx.stateVars.has(v));
+        if (unknownStates.length > 0) {
+            ctx.addViolation(
+                "renderFn state 检查",
+                `renderFn "${renderFn.name}" 解构了未声明的 state: ${unknownStates.join(", ")}，View 层 states: [${[...ctx.stateVars].join(", ")}]`,
+                renderFn.node
+            );
+        }
+
+        // 检查 props 字段是否来自 View 层（如果有 propVars）
+        if (ctx.propVars) {
+            const unknownProps = renderFn.propsParams.filter(v => !ctx.propVars!.has(v));
+            if (unknownProps.length > 0) {
+                ctx.addViolation(
+                    "renderFn props 检查",
+                    `renderFn "${renderFn.name}" 解构了未声明的 props: ${unknownProps.join(", ")}`,
+                    renderFn.node
+                );
+            }
         }
     }
 }
