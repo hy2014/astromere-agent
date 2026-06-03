@@ -92,6 +92,7 @@ export function WorkspaceTree({
             title="Add project folder"
           >
             +
+          </button>
 
           {remotePathPrompt !== null && (
             <div className="modal-overlay" onClick={() => { remotePathPromptResolve.current?.(null); onSetRemotePathPrompt(null); }}>
@@ -115,7 +116,10 @@ export function WorkspaceTree({
                           remotePathDebounce.current = setTimeout(async () => {
                             try {
                               const entries = await listProjectEntries(value);
-                              const dirs = entries.filter((entry: any) => entry.kind === "directory").map((d: any) => d.path);
+                              const sep = value.endsWith("/") ? "" : "/";
+                              const dirs = entries
+                                .filter((entry: any) => entry.kind === "directory")
+                                .map((d: any) => value + sep + d.path);
                               setRemotePathSuggestions(dirs.slice(0, 8));
                             } catch {}
                           }, 300);
@@ -135,18 +139,15 @@ export function WorkspaceTree({
                           return;
                         }
                         if (e.key === "Enter") {
+                          // 只用来确认选中的补全建议，不创建 workspace
                           e.preventDefault();
+                          e.stopPropagation();
                           if (remotePathHighlightIndex >= 0 && remotePathHighlightIndex < remotePathSuggestions.length) {
-                            const selected = remotePathSuggestions[remotePathHighlightIndex];
-                            remotePathPromptResolve.current?.(selected);
-                          } else {
-                            const value = (e.target as HTMLInputElement).value;
-                            remotePathPromptResolve.current?.(value);
+                            setRemotePathInput(remotePathSuggestions[remotePathHighlightIndex]);
+                            setRemotePathSuggestions([]);
+                            setRemotePathHighlightIndex(-1);
                           }
-                          onSetRemotePathPrompt(null);
-                          setRemotePathInput("");
-                          setRemotePathSuggestions([]);
-                          setRemotePathHighlightIndex(-1);
+                          return;
                         }
                         if (e.key === "Escape") {
                           remotePathPromptResolve.current?.(null);
@@ -167,9 +168,7 @@ export function WorkspaceTree({
                             className={`modal-suggestion-item ${i === remotePathHighlightIndex ? "highlighted" : ""}`}
                             onMouseEnter={() => setRemotePathHighlightIndex(i)}
                             onClick={() => {
-                              remotePathPromptResolve.current?.(s);
-                              onSetRemotePathPrompt(null);
-                              setRemotePathInput("");
+                              setRemotePathInput(s);
                               setRemotePathSuggestions([]);
                               setRemotePathHighlightIndex(-1);
                             }}
@@ -182,12 +181,26 @@ export function WorkspaceTree({
                   </div>
                 </div>
                 <div className="modal-footer">
-                  <button onClick={() => { remotePathPromptResolve.current?.(null); onSetRemotePathPrompt(null); }}>Cancel</button>
+                  <button onClick={() => { remotePathPromptResolve.current?.(null); onSetRemotePathPrompt(null); setRemotePathInput(""); setRemotePathSuggestions([]); setRemotePathHighlightIndex(-1); }}>取消</button>
+                  <button
+                    className="modal-create-btn"
+                    onClick={() => {
+                      const value = remotePathInput.trim();
+                      if (value) {
+                        remotePathPromptResolve.current?.(value);
+                      } else {
+                        remotePathPromptResolve.current?.(null);
+                      }
+                      onSetRemotePathPrompt(null);
+                      setRemotePathInput("");
+                      setRemotePathSuggestions([]);
+                      setRemotePathHighlightIndex(-1);
+                    }}
+                  >创建</button>
                 </div>
               </div>
             </div>
           )}
-          </button>
         </div>
 
         <div className="workspace-tree">
