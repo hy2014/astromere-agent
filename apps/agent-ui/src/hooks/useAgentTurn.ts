@@ -486,13 +486,16 @@ export function useAgentTurn(deps: AgentTurnDeps) {
       selectedChatModel,
       permissionState?.currentMode ?? "default",
     )
-      .then((state) =>
-        sendAgentReplInput(
+      .then((state) => {
+        const sessionId = state.sessionId || targetSessionId;
+        // Fetch fresh context usage now that the process is running
+        void refreshSessionContextUsage(activeProject.root, sessionId);
+        return sendAgentReplInput(
           activeProject.root,
-          state.sessionId || targetSessionId,
+          sessionId,
           inputForClaude,
-        ),
-      )
+        );
+      })
       .catch((reason) => {
         setError(String(reason));
         clearPendingPermissionsForSession(targetSessionId);

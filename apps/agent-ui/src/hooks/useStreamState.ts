@@ -215,20 +215,24 @@ export function useStreamState() {
               console.error('[usage] saveBundleUsageSnapshot failed:', reason);
             });
           }
-          if (resolved.completesBundle) {
+          if (snapshot && snapshot.usage.inputTokens + snapshot.usage.outputTokens > 0) {
             const contextSessionId = realSessionId ?? snapshot.sessionId;
             const contextSnapshot =
               contextSessionId === snapshot.sessionId
                 ? snapshot
                 : { ...snapshot, sessionId: contextSessionId };
             setSessionContextUsageById((current) => {
+              const prev = current[contextSessionId] ?? current[snapshot.sessionId] ?? null;
+              const existingTokens = prev?.data?.totalTokens;
               const usage = contextUsageFromBundleSnapshot(
                 contextSnapshot,
-                current[contextSessionId] ??
-                  current[snapshot.sessionId] ??
-                  null,
+                prev,
               );
               if (!usage) {
+                return current;
+              }
+              // Skip update if totalTokens hasn't changed (avoid unnecessary re-renders)
+              if (existingTokens === usage.data.totalTokens && prev?.data?.apiUsage) {
                 return current;
               }
               return {

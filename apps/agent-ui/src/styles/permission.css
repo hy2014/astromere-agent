@@ -59,6 +59,35 @@
   overflow-wrap: anywhere;
 }
 
+.permission-file-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.04);
+  font-size: 12px;
+  line-height: 16px;
+  min-width: 0;
+}
+
+.permission-file-path-icon {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.permission-file-path-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1e40af;
+  font-weight: 650;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
 .permission-request-details {
   font-size: 12px;
 }
@@ -136,6 +165,175 @@
   background: rgba(255, 255, 255, 0.72) !important;
   border-color: rgba(185, 28, 28, 0.22) !important;
   color: #991b1b !important;
+}
+
+
+/* ── Ask Question Card ─────────────────────────────────────── */
+
+.ask-question-card {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 14px;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 14px;
+  background: rgba(245, 243, 255, 0.55);
+  color: #1e293b;
+}
+
+.ask-question-topline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ask-question-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #8b5cf6;
+  color: #ffffff;
+  font-weight: 900;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.ask-question-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ask-question-copy strong {
+  margin: 0;
+  color: #5b21b6;
+  font-size: 14px;
+  line-height: 18px;
+  letter-spacing: 0;
+}
+
+.ask-question-header {
+  color: #6d28d9;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+}
+
+.ask-question-text {
+  font-size: 13px;
+  line-height: 18px;
+  color: #334155;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ask-question-option-group {
+  display: grid;
+  gap: 6px;
+}
+
+.ask-question-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+  color: #1e293b;
+  transition: border-color 120ms ease, background 120ms ease;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.ask-question-option:hover {
+  border-color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.04);
+}
+
+.ask-question-option-selected {
+  border-color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.ask-question-option-marker {
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 18px;
+  color: #6d28d9;
+  margin-top: 1px;
+}
+
+.ask-question-option-label {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+  color: #1e293b;
+}
+
+.ask-question-option-desc {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  color: #64748b;
+}
+
+.ask-question-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ask-question-cancel-button {
+  min-width: 76px;
+  height: 34px;
+  border-radius: 10px;
+  padding: 0 13px;
+  border: 1px solid rgba(185, 28, 28, 0.22);
+  background: rgba(255, 255, 255, 0.72);
+  color: #991b1b;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.ask-question-confirm-button {
+  min-width: 76px;
+  height: 34px;
+  border-radius: 10px;
+  padding: 0 13px;
+  border: 1px solid transparent;
+  background: #7c3aed;
+  color: #f5f3ff;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(124, 58, 237, 0.2);
+  transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+
+.ask-question-confirm-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  box-shadow: none;
+}
+
+.ask-question-cancel-button:hover,
+.ask-question-confirm-button:hover:not(:disabled) {
+  transform: translateY(-1px);
 }
 
 .message-file-references {
