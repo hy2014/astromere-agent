@@ -733,10 +733,11 @@ export function contextUsageAutoCompactEnabledLabel(usage: AgentContextUsage | n
 
 export function contextUsageLabel(usage: AgentContextUsage | null | undefined): string {
   const current = usage?.data ? formatContextTokens(usage.data.totalTokens) : "--";
-  const threshold = formatContextTokens(
-    usage?.data?.autoCompactThreshold ?? DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD,
-  );
-  return `上下文：${current}/${threshold}(${contextUsageAutoCompactEnabledLabel(usage)})`;
+  const maxTokens = usage?.data?.maxTokens ?? usage?.data?.rawMaxTokens ?? 0;
+  const denominator = maxTokens > 0
+    ? formatContextTokens(maxTokens)
+    : formatContextTokens(DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD);
+  return `上下文：${current}/${denominator}(${contextUsageAutoCompactEnabledLabel(usage)})`;
 }
 
 export function contextUsageFromBundleSnapshot(
@@ -758,7 +759,7 @@ export function contextUsageFromBundleSnapshot(
     lastTotals.inputTokens +
       lastTotals.cacheReadInputTokens +
       lastTotals.cacheCreationInputTokens;
-  const totalTokens = totalInput + lastTotals.outputTokens;
+  const totalTokens = totalInput;
 
   if (!totalTokens || totalTokens <= 0) {
     return null;
