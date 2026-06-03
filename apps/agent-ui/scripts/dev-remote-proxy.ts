@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 const port = Number(process.env.PORT ?? "7421");
-const dataDir = process.env.AGENT_UI_REMOTE_HOME ?? join(homedir(), ".agent-ui-proxy-test");
+const dataDir = process.env.AGENT_UI_REMOTE_HOME ?? join(homedir(), ".agent-ui");
 const debugLogDir = process.env.AGENT_UI_DEBUG_LOG ?? join(dataDir, "debug-logs");
 const workspaceRegistryPath = join(dataDir, "workspace-registry.json");
 const modelSettingsPath = join(dataDir, "model-settings.json");
