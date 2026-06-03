@@ -260,10 +260,11 @@ export function createRemoteRuntime(profile: RemoteProfile): AgentRuntime {
     sessionId: string,
     requestId: string,
     approved: boolean,
+    updatedInput?: Record<string, unknown>,
   ) =>
     remoteJson(profile, "/agent/permission-response", {
       method: "POST",
-      body: JSON.stringify({ root, sessionId, requestId, approved }),
+      body: JSON.stringify({ root, sessionId, requestId, approved, updatedInput }),
     });
 
   runtime.ensureAgentReplProcess = async (

@@ -1,6 +1,7 @@
 import type {FormEvent} from "react";
 import type {AgentContextUsage, StreamLink, WorkspaceFileReference} from "../../types";
 import {PermissionRequest} from "./PermissionRequest";
+import {AskQuestionCard} from "./AskQuestionCard";
 import {FileReferenceTray} from "./FileReferenceTray";
 import {formatFileSize} from "../stream-processor";
 import type {FileMentionState, LocalFileReference, SlashCommandMenuState, SlashRootItem,} from "../types";
@@ -24,6 +25,13 @@ interface PromptInputAreaProps {
     toolName?: string;
     prompt: string;
     input?: unknown;
+    isQuestion?: boolean;
+    questions?: Array<{
+      question: string;
+      header?: string;
+      options: Array<{ label: string; description?: string }>;
+      multiSelect?: boolean;
+    }>;
   } | null;
   isInterruptingTurn: boolean;
   isResolvingFileReferences: boolean;
@@ -81,7 +89,7 @@ interface PromptInputAreaProps {
   onSelectSlashItem: (item: AgentReplCapabilityItem) => void;
 
   // Permission request
-  onPermissionAllow: () => void;
+  onPermissionAllow: (answers?: Record<string, string>) => void;
   onPermissionDeny: () => void;
 }
 
@@ -139,11 +147,19 @@ export function PromptInputArea(props: PromptInputAreaProps) {
     <form className="prompt-box" onSubmit={onSubmit}>
       <div className="prompt-frame">
         {pendingPermission && activeSessionId === pendingPermission.sessionId ? (
-          <PermissionRequest
-            permission={pendingPermission}
-            onAllow={onPermissionAllow}
-            onDeny={onPermissionDeny}
-          />
+          pendingPermission.isQuestion ? (
+            <AskQuestionCard
+              permission={pendingPermission}
+              onConfirm={onPermissionAllow}
+              onCancel={onPermissionDeny}
+            />
+          ) : (
+            <PermissionRequest
+              permission={pendingPermission}
+              onAllow={() => onPermissionAllow()}
+              onDeny={onPermissionDeny}
+            />
+          )
         ) : null}
         <FileReferenceTray
           fileReferences={fileReferences}

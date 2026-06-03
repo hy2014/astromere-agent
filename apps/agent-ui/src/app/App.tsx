@@ -1222,7 +1222,7 @@ export function App() {
           onSetSlashCommandMenu={onSetSlashCommandMenu}
           onSelectSlashRootItem={selectSlashRootItem}
           onSelectSlashItem={selectSlashItem}
-          onPermissionAllow={() => agentTurn.handlePermissionDecision(true)}
+          onPermissionAllow={(answers?: Record<string, string>) => agentTurn.handlePermissionDecision(true, answers)}
           onPermissionDeny={() => agentTurn.handlePermissionDecision(false)}
           onPermissionModeChange={(mode) => handlePermissionModeChange(mode as any)}
           permissionState={permissionState}

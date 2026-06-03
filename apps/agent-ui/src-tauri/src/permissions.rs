@@ -24,11 +24,16 @@ pub fn respond_agent_permission(
     session_id: String,
     request_id: String,
     approved: bool,
+    updated_input_json: Option<String>,
 ) -> Result<crate::types::AgentReplSendResult, String> {
-    use serde_json::json;
     use crate::repl::claw_processes;
+    use serde_json::json;
 
     let behavior = if approved { "allow" } else { "deny" };
+    let updated_input = match &updated_input_json {
+        Some(s) => serde_json::from_str::<serde_json::Value>(s).unwrap_or(json!({})),
+        None => json!({}),
+    };
     let payload = json!({
         "type": "control_response",
         "response": {
@@ -36,7 +41,7 @@ pub fn respond_agent_permission(
             "request_id": request_id,
             "response": {
                 "behavior": behavior,
-                "updatedInput": {}
+                "updatedInput": updated_input
             }
         }
     });
@@ -55,15 +60,9 @@ pub fn respond_agent_permission(
     }
     .ok_or_else(|| "REPL process is not running for permission response".to_string())?;
 
-    eprintln!(
-        "[DEBUG] respond_agent_permission: root={}, session={}, request={}, approved={}",
-        root, session_id, request_id, approved
-    );
-    eprintln!("[DEBUG] response line: {}", line);
     use std::io::Write;
     writeln!(proc_state.stdin, "{line}").map_err(error_to_string)?;
     proc_state.stdin.flush().map_err(error_to_string)?;
-    eprintln!("[DEBUG] response written and flushed");
 
     Ok(crate::types::AgentReplSendResult { accepted: true })
 }

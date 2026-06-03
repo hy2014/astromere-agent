@@ -200,8 +200,15 @@ export function respondAgentPermission(
   sessionId: string,
   requestId: string,
   approved: boolean,
+  updatedInput?: Record<string, unknown>,
 ): Promise<AgentReplSendResult> {
-  return invoke("respond_agent_permission", { root, sessionId, requestId, approved });
+  return invoke("respond_agent_permission", {
+    root,
+    sessionId,
+    requestId,
+    approved,
+    updatedInputJson: updatedInput ? JSON.stringify(updatedInput) : null,
+  });
 }
 
 export function ensureAgentReplProcess(

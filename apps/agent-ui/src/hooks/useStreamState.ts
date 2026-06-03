@@ -103,6 +103,13 @@ export type TurnEventHandlers = {
     toolName?: string;
     input?: unknown;
     rawJson?: unknown;
+    isQuestion?: boolean;
+    questions?: Array<{
+      question: string;
+      header?: string;
+      options: Array<{ label: string; description?: string }>;
+      multiSelect?: boolean;
+    }>;
   }) => void;
   clearPendingPermissionsForSession: (sessionId: string) => void;
   setProjects: (
@@ -256,6 +263,21 @@ export function useStreamState() {
           event.payload.prompt ?? `${toolName} requests permission`,
         );
 
+        const isQuestion = toolName === "AskUserQuestion";
+        let questions: Array<{
+          question: string;
+          header?: string;
+          options: Array<{ label: string; description?: string }>;
+          multiSelect?: boolean;
+        }> | undefined;
+        if (isQuestion && input && typeof input === "object") {
+          const raw = input as Record<string, unknown>;
+          const qs = raw.questions;
+          if (Array.isArray(qs)) {
+            questions = qs as typeof questions;
+          }
+        }
+
         turnHandlersRef.current?.enqueuePendingPermission({
           root: event.root,
           sessionId: event.sessionId,
@@ -265,6 +287,8 @@ export function useStreamState() {
           toolName,
           input,
           rawJson: event.payload.raw_json ?? event.payload,
+          isQuestion,
+          questions,
         });
         turnHandlersRef.current?.setIsRunningTurn(false);
       }
