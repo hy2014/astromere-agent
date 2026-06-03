@@ -713,6 +713,16 @@ export function assistantOutputTimestampMsFromBundle(
     return null;
   }
 
+  // 优先使用 turn_complete 事件的时间戳（标记 assistant 回复真正完成）
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event.eventType === "turn_complete") {
+      return event.receivedAt;
+    }
+  }
+
+  // 回退：找最后一个 turn_text / assistant_tool_use 事件
+  let lastMatch: number | null = null;
   for (const event of events) {
     if (event.eventType !== "turn_text" && event.eventType !== "assistant_tool_use") {
       continue;
@@ -723,10 +733,10 @@ export function assistantOutputTimestampMsFromBundle(
     if (rawType !== "assistant" && payloadEventType !== "assistant") {
       continue;
     }
-    return event.receivedAt;
+    lastMatch = event.receivedAt;
   }
 
-  return null;
+  return lastMatch;
 }
 
 export function assistantUsageOutputDateTimeFromBundle(

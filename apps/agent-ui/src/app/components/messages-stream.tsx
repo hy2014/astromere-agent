@@ -1,3 +1,4 @@
+import {useRef, useEffect} from "react";
 import type {StreamItem, StreamLink} from "../../types";
 import type {AssistantMessageDebugBundle, ProjectFolder,} from "../types";
 import type {BundleUsageSnapshot} from "../../tauri";
@@ -115,6 +116,15 @@ export function MessagesStream({
   onForkFromMessage,
   assistantDebugPayload,
 }: MessagesStreamProps) {
+  const streamRef = useRef<HTMLDivElement | null>(null);
+
+  // 切换 session、消息加载完成、或轮次结束时，自动滚动到最新（底部）
+  // 流式响应进行中不干预，由流式渲染自行控制滚动
+  useEffect(() => {
+    if (!isRunningTurn && streamRef.current) {
+      streamRef.current.scrollTop = streamRef.current.scrollHeight;
+    }
+  }, [activeSessionId, streamItems.length, isRunningTurn]);
   return (
     <>
       {copyToast ? (
@@ -164,7 +174,7 @@ export function MessagesStream({
 
       {error ? <div className="error-banner">{error}</div> : null}
 
-      <div className="stream">
+      <div className="stream" ref={streamRef}>
         {!activeSessionId ? (
           <div className="empty-chat-state">
             <strong>未选择会话</strong>

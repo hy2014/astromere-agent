@@ -194,6 +194,20 @@ export function useStreamState() {
             [bundleUsageStorageKey(snapshot.sessionId, snapshot.bundleId)]:
               snapshot,
           }));
+          // 修复：不仅在 completesBundle 时保存，只要有 bundle 且有 usage 数据就保存
+          // 防止 app 中途退出导致 usage 丢失
+          // 用节流：同一 bundle 最多每 5 秒保存一次
+          const nowMs = Date.now();
+          const lastSaveKey = `__lastSaveMs_${snapshot.sessionId}_${snapshot.bundleId}`;
+          const lastSaveMs = (window as any)[lastSaveKey] ?? 0;
+          const shouldSave =
+            resolved.completesBundle || nowMs - lastSaveMs > 5_000;
+          if (shouldSave && snapshot.usage.inputTokens + snapshot.usage.outputTokens > 0) {
+            (window as any)[lastSaveKey] = nowMs;
+            void saveBundleUsageSnapshot(snapshot).catch((reason) => {
+              console.error('[usage] saveBundleUsageSnapshot failed:', reason);
+            });
+          }
           if (resolved.completesBundle) {
             const contextSessionId = realSessionId ?? snapshot.sessionId;
             const contextSnapshot =
@@ -217,9 +231,6 @@ export function useStreamState() {
               };
             });
             setContextUsageError(null);
-            void saveBundleUsageSnapshot(snapshot).catch((reason) => {
-              // silent
-            });
           }
         }
         return nextBundles;

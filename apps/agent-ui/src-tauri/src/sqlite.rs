@@ -423,5 +423,114 @@ pub fn load_bundle_usage_snapshots_for_session(
 }
 
 // SQLite usage_records storage has been removed.
-// Usage/cost will be rebuilt from Claude Code jsonl message usage in a later implementation.
+// Usage/cost will be rebuilt from Claws Code jsonl message usage in a later implementation.
 // Keep this file limited to generic SQLite utilities for now.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_load_backfill_snapshots() {
+        // Try to load snapshots for a session that has backfill data
+        let result = load_bundle_usage_snapshots_for_session(
+            "539002aa-e4a5-46a3-94db-a631fba41562".to_string()
+        );
+        match &result {
+            Ok(snapshots) => {
+                println!("Loaded {} snapshots", snapshots.len());
+                for (i, snap) in snapshots.iter().enumerate() {
+                    println!("Snapshot {}: session={}, bundle={}, source={}, usage={:?}", 
+                        i, &snap.session_id[..20], &snap.bundle_id[..20], snap.source, snap.usage);
+                    println!("  modelCallUsages len = {}", snap.model_call_usages.len());
+                }
+            }
+            Err(e) => {
+                println!("ERROR loading snapshots: {}", e);
+            }
+        }
+        // Don't assert - just print diagostics
+        // assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_deserialize_snapshot_json() {
+        // Read the DB directly and try to deserialize snapshot_json
+        let conn = rusqlite::Connection::open(
+            std::path::PathBuf::from(env!("HOME")).join(".agent-ui/sqlite/agent-ui.db")
+        );
+        let conn = match conn {
+            Ok(c) => c,
+            Err(e) => {
+                println!("Could not open DB: {}", e);
+                return;
+            }
+        };
+
+        let mut stmt = conn.prepare("SELECT session_id, bundle_id, snapshot_json, model_call_usages_json, usage_json FROM bundle_usage_snapshots WHERE source = 'backfill' LIMIT 5");
+        let mut stmt = match stmt {
+            Ok(s) => s,
+            Err(e) => {
+                println!("Could not prepare statement: {}", e);
+                return;
+            }
+        };
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        });
+
+        let rows = match rows {
+            Ok(r) => r,
+            Err(e) => {
+                println!("Query failed: {}", e);
+                return;
+            }
+        };
+
+        for row in rows {
+            let (session_id, bundle_id, snapshot_json, model_call_usages_json, usage_json) = row.unwrap();
+            println!("\nSession: {}..., Bundle: {}...", &session_id[..20], &bundle_id[..20]);
+            
+            // Try to deserialize snapshot_json
+            match serde_json::from_str::<BundleUsageSnapshot>(&snapshot_json) {
+                Ok(snap) => {
+                    println!("  Deserialized OK: usage = {:?}", snap.usage);
+                    println!("  modelCallUsages len = {}", snap.model_call_usages.len());
+                }
+                Err(e) => {
+                    println!("  FAILED to deserialize snapshot_json: {}", e);
+                    // Print first 500 chars of snapshot_json
+                    println!("  snapshot_json[:500] = {}", &snapshot_json[..snapshot_json.len().min(500)]);
+                }
+            }
+
+            // Try to deserialize model_call_usages_json
+            match serde_json::from_str::<Vec<ModelCallUsageSnapshot>>(&model_call_usages_json) {
+                Ok(usages) => {
+                    println!("  model_call_usages_json deserialized OK: len = {}", usages.len());
+                }
+                Err(e) => {
+                    println!("  FAILED to deserialize model_call_usages_json: {}", e);
+                }
+            }
+
+            // Try to deserialize usage_json
+            match serde_json::from_str::<BundleUsageTotals>(&usage_json) {
+                Ok(totals) => {
+                    println!("  usage_json deserialized OK: {:?}", totals);
+                }
+                Err(e) => {
+                    println!("  FAILED to deserialize usage_json: {}", e);
+                }
+            }
+        }
+    }
+}
