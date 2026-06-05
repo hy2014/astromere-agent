@@ -63,7 +63,7 @@ export function collectStateVars(sourceFile: ts.SourceFile): Set<string> {
         if (ts.isCallExpression(node)) {
             const callee = node.expression;
             if (ts.isIdentifier(callee) && callee.text === "useState" && node.parent) {
-                const decl = node.parent.parent;
+                const decl = node.parent;
                 if (ts.isVariableDeclaration(decl) && ts.isArrayBindingPattern(decl.name)) {
                     const stateName = decl.name.elements[0];
                     if (stateName && ts.isIdentifier(stateName.name)) {

@@ -146,6 +146,7 @@ export function App() {
     streamUsageByBundleKey,
     sessionContextUsageById,
     contextUsageError,
+    isCompactingBySession,
     copiedDebugMessageId,
     openAssistantDebugMessageId,
     openAssistantUsageMessageId,
@@ -1232,6 +1233,7 @@ export function App() {
           contextUsageError={contextUsageError}
           activeContextUsage={activeContextUsage}
           contextUsageLabel={contextUsageLabel}
+          isCompacting={!!(activeSessionId && isCompactingBySession[activeSessionId])}
           previewTabs={previewTabs}
           activePreview={activePreview}
           onSetActivePreviewId={setActivePreviewId}

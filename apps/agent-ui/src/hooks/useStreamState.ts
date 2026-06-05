@@ -150,6 +150,9 @@ export function useStreamState() {
   const [contextUsageError, setContextUsageError] = useState<string | null>(
     null,
   );
+  const [isCompactingBySession, setIsCompactingBySession] = useState<
+    Record<string, boolean>
+  >({});
 
   const usageCostModelSettingsRef = useRef<ModelSettings | null>(null);
   const currentBundleBySessionRef = useRef<Record<string, string | null>>({});
@@ -451,6 +454,18 @@ export function useStreamState() {
           );
         }
       }
+
+      // Handle system events (e.g., compacting status)
+      if (event.eventType === "system") {
+        const payload = event.payload as Record<string, unknown>;
+        if (payload.subtype === "status" && "status" in payload) {
+          const compacting = payload.status === "compacting";
+          setIsCompactingBySession((prev) => {
+            if (prev[event.sessionId] === compacting) return prev;
+            return {...prev, [event.sessionId]: compacting};
+          });
+        }
+      }
     })
       .then((cleanup) => {
         if (cancelled) {
@@ -663,15 +678,18 @@ export function useStreamState() {
   const [isDebugOpen, setIsDebugOpen] = useState(false);
 
   const contextUsageLabel = useCallback(
-    (usage: AgentContextUsage | null | undefined): string => {
+    (usage: AgentContextUsage | null | undefined, isCompacting?: boolean): string => {
       const current = usage?.data
         ? formatContextTokens(usage.data.totalTokens)
         : "--";
-      const threshold = formatContextTokens(
-        usage?.data?.autoCompactThreshold ??
-          DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD,
-      );
-      return `上下文：${current}/${threshold}(${contextUsageAutoCompactEnabledLabel(usage)})`;
+      const maxTokens = usage?.data?.maxTokens ?? usage?.data?.rawMaxTokens ?? 0;
+      const denominator = maxTokens > 0
+        ? formatContextTokens(maxTokens)
+        : formatContextTokens(DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD);
+      const suffix = isCompacting
+        ? "compacting"
+        : contextUsageAutoCompactEnabledLabel(usage);
+      return `上下文：${current}/${denominator}(${suffix})`;
     },
     [],
   );
@@ -716,6 +734,7 @@ export function useStreamState() {
     streamUsageByBundleKey,
     sessionContextUsageById,
     contextUsageError,
+    isCompactingBySession,
     copiedDebugMessageId,
     openAssistantDebugMessageId,
     openAssistantUsageMessageId,

@@ -1,6 +1,8 @@
 // checker/rules/check-render-fns.ts
 import * as ts from "typescript";
 import { RuleContext } from "../types";
+import { checkEvents, type RenderFnInfo, getFunctionBody } from "./check-events";
+import { checkSlots } from "./check-slots";
 
 function getCheckFns(sourceFile: ts.SourceFile): string[] {
     const text = sourceFile.getFullText();
@@ -21,11 +23,12 @@ function isRenderFn(node: ts.Node): node is ts.FunctionDeclaration | ts.ArrowFun
         return false;
     }
     const params = node.parameters;
-    if (params.length < 3 || params.length > 4) return false;
-    if (!ts.isObjectBindingPattern(params[0].name)) return false;
-    if (!ts.isObjectBindingPattern(params[1].name)) return false;
-    if (!ts.isIdentifier(params[2].name)) return false;
-    if (params.length === 4 && !ts.isIdentifier(params[3].name)) return false;
+    if (params.length < 3 || params.length > 5) return false;
+    if (!ts.isObjectBindingPattern(params[0].name)) return false;  // state
+    if (!ts.isObjectBindingPattern(params[1].name)) return false;  // props
+    if (!ts.isObjectBindingPattern(params[2].name) && !ts.isArrayBindingPattern(params[2].name)) return false;  // events
+    if (params.length >= 4 && !ts.isIdentifier(params[3].name)) return false;  // ext
+    if (params.length === 5 && !ts.isObjectBindingPattern(params[4].name)) return false;  // memo
     return true;
 }
 
@@ -39,11 +42,14 @@ function getBindingNames(pattern: ts.ObjectBindingPattern): string[] {
     return names;
 }
 
-function getFunctionBody(node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): ts.Block | ts.Expression | undefined {
-    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
-        return node.body;
+function getArrayBindingNames(pattern: ts.ArrayBindingPattern): string[] {
+    const names: string[] = [];
+    for (const element of pattern.elements) {
+        if (ts.isBindingElement(element) && ts.isIdentifier(element.name)) {
+            names.push(element.name.text);
+        }
     }
-    return (node as ts.FunctionDeclaration).body;
+    return names;
 }
 
 function getJSXRootClassName(jsx: ts.JsxElement | ts.JsxSelfClosingElement): string | undefined {
@@ -54,13 +60,10 @@ function getJSXRootClassName(jsx: ts.JsxElement | ts.JsxSelfClosingElement): str
 
     if (!classNameAttr?.initializer) return undefined;
 
-    // 字符串字面量：className="xxx"
     if (ts.isStringLiteral(classNameAttr.initializer)) {
         return classNameAttr.initializer.text;
     }
 
-    // 模板字符串：className={`mcp-clean-table-row ${expr}`}
-    // 取模板头部第一个静态部分
     if (ts.isJsxExpression(classNameAttr.initializer)) {
         const expr = classNameAttr.initializer.expression;
         if (expr && ts.isTemplateExpression(expr)) {
@@ -85,147 +88,62 @@ function getRenderFnName(node: ts.Node): string {
     return "anonymous";
 }
 
-function collectMemberAccesses(root: ts.Node, objName: string): Set<string> {
-    const accesses = new Set<string>();
-    function visit(n: ts.Node) {
-        if (ts.isPropertyAccessExpression(n) &&
-            ts.isIdentifier(n.expression) &&
-            n.expression.text === objName &&
-            ts.isIdentifier(n.name)) {
-            accesses.add(n.name.text);
-        }
-        ts.forEachChild(n, visit);
-    }
-    visit(root);
-    return accesses;
-}
-
-function collectBoundEvents(root: ts.Node, eventsParamName: string): Set<string> {
-    const bound = new Set<string>();
-    function visit(n: ts.Node) {
-        if (ts.isJsxAttribute(n) && ts.isIdentifier(n.name) && /^on[A-Z]/.test(n.name.text)) {
-            const init = n.initializer;
-            if (init && ts.isJsxExpression(init) && init.expression) {
-                const expr = init.expression;
-                if (ts.isPropertyAccessExpression(expr) &&
-                    ts.isIdentifier(expr.expression) &&
-                    expr.expression.text === eventsParamName &&
-                    ts.isIdentifier(expr.name)) {
-                    bound.add(expr.name.text);
-                }
-            }
-        }
-        ts.forEachChild(n, visit);
-    }
-    visit(root);
-    return bound;
-}
-
-function hasChildRenderCall(body: ts.Node): boolean {
-    let found = false;
-    function visit(n: ts.Node) {
-        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text.startsWith("render")) {
-            found = true;
-            return;
-        }
-        ts.forEachChild(n, visit);
-    }
-    visit(body);
-    return found;
-}
-
-function isIdentifierUsed(scope: ts.Node, name: string): boolean {
-    let used = false;
-    function visit(n: ts.Node) {
-        if (ts.isIdentifier(n) && n.text === name) {
-            if (!(n.parent && ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
-                used = true;
-                return;
-            }
-        }
-        ts.forEachChild(n, visit);
-    }
-    visit(scope);
-    return used;
-}
-
 export function checkRenderFns(ctx: RuleContext): void {
     const checkClassNames = getCheckFns(ctx.sourceFile);
-    if (checkClassNames.length === 0) return;
-
-    interface RenderFnInfo {
-        name: string;
-        node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
-        stateParams: string[];
-        propsParams: string[];
-        eventsParamName: string;
-        extParamName?: string;
-        rootClassName?: string;
-    }
 
     const renderFns: RenderFnInfo[] = [];
 
     function collect(node: ts.Node) {
         if (isRenderFn(node)) {
             const name = getRenderFnName(node);
+
+            if (!name.startsWith("render")) {
+                ctx.addViolation(
+                    "renderFn 命名规范",
+                    `renderFn 名称必须以 'render' 开头，当前: "${name}"`,
+                    node
+                );
+            }
+
             const stateParams = getBindingNames(node.parameters[0].name as ts.ObjectBindingPattern);
             const propsParams = getBindingNames(node.parameters[1].name as ts.ObjectBindingPattern);
-            const eventsParam = node.parameters[2].name as ts.Identifier;
-            const extParamName = node.parameters.length === 4 && ts.isIdentifier(node.parameters[3].name)
+            const eventsName = node.parameters[2].name;
+            const eventsParams = ts.isObjectBindingPattern(eventsName)
+                ? getBindingNames(eventsName)
+                : getArrayBindingNames(eventsName as ts.ArrayBindingPattern);
+            const extParamName = node.parameters.length >= 4 && ts.isIdentifier(node.parameters[3].name)
                 ? (node.parameters[3].name as ts.Identifier).text
                 : undefined;
+            const memoParams = node.parameters.length === 5
+                ? getBindingNames(node.parameters[4].name as ts.ObjectBindingPattern)
+                : [];
 
             const body = getFunctionBody(node);
             let rootClassName: string | undefined;
-            if (!body) {
-                console.log('❌ body 为空');
-            } else {
-                console.log('body 类型:', ts.SyntaxKind[body.kind]);
+            if (!body) return;
 
-                let jsx: ts.JsxElement | ts.JsxSelfClosingElement | undefined;
-                if (ts.isBlock(body)) {
-                    console.log('  Block 语句数量:', body.statements.length);
-                    body.statements.forEach((stmt, i) => {
-                        console.log(`  语句${i}: ${ts.SyntaxKind[stmt.kind]}`);
-                    });
-                    const returnStmt = body.statements.find(ts.isReturnStatement);
-                    console.log('  找到 return 语句:', !!returnStmt);
-                    if (returnStmt) {
-                        console.log('  return.expression 类型:', returnStmt.expression ? ts.SyntaxKind[returnStmt.expression.kind] : '无');
-
-                        if (returnStmt?.expression) {
-                            const unwrapped = unwrapParenthesized(returnStmt.expression);
-                            if (ts.isJsxElement(unwrapped) || ts.isJsxSelfClosingElement(unwrapped)) {
-                                jsx = unwrapped;
-                            }
-                            console.log('  ✅ 拿到 JSX');
-                        } else {
-                            console.log('  ❌ return 的不是 JSX');
-                        }
-
-                        if (returnStmt?.expression && (ts.isJsxElement(returnStmt.expression) || ts.isJsxSelfClosingElement(returnStmt.expression))) {
-                            jsx = returnStmt.expression;
-                        }
-                    }
-                } else if (ts.isJsxElement(body) || ts.isJsxSelfClosingElement(body)) {
-                    jsx = body;
-                    console.log('  ✅ body 本身是 JSX');
-                } else if (ts.isParenthesizedExpression(body)) {
-                    const unwrapped = unwrapParenthesized(body);
+            let jsx: ts.JsxElement | ts.JsxSelfClosingElement | undefined;
+            if (ts.isBlock(body)) {
+                const returnStmt = body.statements.find(ts.isReturnStatement);
+                if (returnStmt?.expression) {
+                    const unwrapped = unwrapParenthesized(returnStmt.expression);
                     if (ts.isJsxElement(unwrapped) || ts.isJsxSelfClosingElement(unwrapped)) {
                         jsx = unwrapped;
                     }
                 }
-
-                if (jsx) {
-                    const tagName = ts.isJsxElement(jsx) ? jsx.openingElement.tagName.getText() : jsx.tagName.getText();
-                    console.log('  JSX 标签:', tagName);
-                    rootClassName = getJSXRootClassName(jsx);
-                    console.log('  提取的 className:', rootClassName);
+            } else if (ts.isJsxElement(body) || ts.isJsxSelfClosingElement(body)) {
+                jsx = body;
+            } else if (ts.isParenthesizedExpression(body)) {
+                const unwrapped = unwrapParenthesized(body);
+                if (ts.isJsxElement(unwrapped) || ts.isJsxSelfClosingElement(unwrapped)) {
+                    jsx = unwrapped;
                 }
             }
 
-            // 调试日志：安全打印
+            if (jsx) {
+                rootClassName = getJSXRootClassName(jsx);
+            }
+
             console.log(`✅ 识别为 renderFn: ${name}, 最外层 className: ${rootClassName || '无'}`);
 
             renderFns.push({
@@ -233,8 +151,9 @@ export function checkRenderFns(ctx: RuleContext): void {
                 node,
                 stateParams,
                 propsParams,
-                eventsParamName: eventsParam.text,
+                eventsParams,
                 extParamName,
+                memoParams,
                 rootClassName,
             });
         }
@@ -243,130 +162,171 @@ export function checkRenderFns(ctx: RuleContext): void {
 
     collect(ctx.sourceFile);
 
-    // 调试：列出所有收集到的 renderFn
-    console.log('\n📋 收集到的 renderFn 列表:');
-    renderFns.forEach(rf => console.log(`  - ${rf.name}: className="${rf.rootClassName}"`));
-    console.log(`🔍 需要检查的 className: ${checkClassNames.join(', ')}\n`);
+    // ── 调用位置检查（无需 renderFn 被识别也执行） ──
 
-    // 针对每个配置的 className 检查
-    for (const cn of checkClassNames) {
-        // const matched = renderFns.filter(rf => rf.rootClassName === cn);
+    const renderFnNames = new Set(renderFns.map(rf => rf.name));
 
-        const matched = renderFns.filter(rf =>
-            rf.rootClassName?.split(/\s+/).includes(cn)
-        );
-        if (matched.length === 0) {
-            ctx.addViolation(
-                "renderFn 检查",
-                `className "${cn}" 未出现在任何 renderFn 的最外层元素上。`,
-                ctx.sourceFile
-            );
-            continue;
+    // 收集文件中所有函数名（用于校验 events 引用）
+    const knownFnNames = new Set(renderFnNames);
+    function collectFnNames(node: ts.Node) {
+        if (ts.isFunctionDeclaration(node) && node.name) {
+            knownFnNames.add(node.name.text);
         }
-
-        if (matched.length > 1) {
-            ctx.addViolation(
-                "renderFn 检查",
-                `className "${cn}" 出现在多个 renderFn 的最外层：${matched.map(r => r.name).join(", ")}。`,
-                matched[0].node
-            );
-            continue;
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+            const init = node.initializer;
+            if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) {
+                knownFnNames.add(node.name.text);
+            }
         }
+        ts.forEachChild(node, collectFnNames);
+    }
+    collectFnNames(ctx.sourceFile);
 
-        const renderFn = matched[0];
-        const body = getFunctionBody(renderFn.node);
-        if (!body) continue;
+    // renderFn 直接调用检查
+    function checkDirectRenderFnCall(node: ts.Node) {
+        if (ts.isCallExpression(node)) {
+            const callee = node.expression;
+            if (ts.isIdentifier(callee) && renderFnNames.has(callee.text)) {
+                ctx.addViolation(
+                    "renderFn 调用规范",
+                    `renderFn "${callee.text}" 应通过 render() 调用，而不是直接函数调用`,
+                    node
+                );
+            }
+        }
+        ts.forEachChild(node, checkDirectRenderFnCall);
+    }
+    checkDirectRenderFnCall(ctx.sourceFile);
 
-        // 检查 onXxx 绑定必须是 events.xxx
-        function checkEventBindingStyle(node: ts.Node) {
-            ts.forEachChild(node, (n) => {
-                if (ts.isJsxAttribute(n) && ts.isIdentifier(n.name) && /^on[A-Z]/.test(n.name.text)) {
-                    const init = n.initializer;
-                    if (init && ts.isJsxExpression(init) && init.expression) {
-                        if (!ts.isPropertyAccessExpression(init.expression) ||
-                            !ts.isIdentifier(init.expression.expression) ||
-                            init.expression.expression.text !== renderFn.eventsParamName) {
-                            ctx.addViolation(
-                                "事件绑定规范",
-                                `on${n.name.text.substring(2)} 必须绑定为 events.xxx 形式`,
-                                n
-                            );
+    // render() fn 引用校验
+    function checkRenderFnRef(node: ts.Node) {
+        if (ts.isCallExpression(node)) {
+            const callee = node.expression;
+            const renderRef = (ts.isIdentifier(callee) && callee.text === "render") ||
+                (ts.isPropertyAccessExpression(callee) && callee.name.text === "render");
+            if (renderRef && node.arguments.length >= 1) {
+                const firstArg = node.arguments[0];
+                if (ts.isObjectLiteralExpression(firstArg)) {
+                    for (const prop of firstArg.properties) {
+                        if (ts.isPropertyAssignment(prop) &&
+                            ts.isIdentifier(prop.name) && prop.name.text === "fn") {
+                            const fnValue = prop.initializer;
+                            if (fnValue && ts.isIdentifier(fnValue) && !renderFnNames.has(fnValue.text)) {
+                                ctx.addViolation(
+                                    "renderFn 调用规范",
+                                    `render() 的 fn 参数引用了未定义的 renderFn "${fnValue.text}"`,
+                                    prop
+                                );
+                            }
                         }
                     }
                 }
-                checkEventBindingStyle(n);
-            });
-        }
-        checkEventBindingStyle(body);
-
-        const eventsParam = renderFn.eventsParamName;
-        const boundEvents = collectBoundEvents(body, eventsParam);
-        const usedEvents = collectMemberAccesses(body, eventsParam);
-        const hasChild = hasChildRenderCall(body);
-
-        if (!hasChild) {
-            const onlyUsed = [...usedEvents].filter(e => !boundEvents.has(e));
-            const onlyBound = [...boundEvents].filter(e => !usedEvents.has(e));
-            if (onlyUsed.length > 0 || onlyBound.length > 0) {
-                ctx.addViolation(
-                    "renderFn 事件一致性",
-                    `renderFn "${renderFn.name}" 事件不一致：` +
-                    (onlyUsed.length ? `events 中多余: ${onlyUsed.join(", ")}；` : "") +
-                    (onlyBound.length ? `绑定了事件但 events 未声明: ${onlyBound.join(", ")}` : ""),
-                    renderFn.node
-                );
-            }
-        } else {
-            const missing = [...boundEvents].filter(e => !usedEvents.has(e));
-            if (missing.length > 0) {
-                ctx.addViolation(
-                    "renderFn 事件缺失",
-                    `renderFn "${renderFn.name}" 绑定了事件 ${missing.join(", ")}，但 events 参数中未包含这些属性。`,
-                    renderFn.node
-                );
             }
         }
-
-        const unusedState = renderFn.stateParams.filter(v => !isIdentifierUsed(body, v));
-        const unusedProps = renderFn.propsParams.filter(v => !isIdentifierUsed(body, v));
-
-        if (unusedState.length > 0) {
-            ctx.addViolation(
-                "renderFn 未使用 state",
-                `renderFn "${renderFn.name}" 中 state 变量未使用: ${unusedState.join(", ")}`,
-                renderFn.node
-            );
-        }
-        if (unusedProps.length > 0) {
-            ctx.addViolation(
-                "renderFn 未使用 props",
-                `renderFn "${renderFn.name}" 中 props 变量未使用: ${unusedProps.join(", ")}`,
-                renderFn.node
-            );
-        }
-
-        // 检查 state 字段是否来自 View 层
-        const unknownStates = renderFn.stateParams.filter(v => !ctx.stateVars.has(v));
-        if (unknownStates.length > 0) {
-            ctx.addViolation(
-                "renderFn state 检查",
-                `renderFn "${renderFn.name}" 解构了未声明的 state: ${unknownStates.join(", ")}，View 层 states: [${[...ctx.stateVars].join(", ")}]`,
-                renderFn.node
-            );
-        }
-
-        // 检查 props 字段是否来自 View 层（如果有 propVars）
-        if (ctx.propVars) {
-            const unknownProps = renderFn.propsParams.filter(v => !ctx.propVars!.has(v));
-            if (unknownProps.length > 0) {
-                ctx.addViolation(
-                    "renderFn props 检查",
-                    `renderFn "${renderFn.name}" 解构了未声明的 props: ${unknownProps.join(", ")}`,
-                    renderFn.node
-                );
-            }
-        }
+        ts.forEachChild(node, checkRenderFnRef);
     }
-}
+    checkRenderFnRef(ctx.sourceFile);
 
-// 新增辅助函数：解开 ParenthesizedExpression
+    // render() events 配置检查
+    function checkEventsConfig(node: ts.Node) {
+        if (ts.isCallExpression(node)) {
+            const callee = node.expression;
+            const renderRef = (ts.isIdentifier(callee) && callee.text === "render") ||
+                (ts.isPropertyAccessExpression(callee) && callee.name.text === "render");
+            if (renderRef && node.arguments.length >= 1) {
+                const firstArg = node.arguments[0];
+                if (ts.isObjectLiteralExpression(firstArg)) {
+                    for (const prop of firstArg.properties) {
+                        if (ts.isPropertyAssignment(prop) &&
+                            ts.isIdentifier(prop.name) && prop.name.text === "events") {
+                            const eventsValue = prop.initializer;
+                            if (eventsValue && ts.isObjectLiteralExpression(eventsValue)) {
+                                for (const eventProp of eventsValue.properties) {
+                                    if (ts.isPropertyAssignment(eventProp) && ts.isIdentifier(eventProp.name)) {
+                                        const eventHandler = eventProp.initializer;
+                                        if (!eventHandler) continue;
+                                        if (ts.isArrowFunction(eventHandler) || ts.isFunctionExpression(eventHandler)) {
+                                            ctx.addViolation(
+                                                "renderFn 调用规范",
+                                                `render() 的 events.${eventProp.name.text} 不能是内联函数，应引用已定义的具名函数`,
+                                                eventProp
+                                            );
+                                        } else if (ts.isIdentifier(eventHandler) && !knownFnNames.has(eventHandler.text)) {
+                                            ctx.addViolation(
+                                                "renderFn 调用规范",
+                                                `render() 的 events.${eventProp.name.text} 引用了未定义的函数 "${eventHandler.text}"`,
+                                                eventProp
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ts.forEachChild(node, checkEventsConfig);
+    }
+    checkEventsConfig(ctx.sourceFile);
+
+    if (renderFns.length === 0) return;
+
+    // ── 以下为 renderFn 特异检查 ──
+    // 调试
+    console.log('\n📋 收集到的 renderFn 列表:');
+    renderFns.forEach(rf => console.log(`  - ${rf.name}: className="${rf.rootClassName || '无'}"`));
+    if (checkClassNames.length > 0) {
+        console.log(`🔍 需要检查的 className: ${checkClassNames.join(', ')}\n`);
+    }
+
+    // ── @checkFns className 匹配 ──
+    if (checkClassNames.length > 0) {
+        for (const cn of checkClassNames) {
+            const matched = renderFns.filter(rf =>
+                rf.rootClassName?.split(/\s+/).includes(cn)
+            );
+            if (matched.length === 0) {
+                ctx.addViolation(
+                    "renderFn 检查",
+                    `className "${cn}" 未出现在任何 renderFn 的最外层元素上。`,
+                    ctx.sourceFile
+                );
+            } else if (matched.length > 1) {
+                ctx.addViolation(
+                    "renderFn 检查",
+                    `className "${cn}" 出现在多个 renderFn 的最外层：${matched.map(r => r.name).join(", ")}。`,
+                    matched[0].node
+                );
+            }
+        }
+
+    }
+
+    // ── 以下为 renderFn 特异检查 ──
+
+    // renderFn 内部禁止 hooks
+    const FORBIDDEN_HOOKS = ["useState", "useEffect", "useLayoutEffect", "useRef", "useContext",
+        "useImperativeHandle", "useInsertionEffect", "useDebugValue", "useDeferredValue",
+        "useTransition", "useSyncExternalStore", "useOptimistic", "useActionState"];
+    for (const rf of renderFns) {
+        function checkHooks(node: ts.Node) {
+            if (ts.isCallExpression(node)) {
+                const callee = node.expression;
+                if (ts.isIdentifier(callee) && FORBIDDEN_HOOKS.includes(callee.text)) {
+                    ctx.addViolation(
+                        "renderFn 规范",
+                        `renderFn "${rf.name}" 内部禁止使用 ${callee.text}()，renderFn 不是 React 组件`,
+                        node
+                    );
+                }
+            }
+            ts.forEachChild(node, checkHooks);
+        }
+        checkHooks(rf.node);
+    }
+
+    // ── 子规则 ──
+    checkSlots(ctx, renderFns);
+    checkEvents(ctx, renderFns);
+}
