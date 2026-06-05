@@ -1,3 +1,4 @@
+/* @checkFns remote-form-card, remote-profile-card */
 import {useState} from "react";
 import type {RemoteProfile} from "../../runtime";
 import {
@@ -175,7 +176,7 @@ function renderRemoteForm(
   },
 ) {
   return (
-    <section className="settings-card remote-settings-card">
+    <section className="settings-card remote-settings-card remote-form-card">
       <header className="settings-card-header">
         <div className="settings-card-title">
           <h3>Connection profile</h3>
@@ -231,7 +232,7 @@ function renderRemoteProfileList(
   { handleUseRemote, handleDeleteRemote }: { handleUseRemote: (profile: RemoteProfile) => void; handleDeleteRemote: (profile: RemoteProfile, activeProfileId: string | null) => void },
 ) {
   return (
-    <section className="settings-card remote-settings-card">
+    <section className="settings-card remote-settings-card remote-profile-card">
       <header className="settings-card-header">
         <div className="settings-card-title">
           <h3>Saved remotes</h3>

@@ -66,7 +66,7 @@ function parseCsvPreview(content: string, maxRows = 120, maxColumns = 28): {
   };
 }
 
-export function isHtmlFilePath(path: string, language?: string) {
+function isHtmlFilePath(path: string, language?: string) {
   const lowerPath = path.toLowerCase();
   const lowerLanguage = language?.toLowerCase() ?? "";
   return (
@@ -79,7 +79,7 @@ export function isHtmlFilePath(path: string, language?: string) {
 
 // ─── CsvDataPreview ────────────────────────────────────────────────────
 
-export function CsvDataPreview({ file }: { file: FileView }) {
+function CsvDataPreview({ file }: { file: FileView }) {
   const preview = useMemo(() => parseCsvPreview(file.content), [file.content]);
   const [copied, setCopied] = useState(false);
 
@@ -134,7 +134,7 @@ export function CsvDataPreview({ file }: { file: FileView }) {
 
 // ─── HtmlRichPreview ───────────────────────────────────────────────────
 
-export function HtmlRichPreview({
+function HtmlRichPreview({
   content,
   title,
 }: {
@@ -154,7 +154,7 @@ export function HtmlRichPreview({
 
 // ─── CodePreview ───────────────────────────────────────────────────────
 
-export function CodePreview({ content }: { content: string }) {
+export function CodePreviewView({ content }: { content: string }) {
   return (
     <div className="code-preview">
       <div className="line-gutter" aria-hidden="true">
@@ -336,7 +336,7 @@ function isFileAccessNotice(content: string): boolean {
 
 // ─── RichMarkdownMessage ───────────────────────────────────────────────
 
-export function RichMarkdownMessage({
+function RichMarkdownMessage({
   content,
   compact = false,
 }: {
@@ -391,7 +391,7 @@ export function RichMarkdownMessage({
                     const text = block.code;
                     const doCopy = navigator.clipboard?.writeText(text)
                       ?? new Promise((resolve, reject) => {
-                        const ta = document.createElement("textarea");
+                        const ta = document.createElementNS("http://www.w3.org/1999/xhtml", "textarea") as HTMLTextAreaElement;
                         ta.value = text;
                         ta.style.position = "fixed";
                         ta.style.left = "-9999px";
@@ -451,7 +451,7 @@ export function RichMarkdownMessage({
 
 // ─── MarkdownPreview ───────────────────────────────────────────────────
 
-export function MarkdownPreview({ content }: { content: string }) {
+function MarkdownPreview({ content }: { content: string }) {
   const lines = content.split("\n");
   return (
     <div className="markdown-preview">
@@ -483,7 +483,7 @@ export function MarkdownPreview({ content }: { content: string }) {
 
 // ─── MarkdownTablePreview ──────────────────────────────────────────────
 
-export function MarkdownTablePreview({ content }: { content: string }) {
+function MarkdownTablePreview({ content }: { content: string }) {
   const rows = content
     .split("\n")
     .map((line) => line.trim())
@@ -528,3 +528,7 @@ export function MarkdownTablePreview({ content }: { content: string }) {
     </div>
   );
 }
+
+// ─── Re-exports for external consumers ────────────────────────────────
+
+export {isHtmlFilePath, CsvDataPreview, HtmlRichPreview, RichMarkdownMessage, MarkdownPreview, MarkdownTablePreview};

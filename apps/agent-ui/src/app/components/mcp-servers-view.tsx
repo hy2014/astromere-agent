@@ -294,7 +294,7 @@ function renderMcpEnvList(
   {}: Record<string, never>,
   {}: Record<string, never>,
   { updateEnvRow, removeEnvRow }: { updateEnvRow: (serverId: string, envId: string, patch: Partial<McpEnvDraftRow>) => void; removeEnvRow: (serverId: string, envId: string) => void },
-  ext: { envRows: McpEnvDraftRow[]; rowId: string },
+  ext: { envRows: McpEnvDraftRow[]; rowId: string } = { envRows: [], rowId: "" },
 ) {
   const { envRows, rowId } = ext;
   return (
@@ -385,7 +385,7 @@ function renderMcpServersViewSavedIndicator(
   {}: Record<string, never>,
   {}: Record<string, never>,
   _ext?: any,
-  { hasUnsavedChanges }: { hasUnsavedChanges: boolean },
+  { hasUnsavedChanges } = { hasUnsavedChanges: false },
 ) {
   return <span>{hasUnsavedChanges ? "Unsaved changes" : "Saved"}</span>;
 }
@@ -417,7 +417,7 @@ function renderMcpServersViewStats(
   {}: Record<string, never>,
   {}: Record<string, never>,
   _ext?: any,
-  { summary }: { summary: ReturnType<typeof summarizeMcpRows> },
+  { summary } = { summary: { servers: 0, args: 0, env: 0 } },
 ) {
   return (
     <section className="mcp-clean-stats" aria-label="MCP summary">
@@ -484,9 +484,9 @@ function renderMcpServersViewEditCard(
     removeEnvRow: (serverId: string, envId: string) => void;
   },
 ) {
-  if (!editingId) return null;
+  if (!editingId) return <></>;
   const row = rows.find((r) => r.id === editingId);
-  if (!row) return null;
+  if (!row) return <></>;
 
   return (
     <article className="mcp-clean-card mcp-clean-edit-card">
@@ -562,7 +562,7 @@ function renderMcpServersViewFooter(
   {}: Record<string, never>,
   { reloadMcpSettings, handleSaveMcpSettings }: { reloadMcpSettings: () => Promise<void>; handleSaveMcpSettings: (validationMessage: string, draftSettings: McpSettings, configPath: string) => Promise<void> },
   _ext?: any,
-  { validationMessage, hasUnsavedChanges, draftSettings }: { validationMessage: string; hasUnsavedChanges: boolean; draftSettings: McpSettings },
+  { validationMessage, hasUnsavedChanges, draftSettings } = { validationMessage: "", hasUnsavedChanges: false, draftSettings: {} as McpSettings },
 ) {
   return (
     <>

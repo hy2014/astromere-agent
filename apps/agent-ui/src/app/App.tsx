@@ -26,8 +26,8 @@ import {RemoteTerminalPlaceholder} from "./RemoteTerminalPlaceholder";
 import {SkillsView} from "./components/skills-view";
 import {McpServersView} from "./components/mcp-servers-view";
 import {SettingsView} from "./components/settings-view";
-import {SessionDialog} from "./components/session";
-import {WorkspaceTree} from "./components/workspace-tree";
+import {SessionDialogView} from "./components/SessionDialog";
+import {WorkspaceTreeView} from "./components/workspace-tree";
 import {useStreamState} from "../hooks/useStreamState";
 import {useAgentTurn} from "../hooks/useAgentTurn";
 import {usePromptInput} from "../hooks/usePromptInput"
@@ -1074,7 +1074,7 @@ export function App() {
       className={`app-shell ${activeView === "settings" || activeView === "skills" ? "settings-mode" : (activePreview || openProcessMessageIds.size > 0) ? "has-preview" : ""}`}
     >
       <aside className="side-panel" aria-label="Project and skills">
-        <WorkspaceTree
+        <WorkspaceTreeView
           projects={projects}
           activeSessionId={activeSessionId}
           activeRemoteProfile={activeRemoteProfile}
@@ -1165,7 +1165,7 @@ export function App() {
           onRestoreSession={handleRestoreHiddenSession}
         />
       ) : (
-        <SessionDialog
+        <SessionDialogView
           activeSessionTitle={activeSessionTitle}
           activeSessionId={activeSessionId}
           isDebugOpen={isDebugOpen}

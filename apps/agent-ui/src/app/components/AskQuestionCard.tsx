@@ -1,4 +1,6 @@
+/* @checkFns ask-question-card */
 import {useState} from "react";
+import {render} from "../../core/dep";
 
 interface AskQuestionPermission {
   root: string;
@@ -23,33 +25,30 @@ interface AskQuestionCardProps {
   onCancel: () => void;
 }
 
-export function AskQuestionCard({permission, onConfirm, onCancel}: AskQuestionCardProps) {
-  const question = permission.questions?.[0];
-  const multi = question?.multiSelect ?? false;
+// ─── WriteState ─────────────────────────────────────────────────────────
+const WriteState: {
+  setSelected: (s: Record<string, string | Set<string>> | ((prev: Record<string, string | Set<string>>) => Record<string, string | Set<string>>)) => void;
+} = {} as any;
 
-  // selected[header] = label   (single)
-  // selected[header] = Set<label>  (multi)
-  const [selected, setSelected] = useState<Record<string, string | Set<string>>>(
-    () => {
-      if (!question) return {};
-      if (multi) return {[question.header ?? question.question]: new Set<string>()};
-      return {};
-    },
-  );
+// ─── File-level business functions ──────────────────────────────────────
 
-  if (!question) {
-    return null;
-  }
+function initSelected(
+  question: any,
+  multi: boolean,
+  key: string,
+): Record<string, string | Set<string>> {
+  if (!question) return {};
+  if (multi) return {[key]: new Set<string>()};
+  return {};
+}
 
-  const header = question.header ?? "请选择";
-  const key = question.header ?? question.question;
-
-  const toggleSingle = (label: string) => {
-    setSelected({[key]: label});
-  };
-
-  const toggleMulti = (label: string) => {
-    setSelected((prev) => {
+function handleOptionSelect(
+  key: string,
+  label: string,
+  multi: boolean,
+): void {
+  if (multi) {
+    WriteState.setSelected((prev) => {
       const set = new Set(prev[key] instanceof Set ? (prev[key] as Set<string>) : undefined);
       if (set.has(label)) {
         set.delete(label);
@@ -58,24 +57,70 @@ export function AskQuestionCard({permission, onConfirm, onCancel}: AskQuestionCa
       }
       return {...prev, [key]: set};
     });
-  };
+  } else {
+    WriteState.setSelected({[key]: label});
+  }
+}
 
-  const handleConfirm = () => {
-    const entry = selected[key];
-    if (multi && entry instanceof Set) {
-      const labels = [...entry];
-      if (labels.length === 0) return;
-      onConfirm({[key]: labels.join(", ")});
-    } else if (typeof entry === "string") {
-      onConfirm({[key]: entry});
-    }
-  };
+function handleConfirmAction(
+  selected: Record<string, string | Set<string>>,
+  key: string,
+  multi: boolean,
+  onConfirm: (answers?: Record<string, string>) => void,
+): void {
+  const entry = selected[key];
+  if (multi && entry instanceof Set) {
+    const labels = [...entry];
+    if (labels.length === 0) return;
+    onConfirm({[key]: labels.join(", ")});
+  } else if (typeof entry === "string") {
+    onConfirm({[key]: entry});
+  }
+}
 
-  const isSelected = (label: string) => {
-    const entry = selected[key];
-    if (multi && entry instanceof Set) return entry.has(label);
-    return entry === label;
-  };
+function checkSelected(
+  selected: Record<string, string | Set<string>>,
+  key: string,
+  multi: boolean,
+  label: string,
+): boolean {
+  const entry = selected[key];
+  if (multi && entry instanceof Set) return entry.has(label);
+  return entry === label;
+}
+
+function handleCancel(onCancel: () => void): void {
+  onCancel();
+}
+
+function isDisabled(
+  selected: Record<string, string | Set<string>>,
+  key: string,
+  multi: boolean,
+): boolean {
+  if (multi) {
+    return !(selected[key] instanceof Set && (selected[key] as Set<string>).size > 0);
+  }
+  return !selected[key];
+}
+
+// ─── renderFn functions ───────────────────────────────────────────────
+
+function renderAskQuestionCard(
+  {selected}: { selected: Record<string, string | Set<string>> },
+  {permission, onConfirm, onCancel}: { permission: AskQuestionPermission; onConfirm: (answers?: Record<string, string>) => void; onCancel: () => void },
+  {handleOptionSelect, handleConfirmAction, handleCancel}: {
+    handleOptionSelect: (key: string, label: string, multi: boolean) => void;
+    handleConfirmAction: (selected: Record<string, string | Set<string>>, key: string, multi: boolean, onConfirm: (answers?: Record<string, string>) => void) => void;
+    handleCancel: (onCancel: () => void) => void;
+  },
+): JSX.Element {
+  const question = permission.questions?.[0];
+  if (!question) return <></>;
+
+  const multi = question?.multiSelect ?? false;
+  const header = question.header ?? "请选择";
+  const key = question.header ?? question.question;
 
   return (
     <div className="ask-question-card">
@@ -91,18 +136,18 @@ export function AskQuestionCard({permission, onConfirm, onCancel}: AskQuestionCa
 
       <div className="ask-question-option-group">
         {question.options.map((opt, idx) => {
-          const selectedClass = isSelected(opt.label) ? " ask-question-option-selected" : "";
+          const selectedClass = checkSelected(selected, key, multi, opt.label) ? " ask-question-option-selected" : "";
           return (
             <button
               key={idx}
               type="button"
               className={`ask-question-option${selectedClass}`}
-              onClick={() => (multi ? toggleMulti(opt.label) : toggleSingle(opt.label))}
+              onClick={() => handleOptionSelect(key, opt.label, multi)}
             >
               <span className="ask-question-option-marker">
                 {multi
-                  ? (isSelected(opt.label) ? "☑" : "□")
-                  : (isSelected(opt.label) ? "◉" : "○")}
+                  ? (checkSelected(selected, key, multi, opt.label) ? "☑" : "□")
+                  : (checkSelected(selected, key, multi, opt.label) ? "◉" : "○")}
               </span>
               <span className="ask-question-option-label">{opt.label}</span>
               {opt.description ? (
@@ -114,22 +159,40 @@ export function AskQuestionCard({permission, onConfirm, onCancel}: AskQuestionCa
       </div>
 
       <div className="ask-question-actions">
-        <button type="button" className="ask-question-cancel-button" onClick={onCancel}>
+        <button type="button" className="ask-question-cancel-button" onClick={() => handleCancel(onCancel)}>
           取消
         </button>
         <button
           type="button"
           className="ask-question-confirm-button"
-          onClick={handleConfirm}
-          disabled={
-            multi
-              ? !(selected[key] instanceof Set && (selected[key] as Set<string>).size > 0)
-              : !selected[key]
-          }
+          onClick={() => handleConfirmAction(selected, key, multi, onConfirm)}
+          disabled={isDisabled(selected, key, multi)}
         >
           确认
         </button>
       </div>
     </div>
   );
+}
+
+// ─── View component ───────────────────────────────────────────────────
+
+export function AskQuestionCardView({permission, onConfirm, onCancel}: AskQuestionCardProps) {
+  const question = permission.questions?.[0];
+  const multi = question?.multiSelect ?? false;
+  const key = question?.header ?? question?.question ?? "";
+
+  const [selected, setSelected] = useState<Record<string, string | Set<string>>>(
+    () => initSelected(question, multi, key),
+  );
+
+  // WriteState registrations
+  WriteState.setSelected = setSelected;
+
+  return render({
+    state: {selected},
+    props: {permission, onConfirm, onCancel},
+    fn: renderAskQuestionCard,
+    events: {handleOptionSelect, handleConfirmAction, handleCancel},
+  });
 }

@@ -50,7 +50,7 @@ const sessionUsageIndicatorOptions: Array<{
 
 // ─── AssistantUsageMiniOverlay ─────────────────────────────────────────
 
-export function AssistantUsageMiniOverlay({
+export function AssistantUsageMiniOverlayView({
   bundleId,
   snapshot,
   onClose,
@@ -155,7 +155,7 @@ export function AssistantUsageMiniOverlay({
 
 // ─── SessionUsageDashboard ─────────────────────────────────────────────
 
-export function SessionUsageDashboard({
+function SessionUsageDashboard({
   activeSessionId,
   usageByKey,
 }: SessionUsageDashboardProps) {
@@ -398,3 +398,7 @@ export function SessionUsageDashboard({
     </section>
   );
 }
+
+// ─── Re-exports for external consumers ────────────────────────────────
+
+export {SessionUsageDashboard};

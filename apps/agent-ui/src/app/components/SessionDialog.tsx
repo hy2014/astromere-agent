@@ -17,9 +17,9 @@ import type {
 } from "../types";
 import type {BundleUsageSnapshot} from "../../tauri";
 import type {AgentReplCapabilityItem} from "../../runtime";
-import {PreviewPanel} from "./PreviewPanel";
-import {PromptInputArea} from "./PromptInputArea";
-import {MessagesStream, renderPromptHighlightedText} from "./messages-stream";
+import {PreviewPanelView} from "./PreviewPanel";
+import {PromptInputAreaView} from "./PromptInputArea";
+import {MessagesStreamView, renderPromptHighlightedText} from "./messages-stream";
 import {assistantTurnDetails, compactCountLabel} from "../debug-utils";
 import {formatDebugTime} from "../file-utils";
 // ─── SessionDialog ──────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ export interface SessionDialogProps {
   onCloseAllPreviews: () => void;
 }
 
-export function SessionDialog({
+export function SessionDialogView({
                                 activeSessionTitle,
                                 activeSessionId,
                                 isDebugOpen,
@@ -232,7 +232,7 @@ export function SessionDialog({
             />
           </header>
 
-          <MessagesStream
+          <MessagesStreamView
               streamItems={streamItems}
               activeSessionId={activeSessionId}
               assistantDebugBundles={assistantDebugBundles}
@@ -261,7 +261,7 @@ export function SessionDialog({
               assistantDebugPayload={assistantDebugPayload}
           />
 
-          <PromptInputArea
+          <PromptInputAreaView
               activeProject={!!activeProject}
               activeSessionId={activeSessionId}
               isRunningTurn={isRunningTurn}
@@ -344,7 +344,7 @@ export function SessionDialog({
               <aside className="detail-panel" aria-label="Detail panel">
                 <div className="detail-content-base" style={{ display: showPreview && !showProcess ? undefined : 'none' }}>
                   {(activePreview) && (
-                      <PreviewPanel
+                      <PreviewPanelView
                           activePreview={activePreview}
                           previewTabs={previewTabs}
                           activeProject={activeProject}
