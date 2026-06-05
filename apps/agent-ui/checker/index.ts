@@ -10,6 +10,7 @@ import { Violation, RuleContext } from "./types";
 import { getCodeLine, collectStateVars, collectPropVars } from "./utils";
 import {checkViewLayer} from "./rules/check-view-layer";
 import {checkWriteState} from "./rules/check-write-state";
+import {checkRenderView} from "./rules/check-render-view";
 
 // ...
 export function check(sourceCode: string, fileName: string = "component.tsx"): Violation[] {
@@ -97,6 +98,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
     checkRenderFns(ctx);
     checkViewLayer(ctx, result.viewFn)
     checkWriteState(ctx, result.viewFn);
+    checkRenderView(ctx, result.viewFn);
     violations.sort((a, b) => (a.line || 0) - (b.line || 0));
     return violations.slice(0, 100);
 }

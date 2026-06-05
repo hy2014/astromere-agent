@@ -152,10 +152,11 @@ export function collectPropVars(sourceFile: ts.SourceFile, ctx: RuleContext): {
     // 有参数，必须有对应的 Props 接口
     if (propsInterfaceCount === 0) {
         ctx.addViolation("Props 定义规范", "组件有参数但未定义 interface XxxxProps。")
+        return { propVars, viewFn };
     }
     if (propsInterfaceCount > 1) {
         ctx.addViolation("Props 定义规范", `只能有一个 Props 接口，发现 ${propsInterfaceCount} 个: [${[...propsInterfaces.keys()].join(", ")}]。`)
-
+        return { propVars, viewFn };
     }
 
     // 从 Props 接口收集属性
