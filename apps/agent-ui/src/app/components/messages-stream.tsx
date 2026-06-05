@@ -2,7 +2,7 @@ import {useRef, useEffect} from "react";
 import type {StreamItem, StreamLink} from "../../types";
 import type {AssistantMessageDebugBundle, ProjectFolder,} from "../types";
 import type {BundleUsageSnapshot} from "../../tauri";
-import {AssistantUsageMiniOverlay, SessionUsageDashboard} from "./usage-components";
+import {AssistantUsageMiniOverlayView, SessionUsageDashboard} from "./usage-components";
 import {MessageImagePreviews} from "./image-reference-view";
 import {MarkdownTablePreview, RichMarkdownMessage} from "./preview-components";
 import {
@@ -89,7 +89,7 @@ export interface MessagesStreamProps {
   ) => Record<string, unknown>;
 }
 
-export function MessagesStream({
+export function MessagesStreamView({
   streamItems,
   activeSessionId,
   assistantDebugBundles,
@@ -134,7 +134,7 @@ export function MessagesStream({
       ) : null}
 
       {openAssistantUsageMessageId && activeSessionId ? (
-        <AssistantUsageMiniOverlay
+        <AssistantUsageMiniOverlayView
           bundleId={openAssistantUsageMessageId}
           snapshot={
             streamUsageByBundleKey[

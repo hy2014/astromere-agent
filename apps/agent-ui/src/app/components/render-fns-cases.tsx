@@ -1,9 +1,10 @@
 /* @checkFns user-card */
+import {render} from "../../core/dep";
 
 function renderUserCard(
     { name, avatar }: any,
     { isPremium }: any,
-    events: { onEdit: () => void },
+    { onEdit }: { onEdit: () => void },
 ) {
     return (
         <div className="user-card">
@@ -11,20 +12,25 @@ function renderUserCard(
             <h2>{name}</h2>
             {isPremium && <span>Premium</span>}  {/* 使用 isPremium */}
 
-            <button onClick={events.onEdit}>Edit</button>
+            <button onClick={onEdit}>Edit</button>
         </div>
     );
 }
 
 export function TestView() {
+    const name = "Test";
+    const avatar = "";
+    const isPremium = false;
+    const onEdit = (): void => {};
 
-    return
+    return (
     <div>
     {render({
-        states: {name, avatar},
+        state: {name, avatar},
         props: {isPremium},
         fn: renderUserCard,
         events: {onEdit}
     })}
     </div>
+    );
 }

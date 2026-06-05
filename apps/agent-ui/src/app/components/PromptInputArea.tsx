@@ -1,8 +1,8 @@
 import type {FormEvent} from "react";
 import type {AgentContextUsage, StreamLink, WorkspaceFileReference} from "../../types";
-import {PermissionRequest} from "./PermissionRequest";
-import {AskQuestionCard} from "./AskQuestionCard";
-import {FileReferenceTray} from "./FileReferenceTray";
+import {PermissionRequestView} from "./PermissionRequest";
+import {AskQuestionCardView} from "./AskQuestionCard";
+import {FileReferenceTrayView} from "./FileReferenceTray";
 import {formatFileSize} from "../stream-processor";
 import type {FileMentionState, LocalFileReference, SlashCommandMenuState, SlashRootItem,} from "../types";
 import type {AgentReplCapabilityItem} from "../../runtime";
@@ -94,7 +94,7 @@ interface PromptInputAreaProps {
   onPermissionDeny: () => void;
 }
 
-export function PromptInputArea(props: PromptInputAreaProps) {
+export function PromptInputAreaView(props: PromptInputAreaProps) {
   const {
     activeProject,
     activeSessionId,
@@ -150,20 +150,20 @@ export function PromptInputArea(props: PromptInputAreaProps) {
       <div className="prompt-frame">
         {pendingPermission && activeSessionId === pendingPermission.sessionId ? (
           pendingPermission.isQuestion ? (
-            <AskQuestionCard
+            <AskQuestionCardView
               permission={pendingPermission}
               onConfirm={onPermissionAllow}
               onCancel={onPermissionDeny}
             />
           ) : (
-            <PermissionRequest
+            <PermissionRequestView
               permission={pendingPermission}
               onAllow={() => onPermissionAllow()}
               onDeny={onPermissionDeny}
             />
           )
         ) : null}
-        <FileReferenceTray
+        <FileReferenceTrayView
           fileReferences={fileReferences}
           onOpenPreviewLink={onOpenPreviewLink}
           onRemoveReference={onRemoveFileReference}

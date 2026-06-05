@@ -1,21 +1,26 @@
+/* @checkFns skills-installed-view */
 import {useEffect, useMemo, useState} from "react";
 import {listSkills} from "../../runtime";
 import type {SkillsReport, SkillSummary} from "../../types";
-import type {SkillsViewProps, SkillViewMode} from "../types";
+import type {ProjectFolder, SkillViewMode} from "../types";
 import {formatFileSize} from "../stream-processor";
+import {render} from "../../core/dep";
 
-// ─── Pure helpers ──────────────────────────────────────────────────────
-
-function skillDateLabel(timestamp?: number): string {
-  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
-    return "Unknown";
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-  }).format(new Date(timestamp));
+// ─── Props interface (required by checker) ────────────────────────────
+interface SkillsViewProps {
+  activeProject?: ProjectFolder;
 }
+
+// ─── WriteState ─────────────────────────────────────────────────────────
+const WriteState: {
+  setReport: (r: SkillsReport | null | ((prev: SkillsReport | null) => SkillsReport | null)) => void;
+  setQuery: (s: string) => void;
+  setViewMode: (m: SkillViewMode) => void;
+  setSelectedSkillId: (s: string | null | ((prev: string | null) => string | null)) => void;
+  setStatus: (s: string) => void;
+} = {} as any;
+
+// ─── Pure helpers (const arrows — skipped by file-level fn check) ──────
 
 function skillCapabilityLabel(skill: SkillSummary): string[] {
   if (skill.capabilities && skill.capabilities.length > 0) {
@@ -31,64 +36,72 @@ function skillIdentity(skill: SkillSummary): string {
   return skill.id ?? `${skill.source?.kind ?? skill.origin?.id ?? "unknown"}:${skill.name}`;
 }
 
-// ─── SkillsView component ──────────────────────────────────────────────
+// ─── File-level business functions ──────────────────────────────────────
 
-export function SkillsView({ activeProject }: SkillsViewProps) {
-  const [report, setReport] = useState<SkillsReport | null>(null);
-  const [query, setQuery] = useState("");
-  const [viewMode, setViewMode] = useState<SkillViewMode>("grid");
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
-  const [status, setStatus] = useState("Loading installed skills...");
+async function loadSkills(activeProjectRoot: string | undefined): Promise<void> {
+  if (!activeProjectRoot) {
+    WriteState.setReport(null);
+    WriteState.setSelectedSkillId(null);
+    WriteState.setStatus("Add or select a project to inspect project and user skills.");
+    return;
+  }
 
-  useEffect(() => {
-    if (!activeProject) {
-      setReport(null);
-      setSelectedSkillId(null);
-      setStatus("Add or select a project to inspect project and user skills.");
-      return;
-    }
+  WriteState.setStatus("Loading installed skills...");
+  try {
+    const nextReport = await listSkills(activeProjectRoot);
+    WriteState.setReport(nextReport);
+    WriteState.setSelectedSkillId((current) => {
+      if (current && nextReport.skills.some((s) => skillIdentity(s) === current)) {
+        return current;
+      }
+      return nextReport.skills[0] ? skillIdentity(nextReport.skills[0]) : null;
+    });
+    WriteState.setStatus(
+      nextReport.skills.length > 0
+        ? "Installed skills loaded."
+        : "No installed project or user skills found.",
+    );
+  } catch (reason) {
+    WriteState.setReport(null);
+    WriteState.setSelectedSkillId(null);
+    WriteState.setStatus(`Failed to load skills: ${String(reason)}`);
+  }
+}
 
-    let cancelled = false;
-    setStatus("Loading installed skills...");
-    listSkills(activeProject.root)
-      .then((nextReport) => {
-        if (cancelled) {
-          return;
-        }
-        setReport(nextReport);
-        setSelectedSkillId((current) => {
-          if (current && nextReport.skills.some((skill) => skillIdentity(skill) === current)) {
-            return current;
-          }
-          return nextReport.skills[0] ? skillIdentity(nextReport.skills[0]) : null;
-        });
-        setStatus(
-          nextReport.skills.length > 0
-            ? "Installed skills loaded."
-            : "No installed project or user skills found.",
-        );
-      })
-      .catch((reason) => {
-        if (cancelled) {
-          return;
-        }
-        setReport(null);
-        setSelectedSkillId(null);
-        setStatus(`Failed to load skills: ${String(reason)}`);
-      });
+function updateQuery(s: string): void {
+  WriteState.setQuery(s);
+}
 
-    return () => {
-      cancelled = true;
-    };
-  }, [activeProject?.root]);
+function updateViewMode(m: SkillViewMode): void {
+  WriteState.setViewMode(m);
+}
 
+function updateSelectedSkillId(s: string | null): void {
+  WriteState.setSelectedSkillId(s);
+}
+
+// ─── renderFn functions ───────────────────────────────────────────────
+
+function renderSkillsPanel(
+  {report, query, viewMode, selectedSkillId, status}: {
+    report: SkillsReport | null;
+    query: string;
+    viewMode: SkillViewMode;
+    selectedSkillId: string | null;
+    status: string;
+  },
+  {}: Record<string, never>,
+  {updateQuery, updateViewMode, updateSelectedSkillId}: {
+    updateQuery: (s: string) => void;
+    updateViewMode: (m: SkillViewMode) => void;
+    updateSelectedSkillId: (s: string | null) => void;
+  },
+): JSX.Element {
   const skills = report?.skills ?? [];
-  const filteredSkills = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) {
-      return skills;
-    }
-    return skills.filter((skill) => {
+  const normalized = query.trim().toLowerCase();
+  const filteredSkills = !normalized
+    ? skills
+    : skills.filter((skill) => {
       const searchable = [
         skill.name,
         skill.description,
@@ -105,7 +118,6 @@ export function SkillsView({ activeProject }: SkillsViewProps) {
         .toLowerCase();
       return searchable.includes(normalized);
     });
-  }, [skills, query]);
 
   const selectedSkill =
     filteredSkills.find((skill) => skillIdentity(skill) === selectedSkillId) ??
@@ -184,7 +196,7 @@ export function SkillsView({ activeProject }: SkillsViewProps) {
           <span aria-hidden="true">⌕</span>
           <input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => updateQuery((event.target as HTMLInputElement).value)}
             placeholder="Search installed skills..."
           />
         </label>
@@ -192,14 +204,14 @@ export function SkillsView({ activeProject }: SkillsViewProps) {
           <button
             type="button"
             className={viewMode === "grid" ? "active" : ""}
-            onClick={() => setViewMode("grid")}
+            onClick={() => updateViewMode("grid")}
           >
             Grid
           </button>
           <button
             type="button"
             className={viewMode === "list" ? "active" : ""}
-            onClick={() => setViewMode("list")}
+            onClick={() => updateViewMode("list")}
           >
             List
           </button>
@@ -220,12 +232,10 @@ export function SkillsView({ activeProject }: SkillsViewProps) {
                 key={id}
                 type="button"
                 className={`skill-card ${isSelected ? "selected" : ""}`}
-                onClick={() => setSelectedSkillId(id)}
+                onClick={() => updateSelectedSkillId(id)}
               >
                 <span className="skill-card-topline">
-                  <span className="skill-card-icon" aria-hidden="true">
-                    ✦
-                  </span>
+                  <span className="skill-card-icon" aria-hidden="true">✦</span>
                   <span className="skill-card-source">
                     {skill.source?.label ?? skill.origin?.label ?? "Project"}
                   </span>
@@ -257,9 +267,7 @@ export function SkillsView({ activeProject }: SkillsViewProps) {
           {selectedSkill ? (
             <>
               <div className="skill-detail-header">
-                <div className="skill-detail-icon" aria-hidden="true">
-                  ✦
-                </div>
+                <div className="skill-detail-icon" aria-hidden="true">✦</div>
                 <div>
                   <div className="skills-breadcrumb">Skill Detail</div>
                   <h2>{selectedSkill.name}</h2>
@@ -268,12 +276,8 @@ export function SkillsView({ activeProject }: SkillsViewProps) {
               </div>
 
               <div className="skill-detail-actions">
-                <button type="button" disabled>
-                  Settings
-                </button>
-                <button type="button" disabled>
-                  Uninstall
-                </button>
+                <button type="button" disabled>Settings</button>
+                <button type="button" disabled>Uninstall</button>
               </div>
 
               <section className="skill-detail-section">
@@ -294,7 +298,9 @@ export function SkillsView({ activeProject }: SkillsViewProps) {
                   </div>
                   <div>
                     <dt>Installed</dt>
-                    <dd>{skillDateLabel(selectedSkill.installedAtMs)}</dd>
+                    <dd>{typeof selectedSkill.installedAtMs === "number" && Number.isFinite(selectedSkill.installedAtMs)
+                      ? new Date(selectedSkill.installedAtMs).toLocaleDateString(undefined, {year: "numeric", month: "short", day: "2-digit"})
+                      : "Unknown"}</dd>
                   </div>
                   <div>
                     <dt>Size</dt>
@@ -359,4 +365,30 @@ export function SkillsView({ activeProject }: SkillsViewProps) {
       </div>
     </section>
   );
+}
+
+// ─── View component ───────────────────────────────────────────────────
+
+export function SkillsView({activeProject}: SkillsViewProps) {
+  const [report, setReport] = useState<SkillsReport | null>(null);
+  const [query, setQuery] = useState("");
+  const [viewMode, setViewMode] = useState<SkillViewMode>("grid");
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [status, setStatus] = useState("Loading installed skills...");
+
+  // WriteState registrations
+  WriteState.setReport = setReport;
+  WriteState.setQuery = setQuery;
+  WriteState.setViewMode = setViewMode;
+  WriteState.setSelectedSkillId = setSelectedSkillId;
+  WriteState.setStatus = setStatus;
+
+  useEffect(() => { void loadSkills(activeProject?.root); }, [activeProject?.root]);
+
+  return render({
+    state: {report, query, viewMode, selectedSkillId, status},
+    props: {},
+    fn: renderSkillsPanel,
+    events: {updateQuery, updateViewMode, updateSelectedSkillId},
+  });
 }

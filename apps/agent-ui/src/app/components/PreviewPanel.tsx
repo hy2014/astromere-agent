@@ -1,6 +1,6 @@
 import type {StreamLink} from "../../types";
 import type {PreviewTab, ProjectFolder} from "../types";
-import {CodePreview, CsvDataPreview, HtmlRichPreview, isHtmlFilePath, MarkdownPreview} from "./preview-components";
+import {CodePreviewView, CsvDataPreview, HtmlRichPreview, isHtmlFilePath, MarkdownPreview} from "./preview-components";
 import {ReferencePanel} from "./image-reference-view";
 import {isCsvFilePath, isMarkdownFile} from "../file-utils";
 
@@ -14,7 +14,7 @@ interface PreviewPanelProps {
   onOpenPreviewLink: (link: StreamLink) => void;
 }
 
-export function PreviewPanel({
+export function PreviewPanelView({
   activePreview,
   previewTabs,
   activeProject,
@@ -93,7 +93,7 @@ export function PreviewPanel({
             ) : isMarkdownFile(activePreview.file.path) ? (
               <MarkdownPreview content={activePreview.file.content} />
             ) : (
-              <CodePreview content={activePreview.file.content} />
+              <CodePreviewView content={activePreview.file.content} />
             )}
           </div>
           <div className="section-heading diff-heading">

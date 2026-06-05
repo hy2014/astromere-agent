@@ -7,7 +7,7 @@ import {INLINE_IMAGE_PREVIEW_BYTES} from "../constants";
 
 // ─── MessageImagePreviews ──────────────────────────────────────────────
 
-export function MessageImagePreviews({
+function MessageImagePreviews({
   root,
   links,
   onOpen,
@@ -32,7 +32,7 @@ export function MessageImagePreviews({
 
 // ─── MessageImagePreviewItem ───────────────────────────────────────────
 
-export function MessageImagePreviewItem({
+function MessageImagePreviewItem({
   root,
   link,
   onOpen,
@@ -92,7 +92,7 @@ export function MessageImagePreviewItem({
 
 // ─── InlineImagePreview ────────────────────────────────────────────────
 
-export function InlineImagePreview({
+function InlineImagePreview({
   link,
   preview,
   onOpen,
@@ -119,7 +119,7 @@ export function InlineImagePreview({
 
 // ─── ImageArtifactCard ─────────────────────────────────────────────────
 
-export function ImageArtifactCard({
+function ImageArtifactCard({
   link,
   metadata,
   error,
@@ -176,9 +176,9 @@ export function ImageArtifactCard({
 
 // ─── ReferencePanel ────────────────────────────────────────────────────
 
-export function ReferencePanel({ link, root }: { link: StreamLink; root: string }) {
+function ReferencePanel({ link, root }: { link: StreamLink; root: string }) {
   if (link.kind === "image") {
-    return <ImageReferencePanel link={link} root={root} />;
+    return <ImageReferencePanelView link={link} root={root} />;
   }
 
   const label = link.kind === "pdf" ? "PDF Preview(todo)" : "Preview(todo)";
@@ -202,7 +202,7 @@ export function ReferencePanel({ link, root }: { link: StreamLink; root: string 
 
 // ─── ImageReferencePanel ───────────────────────────────────────────────
 
-export function ImageReferencePanel({ link, root }: { link: StreamLink; root: string }) {
+export function ImageReferencePanelView({ link, root }: { link: StreamLink; root: string }) {
   const [preview, setPreview] = useState<LocalImagePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -283,3 +283,7 @@ export function ImageReferencePanel({ link, root }: { link: StreamLink; root: st
     </section>
   );
 }
+
+// ─── Re-exports for external consumers ────────────────────────────────
+
+export {MessageImagePreviews, ReferencePanel};

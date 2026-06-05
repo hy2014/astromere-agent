@@ -1,94 +1,150 @@
+/* @checkFns models-settings-content */
 import {useEffect, useState} from "react";
 import type {ModelEndpointConfig, ModelSettings} from "../../types";
 import {loadDeepseekPricing} from "../../tauri";
-import {loadModelSettings, saveModelSettings, testModelConnection,} from "../../runtime";
+import {loadModelSettings, saveModelSettings, testModelConnection} from "../../runtime";
+import {render} from "../../core/dep";
 
-function DeepseekPricingBody({ models }: {
-  models: NonNullable<ModelSettings["deepseekPricing"]>["models"];
-}) {
-  return (
-    <tbody>
-      {models.flatMap((model) =>
-        model.items.map((item) => (
-          <tr key={`${model.model}:${item.item}`}>
-            <td>{model.model}</td>
-            <td>{item.item}</td>
-            <td>¥{item.pricePerMTokens}</td>
-          </tr>
-        )),
-      )}
-    </tbody>
-  );
+// ─── WriteState ─────────────────────────────────────────────────────────
+const WriteState: {
+  setSavedSettings: (s: ModelSettings | null) => void;
+  setDraftSettings: (s: ModelSettings | null | ((prev: ModelSettings | null) => ModelSettings | null)) => void;
+  setSelectedModelId: (s: string) => void;
+  setStatus: (s: string) => void;
+  setShowApiKey: (v: boolean | ((prev: boolean) => boolean)) => void;
+  setIsSaving: (v: boolean) => void;
+  setIsTesting: (v: boolean) => void;
+} = {} as any;
+
+// ─── File-level business functions ──────────────────────────────────────
+
+async function loadSettings(getIsCancelled: () => boolean): Promise<void> {
+  WriteState.setStatus("Loading model settings...");
+  try {
+    const settings = await loadModelSettings();
+    if (getIsCancelled()) return;
+    let finalSettings = settings;
+    try {
+      const pricing = await loadDeepseekPricing();
+      if (pricing) {
+        finalSettings = {...settings, deepseekPricing: pricing};
+      }
+    } catch {}
+    if (getIsCancelled()) return;
+    WriteState.setSavedSettings(finalSettings);
+    WriteState.setDraftSettings(finalSettings);
+    WriteState.setSelectedModelId(finalSettings.activeModelId);
+    WriteState.setStatus("Model settings loaded.");
+  } catch (reason) {
+    if (!getIsCancelled()) {
+      WriteState.setStatus(`Failed to load model settings: ${String(reason)}`);
+    }
+  }
 }
 
-function ModelCards({ models, activeModelId, onSelect }: {
-  models: ModelEndpointConfig[];
-  activeModelId: string | undefined;
-  onSelect: (id: string) => void;
-}) {
-  return (
-    <div className="model-grid">
-      {models.map((model) => {
-        const isActive = activeModelId === model.id;
-        return (
-          <button
-            key={model.id}
-            className={`model-card ${isActive ? "active" : "muted"}`}
-            type="button"
-            onClick={() => onSelect(model.id)}
-          >
-            <div className="model-card-top">
-              <span className="model-icon">{model.provider}</span>
-              {isActive ? (
-                <span className="model-badge">Active</span>
-              ) : null}
-            </div>
-            <strong>{model.name}</strong>
-            <small>{model.model}</small>
-          </button>
-        );
-      })}
-    </div>
+const loadSettingsWithCleanup = (): (() => void) => {
+  let cancelled = false;
+  void loadSettings(() => cancelled);
+  return () => { cancelled = true; };
+};
+
+function selectModel(id: string): void {
+  WriteState.setSelectedModelId(id);
+  WriteState.setDraftSettings((settings) =>
+    settings ? {...settings, activeModelId: id} : settings,
   );
+  WriteState.setStatus("Active model changed. Save changes to apply it to future turns.");
 }
 
-export function ModelsSettingsPanelView() {
-  const [savedSettings, setSavedSettings] = useState<ModelSettings | null>(null);
-  const [draftSettings, setDraftSettings] = useState<ModelSettings | null>(null);
-  const [selectedModelId, setSelectedModelId] = useState<string>("deepseek-v3");
-  const [status, setStatus] = useState<string>("Loading model settings...");
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    loadModelSettings()
-      .then(async (settings) => {
-        if (cancelled) {
-          return;
-        }
-        try {
-          const pricing = await loadDeepseekPricing();
-          if (pricing) {
-            settings = { ...settings, deepseekPricing: pricing };
-          }
-        } catch {}
-        setSavedSettings(settings);
-        setDraftSettings(settings);
-        setSelectedModelId(settings.activeModelId);
-        setStatus("Model settings loaded.");
-      })
-      .catch((reason) => {
-        if (!cancelled) {
-          setStatus(`Failed to load model settings: ${String(reason)}`);
-        }
-      });
-    return () => {
-      cancelled = true;
+function updateSelectedModel(
+  updater: (model: ModelEndpointConfig) => ModelEndpointConfig,
+): void {
+  WriteState.setDraftSettings((settings) => {
+    if (!settings) return settings;
+    const selectedModelId = settings.activeModelId;
+    return {
+      ...settings,
+      models: settings.models.map((model) =>
+        model.id === selectedModelId ? updater(model) : model,
+      ),
     };
-  }, []);
+  });
+}
 
+async function handleSaveSettings(
+  draftSettings: ModelSettings | null,
+  isSaving: boolean,
+): Promise<void> {
+  if (!draftSettings || isSaving) return;
+  WriteState.setIsSaving(true);
+  WriteState.setStatus("Saving model settings...");
+  try {
+    const saved = await saveModelSettings(draftSettings);
+    WriteState.setSavedSettings(saved);
+    WriteState.setDraftSettings(saved);
+    WriteState.setSelectedModelId(saved.activeModelId);
+    WriteState.setStatus("Saved. Future agent turns will use the active model configuration.");
+  } catch (reason) {
+    WriteState.setStatus(`Save failed: ${String(reason)}`);
+  } finally {
+    WriteState.setIsSaving(false);
+  }
+}
+
+function discardSettings(savedSettings: ModelSettings | null): void {
+  if (!savedSettings) return;
+  WriteState.setDraftSettings(savedSettings);
+  WriteState.setSelectedModelId(savedSettings.activeModelId);
+  WriteState.setStatus("Discarded unsaved settings.");
+}
+
+async function handleTestConnection(
+  draftSettings: ModelSettings | null,
+  isTesting: boolean,
+): Promise<void> {
+  if (!draftSettings || isTesting) return;
+  WriteState.setIsTesting(true);
+  WriteState.setStatus("Testing active model connection...");
+  try {
+    const result = await testModelConnection(draftSettings);
+    WriteState.setStatus(
+      result.ok
+        ? `${result.message} (${result.model})`
+        : `${result.message}${result.stderr ? `: ${result.stderr}` : ""}`,
+    );
+  } catch (reason) {
+    WriteState.setStatus(`Connection test failed: ${String(reason)}`);
+  } finally {
+    WriteState.setIsTesting(false);
+  }
+}
+
+function toggleShowApiKey(): void {
+  WriteState.setShowApiKey((value) => !value);
+}
+
+// ─── renderFn functions ───────────────────────────────────────────────
+
+function renderModelsSettingsPanel(
+  {savedSettings, draftSettings, selectedModelId, showApiKey, isSaving, isTesting, status}: {
+    savedSettings: ModelSettings | null;
+    draftSettings: ModelSettings | null;
+    selectedModelId: string;
+    showApiKey: boolean;
+    isSaving: boolean;
+    isTesting: boolean;
+    status: string;
+  },
+  {}: Record<string, never>,
+  {selectModel, updateSelectedModel, handleSaveSettings, discardSettings, handleTestConnection, toggleShowApiKey}: {
+    selectModel: (id: string) => void;
+    updateSelectedModel: (updater: (model: ModelEndpointConfig) => ModelEndpointConfig) => void;
+    handleSaveSettings: (draftSettings: ModelSettings | null, isSaving: boolean) => Promise<void>;
+    discardSettings: (savedSettings: ModelSettings | null) => void;
+    handleTestConnection: (draftSettings: ModelSettings | null, isTesting: boolean) => Promise<void>;
+    toggleShowApiKey: () => void;
+  },
+): JSX.Element {
   const activeModel =
     draftSettings?.models.find((model) => model.id === selectedModelId) ??
     draftSettings?.models[0] ??
@@ -99,82 +155,8 @@ export function ModelsSettingsPanelView() {
     JSON.stringify(savedSettings) !== JSON.stringify(draftSettings),
   );
 
-  function selectModel(id: string) {
-    setSelectedModelId(id);
-    setDraftSettings((settings) =>
-      settings ? { ...settings, activeModelId: id } : settings,
-    );
-    setStatus("Active model changed. Save changes to apply it to future turns.");
-  }
-
-  function updateSelectedModel(
-    updater: (model: ModelEndpointConfig) => ModelEndpointConfig,
-  ) {
-    setDraftSettings((settings) => {
-      if (!settings) {
-        return settings;
-      }
-      return {
-        ...settings,
-        models: settings.models.map((model) =>
-          model.id === selectedModelId ? updater(model) : model,
-        ),
-      };
-    });
-  }
-
-  async function handleSaveSettings() {
-    if (!draftSettings || isSaving) {
-      return;
-    }
-    setIsSaving(true);
-    setStatus("Saving model settings...");
-    try {
-      const saved = await saveModelSettings(draftSettings);
-      setSavedSettings(saved);
-      setDraftSettings(saved);
-      setSelectedModelId(saved.activeModelId);
-      setStatus("Saved. Future agent turns will use the active model configuration.");
-    } catch (reason) {
-      setStatus(`Save failed: ${String(reason)}`);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  function handleDiscardSettings() {
-    if (!savedSettings) {
-      return;
-    }
-    setDraftSettings(savedSettings);
-    setSelectedModelId(savedSettings.activeModelId);
-    setStatus("Discarded unsaved settings.");
-  }
-
-  async function handleTestConnection() {
-    if (!draftSettings || isTesting) {
-      return;
-    }
-    setIsTesting(true);
-    setStatus("Testing active model connection...");
-    try {
-      const result = await testModelConnection(draftSettings);
-      setStatus(
-        result.ok
-          ? `${result.message} (${result.model})`
-          : `${result.message}${result.stderr ? `: ${result.stderr}` : ""}`,
-      );
-    } catch (reason) {
-      setStatus(`Connection test failed: ${String(reason)}`);
-    } finally {
-      setIsTesting(false);
-    }
-  }
-
-  const modelCards = draftSettings?.models ?? [];
-
   return (
-    <>
+    <div className="models-settings-content">
       <header className="settings-heading">
         <h2>Models configuration</h2>
         <p>
@@ -183,11 +165,26 @@ export function ModelsSettingsPanelView() {
         </p>
       </header>
 
-      <ModelCards
-        models={modelCards}
-        activeModelId={draftSettings?.activeModelId}
-        onSelect={selectModel}
-      />
+      <div className="model-grid">
+        {draftSettings?.models.map((model) => {
+          const isActive = selectedModelId === model.id;
+          return (
+            <button
+              key={model.id}
+              className={`model-card ${isActive ? "active" : "muted"}`}
+              type="button"
+              onClick={() => selectModel(model.id)}
+            >
+              <div className="model-card-top">
+                <span className="model-icon">{model.provider}</span>
+                {isActive ? <span className="model-badge">Active</span> : null}
+              </div>
+              <strong>{model.name}</strong>
+              <small>{model.model}</small>
+            </button>
+          );
+        })}
+      </div>
 
       <section className="settings-card">
         <header className="settings-card-header">
@@ -246,7 +243,7 @@ export function ModelsSettingsPanelView() {
                   onChange={(event) =>
                     updateSelectedModel((model) => ({
                       ...model,
-                      baseUrl: event.target.value,
+                      baseUrl: (event.target as HTMLInputElement).value,
                     }))
                   }
                 />
@@ -261,14 +258,14 @@ export function ModelsSettingsPanelView() {
                     onChange={(event) =>
                       updateSelectedModel((model) => ({
                         ...model,
-                        apiKey: event.target.value,
+                        apiKey: (event.target as HTMLInputElement).value,
                       }))
                     }
                   />
                   <button
                     type="button"
                     aria-label="Show API key"
-                    onClick={() => setShowApiKey((value) => !value)}
+                    onClick={() => toggleShowApiKey()}
                   >
                     {showApiKey ? "hide" : "show"}
                   </button>
@@ -283,7 +280,7 @@ export function ModelsSettingsPanelView() {
                   onChange={(event) =>
                     updateSelectedModel((model) => ({
                       ...model,
-                      organizationId: event.target.value || null,
+                      organizationId: (event.target as HTMLInputElement).value || null,
                     }))
                   }
                 />
@@ -312,7 +309,7 @@ export function ModelsSettingsPanelView() {
                         ...model,
                         maxTokens: Math.max(
                           1,
-                          Number(event.target.value) || 1,
+                          Number((event.target as HTMLInputElement).value) || 1,
                         ),
                       }))
                     }
@@ -332,7 +329,7 @@ export function ModelsSettingsPanelView() {
                   onChange={(event) =>
                     updateSelectedModel((model) => ({
                       ...model,
-                      temperature: Number(event.target.value),
+                      temperature: Number((event.target as HTMLInputElement).value),
                     }))
                   }
                 />
@@ -366,7 +363,17 @@ export function ModelsSettingsPanelView() {
                       <th>RMB / 1M tokens</th>
                     </tr>
                   </thead>
-                  <DeepseekPricingBody models={draftSettings!.deepseekPricing!.models} />
+                  <tbody>
+                    {(draftSettings!.deepseekPricing!.models).flatMap((model) =>
+                      model.items.map((item) => (
+                        <tr key={`${model.model}:${item.item}`}>
+                          <td>{model.model}</td>
+                          <td>{item.item}</td>
+                          <td>¥{item.pricePerMTokens}</td>
+                        </tr>
+                      )),
+                    )}
+                  </tbody>
                 </table>
               ) : (
                 <div className="deepseek-pricing-empty">
@@ -381,7 +388,7 @@ export function ModelsSettingsPanelView() {
           <button
             className="test-button"
             type="button"
-            onClick={handleTestConnection}
+            onClick={() => handleTestConnection(draftSettings, isTesting)}
             disabled={!activeModel || isTesting}
           >
             {isTesting ? "Testing..." : "Test Connection"}
@@ -390,7 +397,7 @@ export function ModelsSettingsPanelView() {
             <button
               className="discard-button"
               type="button"
-              onClick={handleDiscardSettings}
+              onClick={() => discardSettings(savedSettings)}
               disabled={!hasUnsavedChanges || isSaving}
             >
               Discard
@@ -398,7 +405,7 @@ export function ModelsSettingsPanelView() {
             <button
               className="save-button"
               type="button"
-              onClick={handleSaveSettings}
+              onClick={() => handleSaveSettings(draftSettings, isSaving)}
               disabled={!hasUnsavedChanges || isSaving}
             >
               {isSaving ? "Saving..." : "Save Changes"}
@@ -417,6 +424,36 @@ export function ModelsSettingsPanelView() {
         </div>
         <button type="button">Read Docs -&gt;</button>
       </section>
-    </>
+    </div>
   );
+}
+
+// ─── View component ───────────────────────────────────────────────────
+
+export function ModelsSettingsPanelView() {
+  const [savedSettings, setSavedSettings] = useState<ModelSettings | null>(null);
+  const [draftSettings, setDraftSettings] = useState<ModelSettings | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<string>("deepseek-v3");
+  const [status, setStatus] = useState<string>("Loading model settings...");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+
+  // WriteState registrations
+  WriteState.setSavedSettings = setSavedSettings;
+  WriteState.setDraftSettings = setDraftSettings;
+  WriteState.setSelectedModelId = setSelectedModelId;
+  WriteState.setStatus = setStatus;
+  WriteState.setShowApiKey = setShowApiKey;
+  WriteState.setIsSaving = setIsSaving;
+  WriteState.setIsTesting = setIsTesting;
+
+  useEffect(() => loadSettingsWithCleanup(), []);
+
+  return render({
+    state: {savedSettings, draftSettings, selectedModelId, showApiKey, isSaving, isTesting, status},
+    props: {},
+    fn: renderModelsSettingsPanel,
+    events: {selectModel, updateSelectedModel, handleSaveSettings, discardSettings, handleTestConnection, toggleShowApiKey},
+  });
 }

@@ -2,7 +2,7 @@ import {useRef, useState} from "react";
 import type {RemoteProfile} from "../../runtime";
 import {listProjectEntries} from "../../runtime";
 import type {ProjectFolder, ProjectSession} from "../types";
-import {SessionList} from "./session";
+import {SessionListView} from "./SessionList";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ export interface WorkspaceTreeProps {
 
 // ─── WorkspaceTree ──────────────────────────────────────────────────────────
 
-export function WorkspaceTree({
+export function WorkspaceTreeView({
   projects,
   activeSessionId,
   activeRemoteProfile,
@@ -223,7 +223,7 @@ export function WorkspaceTree({
                   </span>
                 </button>
                 {isExpanded ? (
-                  <SessionList
+                  <SessionListView
                     project={folder}
                     activeSessionId={activeSessionId}
                     onSelectSession={onSelectSession}
