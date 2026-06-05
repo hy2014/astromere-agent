@@ -3,7 +3,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { Project, Node } from "ts-morph";
-import { buildCodeGraph, collectStateAndProps, extractIPCMethods, extractCallsFromNode, getBodyNode, detectWriteStateFields } from "./parser";
+import { buildCodeGraph, collectStateAndProps, extractIPCMethods, extractCallsFromNode, getBodyNode, detectWriteStateFields, extractRenderViewTargets } from "./parser";
 import type { CodeGraph, ViewNode, FnDetail } from "./types";
 
 const project = new Project({
@@ -95,11 +95,13 @@ for (const filePath of files.ts) {
             if (name.startsWith("render")) return;
 
             const calls = extractCallsFromNode(body, states, ipcMethods, writeStateMap);
+            const renderViewTargets = extractRenderViewTargets(body);
             allFns.push({
                 id: `${filePath}:${name}`,
                 writes: calls.filter(c => c.type === "write").map(c => c.target!),
                 ipcs: calls.filter(c => c.type === "ipc").map(c => `ipc:${c.text}`),
                 fns: calls.filter(c => c.type === "call").map(c => c.text),
+                views: renderViewTargets.map(t => `${filePath}:${t}`),
             });
         });
     } catch (e: any) {

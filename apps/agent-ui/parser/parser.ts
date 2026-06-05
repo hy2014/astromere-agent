@@ -189,6 +189,7 @@ function classifyCall(
     if (isIgnoreCall(node.getText())) return null;
     if (callText === "useState" || callText === "useEffect" || callText === "import" ||
         callText === "render" || callText.endsWith(".render") ||
+        callText === "renderView" ||
         callText === "useMemo" || callText === "useCallback") return null;
 
     // IPC 调用
@@ -539,6 +540,54 @@ function extractRenderCalls(fnNode: Node): RenderCallSite[] {
     return sites;
 }
 
+// ========== renderView 提取 ==========
+
+/**
+ * 从函数/渲染函数体中找出所有 renderView({view: Xxx, ...}) 调用，
+ * 提取目标 View 的组件名。
+ */
+function extractRenderViewTargets(node: Node): string[] {
+    const targets: string[] = [];
+
+    // 检查 node 本身是不是 renderView 调用（处理箭头表达式体）
+    if (Node.isCallExpression(node)) {
+        const callee = node.getExpression();
+        if (Node.isIdentifier(callee) && callee.getText() === "renderView") {
+            const viewName = extractRenderViewViewName(node);
+            if (viewName) targets.push(viewName);
+        }
+    }
+
+    // 检查所有子节点中的 renderView 调用
+    node.forEachDescendant((descendant) => {
+        if (!Node.isCallExpression(descendant)) return;
+        const callee = descendant.getExpression();
+        if (!Node.isIdentifier(callee)) return;
+        if (callee.getText() !== "renderView") return;
+        const viewName = extractRenderViewViewName(descendant);
+        if (viewName) targets.push(viewName);
+    });
+
+    return [...new Set(targets)];
+}
+
+/** 从 renderView({fn/view: Xxx, ...}) 中提取 View 组件名 */
+function extractRenderViewViewName(callExpr: Node): string | null {
+    const firstArg = callExpr.getArguments()[0];
+    if (!firstArg || !Node.isObjectLiteralExpression(firstArg)) return null;
+
+    for (const prop of firstArg.getProperties()) {
+        if (!Node.isPropertyAssignment(prop)) continue;
+        const propName = prop.getName();
+        if (propName !== "view" && propName !== "fn") continue;
+        const init = prop.getInitializer();
+        if (init && Node.isIdentifier(init)) {
+            return init.getText();
+        }
+    }
+    return null;
+}
+
 // ========== 查找 View 组件名 ==========
 
 function findViewName(sourceFile: ReturnType<typeof project.getSourceFile>): string {
@@ -589,21 +638,25 @@ function buildFnDetails(
         }
 
         if (!name || !body) return;
-        if (name.startsWith("render") && renderFnSet.has(name)) return; // 跳过 renderFn
         if (name === viewName) return;  // 跳过 View 组件
         if (name === "WriteState" || name === "render" || name.startsWith("_latest")) return;
+        // renderFn 也生成 FnDetail（用于追踪其内部函数调用），不要跳过
 
         const calls = extractCallsFromNode(body, states, ipcMethods, writeStateMap);
         // 去重 + 排序
         const writes = [...new Set(calls.filter(c => c.type === "write").map(c => c.target!))].sort();
         const ipcs = [...new Set(calls.filter(c => c.type === "ipc").map(c => `ipc:${c.text}`))].sort();
         const funcCalls = [...new Set(calls.filter(c => c.type === "call").map(c => c.text))].sort();
+        // renderView 调用 → 目标 View 名 → ViewNode ID
+        const renderViewTargets = extractRenderViewTargets(body);
+        const views = renderViewTargets.map(t => `${filePath}:${t}`);
 
         fns.push({
             id: `${filePath}:${name}`,
             writes,
             ipcs,
             fns: funcCalls,
+            views,
         });
     });
 
@@ -878,13 +931,19 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
             }
         }
 
+        // 提取 renderView 调用的目标 View 名
+        const renderViewTargets = extractRenderViewTargets(info.fnNode);
+        const renderViewViewIds = renderViewTargets.map(t => `${fileSource}:${t}`);
+
         return {
             id: `${fileSource}:${name}`,
+            fnId: `${fileSource}:${name}`,
             states: [...resolvedStates].sort(),
             props: [...info.propNames],
             exts: [...info.extFields],
             events: info.bindings,
             children,
+            renderViews: renderViewViewIds,
         };
     }
 
@@ -918,11 +977,12 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
     }
 
     // 6. 构建 ViewNode
+    const viewId = `${fileSource}:${viewName}`;
     const view: ViewNode = {
-        id: `${fileSource}:${viewName}`,
+        id: viewId,
         states: states.map(s => s.name),
         props: Object.fromEntries(
-            propInfos.map(p => [p.name, { type: "state" as const, viewId: view.id, sourceName: p.name }])
+            propInfos.map(p => [p.name, { type: "state" as const, viewId, sourceName: p.name }])
         ),
         useEffect,
         children: roots,
