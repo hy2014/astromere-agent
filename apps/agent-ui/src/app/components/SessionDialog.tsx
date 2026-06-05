@@ -115,7 +115,8 @@ export interface SessionDialogProps {
   onChatModelChange: (model: string) => void;
   contextUsageError: string | null;
   activeContextUsage: AgentContextUsage | null;
-  contextUsageLabel: (usage: AgentContextUsage | null | undefined) => string;
+  contextUsageLabel: (usage: AgentContextUsage | null | undefined, isCompacting?: boolean) => string;
+  isCompacting: boolean;
 
   // PreviewPanel props
   previewTabs: PreviewTab[];
@@ -193,6 +194,7 @@ export function SessionDialog({
                                 contextUsageError,
                                 activeContextUsage,
                                 contextUsageLabel,
+                                isCompacting,
                                 previewTabs,
                                 activePreview,
                                 onSetActivePreviewId,
@@ -274,6 +276,7 @@ export function SessionDialog({
               contextUsageError={contextUsageError}
               activeContextUsage={activeContextUsage}
               contextUsageLabel={contextUsageLabel}
+              isCompacting={isCompacting}
               prompt={prompt}
               onPromptChange={onPromptChange}
               onPromptKeyDown={onPromptKeyDown}

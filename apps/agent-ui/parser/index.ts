@@ -2,8 +2,8 @@
 // parser/index.ts
 import * as fs from "fs";
 import * as path from "path";
-import { Project } from "ts-morph";
-import { buildCodeGraph, collectStateAndProps, extractIPCMethods, extractCallsFromNode, getBodyNode } from "./parser";
+import { Project, Node } from "ts-morph";
+import { buildCodeGraph, collectStateAndProps, extractIPCMethods, extractCallsFromNode, getBodyNode, detectWriteStateFields } from "./parser";
 import type { CodeGraph, ViewNode, FnDetail } from "./types";
 
 const project = new Project({
@@ -43,10 +43,6 @@ function collectFiles(dir: string): { tsx: string[]; ts: string[] } {
     return result;
 }
 
-// 需要顶部加 import
-import * as fs from "fs";
-import * as path from "path";
-
 // ========== Main ==========
 
 const files = collectFiles(targetDir);
@@ -77,6 +73,7 @@ for (const filePath of files.ts) {
 
         const { states } = collectStateAndProps(sourceFile);
         const ipcMethods = extractIPCMethods(sourceFile);
+        const writeStateMap = detectWriteStateFields(sourceFile);
 
         sourceFile.forEachDescendant((node) => {
             let name: string | undefined;
@@ -97,7 +94,7 @@ for (const filePath of files.ts) {
             // 跳过 renderFn（TS 文件里不应该有，但万一）
             if (name.startsWith("render")) return;
 
-            const calls = extractCallsFromNode(body, states, ipcMethods);
+            const calls = extractCallsFromNode(body, states, ipcMethods, writeStateMap);
             allFns.push({
                 id: `${filePath}:${name}`,
                 writes: calls.filter(c => c.type === "write").map(c => c.target!),

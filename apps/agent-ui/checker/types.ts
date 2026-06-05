@@ -16,5 +16,6 @@ export interface RuleContext {
     violations: Violation[];
     stateVars: Set<string>;
     propVars: Set<string>;
+    memoVars: Set<string>;
     addViolation: (rule: string, message: string, node?: ts.Node) => void;
 }

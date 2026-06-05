@@ -48,7 +48,8 @@ interface PromptInputAreaProps {
   // Context usage
   contextUsageError: string | null;
   activeContextUsage: AgentContextUsage | null;
-  contextUsageLabel: (usage: AgentContextUsage | null | undefined) => string;
+  contextUsageLabel: (usage: AgentContextUsage | null | undefined, isCompacting?: boolean) => string;
+  isCompacting: boolean;
 
   // Prompt input (managed by usePromptInput hook in App)
   prompt: string;
@@ -109,6 +110,7 @@ export function PromptInputArea(props: PromptInputAreaProps) {
     contextUsageError,
     activeContextUsage,
     contextUsageLabel,
+    isCompacting,
     prompt,
     onPromptChange,
     onPromptKeyDown,
@@ -395,7 +397,7 @@ export function PromptInputArea(props: PromptInputAreaProps) {
             className="context-usage-chip"
             title={contextUsageError ?? activeContextUsage?.data?.model ?? "Context usage is available after the REPL has produced a response"}
           >
-            {contextUsageLabel(activeContextUsage)}
+            {contextUsageLabel(activeContextUsage, isCompacting)}
           </span>
           <div className="prompt-tools">
             <button type="button" disabled title="Attach file">
