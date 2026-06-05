@@ -1,3 +1,5 @@
+import { createElement, type ComponentType } from "react";
+
 type RenderFn<S = any, P = any, E = any, X = any> = (
     state: S,
     props: P,
@@ -22,4 +24,28 @@ export function render<S, P, E, X = any>({
     memo?: any;
 }): JSX.Element {
     return fn(state, props, events, exts, memo);
+}
+
+/**
+ * renderView — dispatch 到另一个 View 组件
+ *
+ * 用于 renderFn 内部需要挂载一个拥有独立 useState/WriteState 的 View 组件时。
+ * 语义上等价于 <XxxView {...props} />，但可被 checker 静态分析识别。
+ *
+ * @example
+ * function renderContent({ section }, {}, {}) {
+ *   if (section === "remote") {
+ *     return renderView({ fn: RemoteSettingsPanelView, props: {} });
+ *   }
+ * }
+ */
+export function renderView<P = Record<string, any>>({
+    fn,
+    props,
+}: {
+    fn: ComponentType<P>;
+    props: P;
+}): JSX.Element {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return createElement(fn as any, props as any);
 }
