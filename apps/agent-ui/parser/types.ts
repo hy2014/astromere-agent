@@ -59,17 +59,20 @@ export interface FnDetail {
     writes: string[];             // 修改的状态字段名，如 ["rows"]
     ipcs: IpcId[];                // 调用的 IPC，如 ["ipc:loadMcpSettings"]
     fns: string[];                // 调用的其他函数名，如 ["mcpSettingsFromDraftRows"]
+    views: NodeId[];              // 通过 renderView() 连接的 ViewNode ID
 }
 
 // ========== RenderFn ==========
 
 export interface RenderFnNode {
     id: NodeId;                   // "mcp-test.tsx:renderMcpServerTable"
+    fnId: FnId;                   // 对应的 FnDetail ID，包含其内部的函数调用关系
     states: string[];             // 依赖的 state 字段（已包含 memo 展开）
     props: string[];              // 依赖的 props 字段
     exts: string[];               // 依赖的 ext 字段（4th render param）
     events: EventBinding[];       // 事件绑定列表
     children: RenderFnNode[];     // 子 renderFn
+    renderViews: NodeId[];        // 通过 renderView() 连接的 ViewNode ID
 }
 
 // ========== View ==========

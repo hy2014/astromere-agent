@@ -278,6 +278,15 @@ export function checkRenderFns(ctx: RuleContext): void {
     renderFns.forEach(rf => console.log(`  - ${rf.name}: className="${rf.rootClassName || '无'}"`));
     if (checkClassNames.length > 0) {
         console.log(`🔍 需要检查的 className: ${checkClassNames.join(', ')}\n`);
+    } else if (renderFns.length > 0) {
+        // 有 renderFn 但缺少 @checkFns 注解
+        ctx.addViolation(
+            "renderFn 注解检查",
+            `文件缺少 /* @checkFns ... */ 注解。\n` +
+            `请先思考这个 View 需要哪些子 renderFn 组件，然后将它们根元素的 className 列到文件头部的 @checkFns 中。\n` +
+            `例如：/* @checkFns mcp-clean-env-row, mcp-clean-table, mcp-clean-edit-card */`,
+            ctx.sourceFile,
+        );
     }
 
     // ── @checkFns className 匹配 ──
