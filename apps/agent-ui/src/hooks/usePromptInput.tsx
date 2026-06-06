@@ -73,6 +73,23 @@ interface UsePromptInputOptions {
   permissionMode: PermissionMode;
   onSubmitPrompt: () => void;
   onOpenPreviewLink?: (link: StreamLink) => void;
+  // Internal state (moved from internal useState to View layer)
+  prompt: string;
+  setPrompt: (value: string) => void;
+  fileReferences: LocalFileReference[];
+  setFileReferences: (value: LocalFileReference[] | ((prev: LocalFileReference[]) => LocalFileReference[])) => void;
+  isResolvingFileReferences: boolean;
+  setIsResolvingFileReferences: (value: boolean) => void;
+  fileMention: FileMentionState;
+  setFileMention: (updater: FileMentionState | ((prev: FileMentionState) => FileMentionState)) => void;
+  fileSuggestions: WorkspaceFileReference[];
+  setFileSuggestions: (items: WorkspaceFileReference[]) => void;
+  fileSuggestionIndex: number;
+  setFileSuggestionIndex: (index: number | ((prev: number) => number)) => void;
+  isSearchingFiles: boolean;
+  setIsSearchingFiles: (value: boolean) => void;
+  slashCommandMenu: SlashCommandMenuState;
+  setSlashCommandMenu: (updater: SlashCommandMenuState | ((prev: SlashCommandMenuState) => SlashCommandMenuState)) => void;
 }
 
 interface UsePromptInputReturn {
@@ -135,31 +152,23 @@ export function usePromptInput({
   selectedChatModel,
   permissionMode,
   onSubmitPrompt,
+  prompt,
+  setPrompt,
+  fileReferences,
+  setFileReferences,
+  isResolvingFileReferences,
+  setIsResolvingFileReferences,
+  fileMention,
+  setFileMention,
+  fileSuggestions,
+  setFileSuggestions,
+  fileSuggestionIndex,
+  setFileSuggestionIndex,
+  isSearchingFiles,
+  setIsSearchingFiles,
+  slashCommandMenu,
+  setSlashCommandMenu,
 }: UsePromptInputOptions): UsePromptInputReturn {
-  const [prompt, setPrompt] = useState("");
-  const [fileReferences, setFileReferences] = useState<LocalFileReference[]>([]);
-  const [isResolvingFileReferences, setIsResolvingFileReferences] = useState(false);
-  const [fileMention, setFileMention] = useState<FileMentionState>({
-    active: false,
-    query: "",
-    start: 0,
-    end: 0,
-  });
-  const [fileSuggestions, setFileSuggestions] = useState<WorkspaceFileReference[]>([]);
-  const [fileSuggestionIndex, setFileSuggestionIndex] = useState(0);
-  const [isSearchingFiles, setIsSearchingFiles] = useState(false);
-  const [slashCommandMenu, setSlashCommandMenu] = useState<SlashCommandMenuState>({
-    active: false,
-    level: "root",
-    query: "",
-    start: 0,
-    end: 0,
-    selectedIndex: 0,
-    skills: [],
-    commands: [],
-    isLoadingSkills: false,
-  });
-
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const promptHighlightRef = useRef<HTMLDivElement | null>(null);
   const promptImeStateRef = useRef({

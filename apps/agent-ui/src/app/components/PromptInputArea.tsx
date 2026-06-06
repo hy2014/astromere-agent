@@ -1,4 +1,4 @@
-import type {FormEvent} from "react";
+import {useState, useRef, useEffect, useCallback, useMemo} from "react";
 import type {AgentContextUsage, StreamLink, WorkspaceFileReference} from "../../types";
 import {PermissionRequestView} from "./PermissionRequest";
 import {AskQuestionCardView} from "./AskQuestionCard";
@@ -6,6 +6,10 @@ import {FileReferenceTrayView} from "./FileReferenceTray";
 import {formatFileSize} from "../stream-processor";
 import type {FileMentionState, LocalFileReference, SlashCommandMenuState, SlashRootItem,} from "../types";
 import type {AgentReplCapabilityItem} from "../../runtime";
+import {usePromptInput} from "../../hooks/usePromptInput";
+import {onStreamEvent, startStreamEventListener} from "../../hooks/stream-event-bus";
+import {getAgentContextUsage} from "../../runtime";
+import {isNewSessionId} from "../file-utils";
 
 interface AgentPermissionState {
   currentMode: string;
@@ -14,7 +18,7 @@ interface AgentPermissionState {
 
 interface PromptInputAreaProps {
   // Session state
-  activeProject: boolean;
+  activeProject: string | null;
   activeSessionId: string | null;
   isRunningTurn: boolean;
   pendingPermission: {
@@ -45,53 +49,12 @@ interface PromptInputAreaProps {
   chatModelOptions: string[];
   onChatModelChange: (model: string) => void;
 
-  // Context usage
-  contextUsageError: string | null;
-  activeContextUsage: AgentContextUsage | null;
-  contextUsageLabel: (usage: AgentContextUsage | null | undefined, isCompacting?: boolean) => string;
-  isCompacting: boolean;
-
-  // Prompt input (managed by usePromptInput hook in App)
-  prompt: string;
-  onPromptChange: (value: string, cursor: number) => void;
-  onPromptKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  onSubmit: (event: FormEvent) => void;
-  canSendPrompt: boolean;
+  // Callbacks from SessionDialogView
+  onSubmitPrompt: (input: { text: string; fileReferences: LocalFileReference[] }) => void;
   onInterruptTurn: () => void;
-  textareaRef: React.RefObject<HTMLTextAreaElement>;
-  promptHighlightRef: React.RefObject<HTMLDivElement>;
-  renderPromptHighlightedText: (value: string) => string | (string | JSX.Element)[];
-  promptImeStateRef: { current: { isComposing: boolean; blockSubmitUntil: number } };
-  markPromptImeActive: (ms?: number) => void;
-
-  // File references
-  fileReferences: LocalFileReference[];
-  onRemoveFileReference: (path: string) => void;
-  onOpenPreviewLink: (link: StreamLink) => void;
-
-  // File mention
-  fileMention: FileMentionState;
-  fileSuggestions: WorkspaceFileReference[];
-  fileSuggestionIndex: number;
-  isSearchingFiles: boolean;
-  onSelectFileSuggestion: (reference: WorkspaceFileReference) => void;
-  onUpdateFileMentionFromInput: (value: string, cursor: number) => void;
-  onUpdateSlashCommandMenuFromInput: (value: string, cursor: number) => void;
-
-  // Slash command menu
-  slashCommandMenu: SlashCommandMenuState;
-  slashRootOptions: SlashRootItem[];
-  slashLeafOptions: AgentReplCapabilityItem[];
-  slashLeafTitle: string;
-  slashLeafDescription: string;
-  slashLeafEmptyText: string;
-  onSetSlashCommandMenu: (updater: (current: SlashCommandMenuState) => SlashCommandMenuState) => void;
-  onSelectSlashRootItem: (item: SlashRootItem) => void;
-  onSelectSlashItem: (item: AgentReplCapabilityItem) => void;
-
-  // Permission request
   onPermissionAllow: (answers?: Record<string, string>) => void;
   onPermissionDeny: () => void;
+  onOpenPreviewLink: (link: StreamLink) => void;
 }
 
 export function PromptInputAreaView(props: PromptInputAreaProps) {
@@ -107,46 +70,124 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     selectedChatModel,
     chatModelOptions,
     onChatModelChange,
-    contextUsageError,
-    activeContextUsage,
-    contextUsageLabel,
-    isCompacting,
-    prompt,
-    onPromptChange,
-    onPromptKeyDown,
-    onSubmit,
-    canSendPrompt,
+    onSubmitPrompt,
     onInterruptTurn,
-    textareaRef,
-    promptHighlightRef,
-    renderPromptHighlightedText,
-    promptImeStateRef,
-    markPromptImeActive,
-    fileReferences,
-    onRemoveFileReference,
-    onOpenPreviewLink,
-    fileMention,
-    fileSuggestions,
-    fileSuggestionIndex,
-    isSearchingFiles,
-    onSelectFileSuggestion,
-    onUpdateFileMentionFromInput,
-    onUpdateSlashCommandMenuFromInput,
-    slashCommandMenu,
-    slashRootOptions,
-    slashLeafOptions,
-    slashLeafTitle,
-    slashLeafDescription,
-    slashLeafEmptyText,
-    onSetSlashCommandMenu,
-    onSelectSlashRootItem,
-    onSelectSlashItem,
     onPermissionAllow,
     onPermissionDeny,
+    onOpenPreviewLink,
   } = props;
 
+  // ── Internal state ──
+  const [prompt, setPrompt] = useState("");
+  const [fileReferences, setFileReferences] = useState<LocalFileReference[]>([]);
+  const [fileMention, setFileMention] = useState<FileMentionState>({
+    active: false, query: "", start: 0, end: 0,
+  });
+  const [fileSuggestions, setFileSuggestions] = useState<WorkspaceFileReference[]>([]);
+  const [fileSuggestionIndex, setFileSuggestionIndex] = useState(0);
+  const [isSearchingFiles, setIsSearchingFiles] = useState(false);
+  const [slashCommandMenu, setSlashCommandMenu] = useState<SlashCommandMenuState>({
+    active: false, level: "root", query: "", start: 0, end: 0,
+    selectedIndex: 0, skills: [], commands: [], isLoadingSkills: false,
+  });
+
+  // ── Context usage state (自管理：切换 session 时取，turn 完成时刷新) ──
+  const [activeContextUsage, setActiveContextUsage] = useState<AgentContextUsage | null>(null);
+  const [contextUsageError, setContextUsageError] = useState<string | null>(null);
+  const [isCompacting, setIsCompacting] = useState(false);
+
+  // 切换 session 时拉取 context usage
+  useEffect(() => {
+    if (!activeSessionId || !activeProject || isNewSessionId(activeSessionId)) return;
+    getAgentContextUsage(activeProject, activeSessionId)
+      .then((usage) => {
+        setContextUsageError(null);
+        setActiveContextUsage(usage);
+      })
+      .catch((reason) => setContextUsageError(String(reason)));
+  }, [activeSessionId, activeProject]);
+
+  // 订阅 event bus：turn_complete/startup 刷新 + system 更新 compacting
+  useEffect(() => {
+    startStreamEventListener();
+    return onStreamEvent((event) => {
+      if (event.eventType === "turn_complete" || event.eventType === "startup") {
+        const sid = event.sessionId;
+        if (activeProject && sid && !isNewSessionId(sid)) {
+          getAgentContextUsage(activeProject, sid)
+            .then((usage) => {
+              setContextUsageError(null);
+              setActiveContextUsage(usage);
+            })
+            .catch((reason) => setContextUsageError(String(reason)));
+        }
+      }
+      if (event.eventType === "system") {
+        const payload = event.payload as Record<string, unknown>;
+        if (payload.subtype === "status" && "status" in payload) {
+          setIsCompacting(payload.status === "compacting");
+        }
+      }
+    });
+  }, [activeProject]);
+
+  const contextUsageLabel = (usage: AgentContextUsage | null | undefined): string => {
+    if (!usage) return "";
+    const input = usage.data?.apiUsage?.input_tokens ?? 0;
+    const total = usage.data?.totalTokens ?? "?";
+    return `${input} / ${total}`;
+  };
+
+  // ── 用 ref 稳定回调，避免每次 keystroke 重建 onSubmitPrompt → handlePromptSubmit → handlePromptKeyDown ──
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
+  const fileReferencesRef = useRef(fileReferences);
+  fileReferencesRef.current = fileReferences;
+  const onSubmitPromptRef = useRef(onSubmitPrompt);
+  onSubmitPromptRef.current = onSubmitPrompt;
+
+  const submitWithPrompt = useCallback(() => {
+    console.time('[submit] total: 点击Send到UI展示');
+    onSubmitPromptRef.current({ text: promptRef.current, fileReferences: fileReferencesRef.current });
+    setPrompt("");
+    setFileReferences([]);
+    promptInputRef.current?.closeFileSuggestions();
+  }, []);
+
+  // ── 稳定对象引用，避免 usePromptInput 内 useEffect 无限循环 ──
+  const activeProjectObj = useMemo(
+    () => activeProject ? { root: activeProject } : null,
+    [activeProject],
+  );
+
+  // ── Hook wiring ──
+  const promptInput = usePromptInput({
+    activeProject: activeProjectObj,
+    activeSessionId,
+    selectedChatModel,
+    permissionMode: (permissionState?.currentMode ?? "default") as any,
+    onSubmitPrompt: submitWithPrompt,
+    prompt, setPrompt,
+    fileReferences, setFileReferences,
+    isResolvingFileReferences,
+    setIsResolvingFileReferences: () => {},
+    fileMention, setFileMention,
+    fileSuggestions, setFileSuggestions,
+    fileSuggestionIndex, setFileSuggestionIndex,
+    isSearchingFiles, setIsSearchingFiles,
+    slashCommandMenu, setSlashCommandMenu,
+  });
+
+  const promptInputRef = useRef(promptInput);
+  promptInputRef.current = promptInput;
+
+  // ── Derived values ──
+  const canSendPrompt = Boolean(
+    (prompt.trim() || fileReferences.length > 0),
+  );
+
   return (
-    <form className="prompt-box" onSubmit={onSubmit}>
+    <form className="prompt-box" onSubmit={promptInput.handlePromptSubmit}>
       <div className="prompt-frame">
         {pendingPermission && activeSessionId === pendingPermission.sessionId ? (
           pendingPermission.isQuestion ? (
@@ -166,37 +207,37 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
         <FileReferenceTrayView
           fileReferences={fileReferences}
           onOpenPreviewLink={onOpenPreviewLink}
-          onRemoveReference={onRemoveFileReference}
+          onRemoveReference={promptInput.removeFileReference}
         />
         <div className="prompt-input-wrap">
           <div
-            ref={promptHighlightRef as React.RefObject<HTMLDivElement>}
+            ref={promptInput.promptHighlightRef as React.RefObject<HTMLDivElement>}
             className="prompt-highlight-layer"
             aria-hidden="true"
           >
-            {renderPromptHighlightedText(prompt)}
+            {promptInput.renderPromptHighlightedText(prompt)}
           </div>
           <textarea
-            ref={textareaRef as React.RefObject<HTMLTextAreaElement>}
+            ref={promptInput.textareaRef as React.RefObject<HTMLTextAreaElement>}
             aria-label="Agent prompt"
             value={prompt}
             onChange={(event) =>
-              onPromptChange(
+              promptInput.handlePromptChange(
                 event.currentTarget.value,
                 event.currentTarget.selectionStart ?? event.currentTarget.value.length,
               )
             }
             onCompositionStart={() => {
-              promptImeStateRef.current.isComposing = true;
-              markPromptImeActive(1000);
+              promptInput.promptImeStateRef.current.isComposing = true;
+              promptInput.markPromptImeActive(1000);
             }}
             onCompositionUpdate={() => {
-              promptImeStateRef.current.isComposing = true;
-              markPromptImeActive(1000);
+              promptInput.promptImeStateRef.current.isComposing = true;
+              promptInput.markPromptImeActive(1000);
             }}
             onCompositionEnd={() => {
-              promptImeStateRef.current.isComposing = false;
-              markPromptImeActive(350);
+              promptInput.promptImeStateRef.current.isComposing = false;
+              promptInput.markPromptImeActive(350);
             }}
             onBeforeInput={(event) => {
               const nativeEvent = event.nativeEvent as Event & {
@@ -208,7 +249,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                 nativeEvent.isComposing === true ||
                 nativeEvent.inputType === "insertCompositionText"
               ) {
-                markPromptImeActive(1000);
+                promptInput.markPromptImeActive(1000);
               }
             }}
             onInput={(event) => {
@@ -221,24 +262,24 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                 nativeEvent.isComposing !== true &&
                 nativeEvent.inputType !== "insertCompositionText"
               ) {
-                promptImeStateRef.current.isComposing = false;
+                promptInput.promptImeStateRef.current.isComposing = false;
               }
             }}
             onClick={(event) => {
               const cursor = event.currentTarget.selectionStart ?? event.currentTarget.value.length;
-              onUpdateFileMentionFromInput(event.currentTarget.value, cursor);
-              onUpdateSlashCommandMenuFromInput(event.currentTarget.value, cursor);
+              promptInput.updateFileMentionFromInput(event.currentTarget.value, cursor);
+              promptInput.updateSlashCommandMenuFromInput(event.currentTarget.value, cursor);
             }}
             onKeyUp={(event) => {
               const cursor = event.currentTarget.selectionStart ?? event.currentTarget.value.length;
-              onUpdateFileMentionFromInput(event.currentTarget.value, cursor);
-              onUpdateSlashCommandMenuFromInput(event.currentTarget.value, cursor);
+              promptInput.updateFileMentionFromInput(event.currentTarget.value, cursor);
+              promptInput.updateSlashCommandMenuFromInput(event.currentTarget.value, cursor);
             }}
-            onKeyDown={onPromptKeyDown}
+            onKeyDown={promptInput.handlePromptKeyDown}
             onScroll={(event) => {
-              if (promptHighlightRef.current) {
-                promptHighlightRef.current.scrollTop = event.currentTarget.scrollTop;
-                promptHighlightRef.current.scrollLeft = event.currentTarget.scrollLeft;
+              if (promptInput.promptHighlightRef.current) {
+                promptInput.promptHighlightRef.current.scrollTop = event.currentTarget.scrollTop;
+                promptInput.promptHighlightRef.current.scrollLeft = event.currentTarget.scrollLeft;
               }
             }}
             placeholder={
@@ -266,7 +307,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                     className={`file-mention-option ${index === fileSuggestionIndex ? "active" : ""}`}
                     onMouseDown={(event) => {
                       event.preventDefault();
-                      onSelectFileSuggestion(reference);
+                      promptInput.selectFileSuggestion(reference);
                     }}
                   >
                     <span className="file-mention-name">{reference.name}</span>
@@ -295,18 +336,18 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                       type="button"
                       onMouseDown={(event) => {
                         event.preventDefault();
-                        onSetSlashCommandMenu((current) => ({ ...current, level: "root", selectedIndex: 0 }));
+                        promptInput.onSetSlashCommandMenu((current) => ({ ...current, level: "root", selectedIndex: 0 }));
                       }}
                     >
                       ←
                     </button>
-                    <span>{slashLeafTitle}</span>
-                    <small>{slashLeafDescription}</small>
+                    <span>{promptInput.slashLeafTitle}</span>
+                    <small>{promptInput.slashLeafDescription}</small>
                   </>
                 )}
               </div>
               {slashCommandMenu.level === "root" ? (
-                slashRootOptions.map((item, index) => (
+                promptInput.slashRootOptions.map((item, index) => (
                   <button
                     key={item.id}
                     type="button"
@@ -316,7 +357,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                     disabled={item.disabled}
                     onMouseDown={(event) => {
                       event.preventDefault();
-                      onSelectSlashRootItem(item);
+                      promptInput.selectSlashRootItem(item);
                     }}
                   >
                     <span className="slash-command-icon" aria-hidden="true">{item.id === "skills" ? "✦" : "›"}</span>
@@ -324,11 +365,11 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                   </button>
                 ))
               ) : slashCommandMenu.isLoadingSkills ? (
-                <div className="slash-command-empty">加载 {slashLeafTitle.toLowerCase()} 中…</div>
+                <div className="slash-command-empty">加载 {promptInput.slashLeafTitle.toLowerCase()} 中…</div>
               ) : slashCommandMenu.error ? (
                 <div className="slash-command-empty">加载失败：{slashCommandMenu.error}</div>
-              ) : slashLeafOptions.length > 0 ? (
-                slashLeafOptions.map((skill, index) => (
+              ) : promptInput.slashLeafOptions.length > 0 ? (
+                promptInput.slashLeafOptions.map((skill, index) => (
                   <button
                     key={skill.slash || skill.name}
                     type="button"
@@ -337,7 +378,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                     className={`slash-command-option skill ${index === slashCommandMenu.selectedIndex ? "active" : ""}`}
                     onMouseDown={(event) => {
                       event.preventDefault();
-                      onSelectSlashItem(skill);
+                      promptInput.selectSlashItem(skill);
                     }}
                   >
                     <span className="slash-command-icon skill" aria-hidden="true">/</span>
@@ -346,7 +387,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                   </button>
                 ))
               ) : (
-                <div className="slash-command-empty">{slashLeafEmptyText}</div>
+                <div className="slash-command-empty">{promptInput.slashLeafEmptyText}</div>
               )}
             </div>
           ) : null}
@@ -397,7 +438,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
             className="context-usage-chip"
             title={contextUsageError ?? activeContextUsage?.data?.model ?? "Context usage is available after the REPL has produced a response"}
           >
-            {contextUsageLabel(activeContextUsage, isCompacting)}
+            {contextUsageLabel(activeContextUsage)}
           </span>
           <div className="prompt-tools">
             <button type="button" disabled title="Attach file">

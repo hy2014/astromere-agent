@@ -28,9 +28,6 @@ import {McpServersView} from "./components/mcp-servers-view";
 import {SettingsView} from "./components/settings-view";
 import {SessionDialogView} from "./components/SessionDialog";
 import {WorkspaceTreeView} from "./components/workspace-tree";
-import {useStreamState} from "../hooks/useStreamState";
-import {useAgentTurn} from "../hooks/useAgentTurn";
-import {usePromptInput} from "../hooks/usePromptInput"
 import {
   createPendingSession,
   dedupeSessions,
@@ -138,46 +135,6 @@ export function App() {
   const [previewTabs, setPreviewTabs] = useState<PreviewTab[]>([]);
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
 
-  const streamState = useStreamState();
-  const {
-    sessionStreams,
-    sessionDebugEvents,
-    assistantDebugBundles,
-    streamUsageByBundleKey,
-    sessionContextUsageById,
-    contextUsageError,
-    isCompactingBySession,
-    copiedDebugMessageId,
-    openAssistantDebugMessageId,
-    openAssistantUsageMessageId,
-    openProcessMessageIds,
-    copyToast,
-    isDebugOpen,
-    setSessionStreams,
-    setAssistantDebugBundles,
-    setStreamUsageByBundleKey,
-    setSessionContextUsageById,
-    setContextUsageError,
-    setCopiedDebugMessageId,
-    setOpenAssistantDebugMessageId,
-    setOpenAssistantUsageMessageId,
-    setOpenProcessMessageIds,
-    setCopyToast,
-    setIsDebugOpen,
-    currentBundleBySessionRef,
-    updateSessionStream,
-    refreshSessionContextUsage,
-    contextUsageLabel,
-    bundleUsageButtonLabel: bundleUsageButtonLabelHook,
-    sessionUsageSnapshotsForSession,
-    handleToggleAssistantProcess,
-    handleToggleSessionUsage,
-    handleViewAssistantUsage,
-    handleViewAssistantDebug,
-    handleCopyAssistantDebug,
-    registerTurnHandlers,
-  } = streamState;
-
   const [hiddenSessions, setHiddenSessions] = useState<HiddenSession[]>(() =>
     loadHiddenSessions(),
   );
@@ -192,6 +149,7 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>("workspace");
   const [error, setError] = useState<string | null>(null);
+  const [isDetailPanelActive, setIsDetailPanelActive] = useState(false);
   const [chatModelOptions, setChatModelOptions] = useState<string[]>([
     "deepseek-v4-flash",
     "deepseek-v4-pro",
@@ -213,94 +171,6 @@ export function App() {
     null;
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ?? null;
-
-  const promptInput = usePromptInput({
-    activeProject,
-    activeSessionId,
-    selectedChatModel,
-    permissionMode: (permissionState?.currentMode ?? "default") as PermissionMode,
-    onSubmitPrompt: () => agentTurn.submitPrompt(),
-  });
-  const {
-    prompt,
-    setPrompt,
-    fileReferences,
-    setFileReferences,
-    handlePromptChange,
-    handlePromptKeyDown,
-    handlePromptSubmit,
-    closeFileSuggestions,
-    removeFileReference,
-    markPromptImeActive,
-    isResolvingFileReferences: promptIsResolving,
-    canSendPrompt,
-    textareaRef,
-    promptHighlightRef,
-    promptImeStateRef,
-    fileMention,
-    fileSuggestions,
-    fileSuggestionIndex,
-    isSearchingFiles,
-    slashCommandMenu,
-    slashRootOptions,
-    slashLeafOptions,
-    slashLeafTitle,
-    slashLeafDescription,
-    slashLeafEmptyText,
-    onSetSlashCommandMenu,
-    selectFileSuggestion,
-    selectSlashRootItem,
-    selectSlashItem,
-    updateFileMentionFromInput,
-    updateSlashCommandMenuFromInput,
-  } = promptInput;
-
-  const agentTurn = useAgentTurn({
-    activeProject,
-    activeSessionId,
-    selectedChatModel,
-    permissionState,
-    prompt,
-    fileReferences,
-    updateSessionStream,
-    setAssistantDebugBundles,
-    refreshSessionContextUsage,
-    currentBundleBySessionRef,
-    setProjects,
-    setPrompt,
-    setFileReferences,
-    closeFileSuggestions,
-    setError,
-  });
-
-  // Register agentTurn handlers with streamState's event listener
-  const turnHandlersRef = useRef(false);
-  if (!turnHandlersRef.current) {
-    registerTurnHandlers({
-      setIsRunningTurn: agentTurn.setIsRunningTurn,
-      enqueuePendingPermission: agentTurn.enqueuePendingPermission,
-      clearPendingPermissionsForSession: agentTurn.clearPendingPermissionsForSession,
-      setProjects,
-    });
-    turnHandlersRef.current = true;
-  }
-
-  const {
-    isRunningTurn,
-    forkingMessageId,
-    isInterruptingTurn,
-    pendingPermission,
-    isResolvingFileReferences,
-  } = agentTurn;
-  const activeContextUsage = activeSessionId
-    ? sessionContextUsageById[activeSessionId] ?? null
-    : null;
-  const streamItems = activeSessionId
-    ? collapseAssistantTurns(sessionStreams[activeSessionId] ?? [])
-    : [];
-  const debugEvents = activeSessionId
-    ? (sessionDebugEvents[activeSessionId] ?? [])
-    : [];
 
   const activeSessionTitle = useMemo(() => {
     for (const folder of projects) {
@@ -389,15 +259,6 @@ export function App() {
         setExpandedFolders(new Set([firstProject.id]));
         setActiveProjectId(firstProject.id);
         setActiveSessionId(firstSessionId);
-        setSessionStreams((streams) => ({
-          ...streams,
-          [firstSessionId]:
-            streams[firstSessionId] ??
-            welcomeStream(
-              firstProject.name,
-              firstProject.sessions[0]?.title ?? "会话",
-            ),
-        }));
       }
     })().catch((reason) => {
       if (!cancelled) {
@@ -473,131 +334,17 @@ export function App() {
     });
   }
 
-    // updateSessionStream, refreshSessionContextUsage, and listenAgentReplEvents are now handled by useStreamState
+
 
   function selectSession(project: ProjectFolder, sessionId: string) {
     const sessionTitle =
       project.sessions.find((session) => session.id === sessionId)?.title ??
       "会话";
+    // Stream initialization is handled by SessionDialogView
     setActiveView("workspace");
     setActiveProjectId(project.id);
     setActiveSessionId(sessionId);
-    setSessionStreams((streams) => ({
-      ...streams,
-      [sessionId]:
-        streams[sessionId] ?? welcomeStream(project.name, sessionTitle),
-    }));
-
-    if (!isNewSessionId(sessionId)) {
-      getAgentReplProcessStatus(project.root, sessionId)
-        .then((status) => {
-          if (status.running) {
-            void refreshSessionContextUsage(project.root, status.sessionId || sessionId);
-          }
-          setProjects((folders) =>
-            folders.map((folder) =>
-              folder.id === project.id
-                ? {
-                    ...folder,
-                    sessions: folder.sessions.map((session) =>
-                      session.id === sessionId
-                        ? {
-                            ...session,
-                            processStatus: status.running
-                              ? "active"
-                              : "stopped",
-                            processPid: status.pid ?? undefined,
-                          }
-                        : session,
-                    ),
-                  }
-                : folder,
-            ),
-          );
-        })
-        .catch((reason) => setError(String(reason)));
-    }
   }
-
-  useEffect(() => {
-    if (
-      !activeProject ||
-      !activeSessionId ||
-      isRunningTurn ||
-      pendingPermission?.sessionId === activeSessionId
-    ) {
-      return;
-    }
-    const activeSession = activeProject.sessions.find(
-      (session) => session.id === activeSessionId,
-    );
-    if (activeSession?.isPending) {
-      return;
-    }
-    let cancelled = false;
-    loadTypedRuntimeSession(activeProject.root, activeSessionId)
-      .then((detail) => {
-        if (cancelled) {
-          return;
-        }
-        const artifacts = runtimeSessionToArtifacts(detail, activeProject.root);
-
-      void loadBundleUsageSnapshotsForSession(detail.id)
-        .then((snapshots) => {
-          setStreamUsageByBundleKey((current) => {
-            const next = { ...current };
-            for (const snapshot of snapshots) {
-              next[bundleUsageStorageKey(snapshot.sessionId, snapshot.bundleId)] = snapshot;
-            }
-            return next;
-          });
-        })
-        .catch((reason) => {
-          console.warn("[bundle-usage] failed to hydrate history usage snapshots", {
-            sessionId: detail.id,
-            reason,
-          });
-        });
-        setAssistantDebugBundles((bundles) => ({
-          ...bundles,
-          ...artifacts.bundles,
-        }));
-        setSessionStreams((streams) => {
-          const existingItems = streams[activeSessionId] ?? [];
-
-          // Do not overwrite a live in-memory conversation after a turn completes.
-          // The in-memory stream keeps stable message IDs for per-answer Debug and
-          // already collapses Claude Code progress messages into one assistant
-          // bubble. Disk jsonl reloads are used only when opening a session that
-          // has not been rendered in this UI instance yet.
-          if (existingItems.length > 0) {
-            return streams;
-          }
-
-          return {
-            ...streams,
-            [activeSessionId]:
-              detail.messages.length > 0
-                ? collapseAssistantTurns(artifacts.items)
-                : welcomeStream(activeProject.name, activeSessionTitle),
-          };
-        });
-      })
-      .catch((reason) => {
-        if (!cancelled) {
-          setError(String(reason));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeProject,
-    activeSessionId,
-    activeSessionTitle,
-    isRunningTurn,
-    pendingPermission,
-  ]);
 
   async function handleAddProject() {
     try {
@@ -679,15 +426,6 @@ export function App() {
       setActiveView("workspace");
       setActiveProjectId(projectId);
       setActiveSessionId(firstSessionId);
-      setSessionStreams((streams) => ({
-        ...streams,
-        [firstSessionId]:
-          streams[firstSessionId] ??
-          welcomeStream(
-            nextProject.name,
-            nextProject.sessions[0]?.title ?? "新会话",
-          ),
-      }));
       setPreviewTabs([]);
       setActivePreviewId(null);
       setError(null);
@@ -714,10 +452,6 @@ export function App() {
     setActiveView("workspace");
     setActiveProjectId(project.id);
     setActiveSessionId(pendingSession.id);
-    setSessionStreams((streams) => ({
-      ...streams,
-      [pendingSession.id]: welcomeStream(project.name, pendingSession.title),
-    }));
     setPreviewTabs([]);
     setActivePreviewId(null);
     setError(null);
@@ -728,22 +462,20 @@ export function App() {
       setError("这个会话还没有真实 session 文件，不能 Fork。请先发送一条消息生成会话。");
       return;
     }
-
-    const sourceItems = sessionStreams[session.id] ?? [];
-    const checkpointMessage = [...sourceItems]
-      .reverse()
-      .find(
-        (item): item is Extract<StreamItem, { kind: "message" }> =>
-          item.kind === "message" && item.role === "assistant" && Boolean(item.checkpointUuid),
-      );
-
-    if (!checkpointMessage?.checkpointUuid) {
-      setError("这个会话还没有可 fork 的 assistant checkpoint。");
-      return;
-    }
-
     try {
       setError(null);
+      const detail = await loadTypedRuntimeSessionWithRetry(project.root, session.id, 80);
+      const artifacts = runtimeSessionToArtifacts(detail, project.root);
+      const checkpointMessage = [...artifacts.items]
+        .reverse()
+        .find(
+          (item): item is Extract<StreamItem, { kind: "message" }> =>
+            item.kind === "message" && item.role === "assistant" && Boolean(item.checkpointUuid),
+        );
+      if (!checkpointMessage?.checkpointUuid) {
+        setError("这个会话还没有可 fork 的 assistant checkpoint。");
+        return;
+      }
       const forkedProcess = await forkAgentReplProcess(
         project.root,
         session.id,
@@ -752,10 +484,9 @@ export function App() {
         permissionState?.currentMode ?? "default",
       );
       const forkedSessionId = forkedProcess.sessionId;
-      const detail = await loadTypedRuntimeSessionWithRetry(project.root, forkedSessionId, 80);
-      const artifacts = runtimeSessionToArtifacts(detail, project.root);
-      const forkedTitle =
-        firstUserTitleFromStream(artifacts.items) ?? `Fork · ${session.title}`;
+      const forkedDetail = await loadTypedRuntimeSessionWithRetry(project.root, forkedSessionId, 80);
+      const forkedArtifacts = runtimeSessionToArtifacts(forkedDetail, project.root);
+      const forkedTitle = firstUserTitleFromStream(forkedArtifacts.items) ?? `Fork · ${session.title}`;
 
       setProjects((currentProjects) =>
         currentProjects.map((candidate) =>
@@ -778,18 +509,63 @@ export function App() {
       setExpandedFolders((folders) => new Set(folders).add(project.id));
       setActiveView("workspace");
       setActiveProjectId(project.id);
-      setAssistantDebugBundles((bundles) => ({
-        ...bundles,
-        ...artifacts.bundles,
-      }));
-      setSessionStreams((streams) => ({
-        ...streams,
-        [forkedSessionId]: collapseAssistantTurns(artifacts.items),
-      }));
       setActiveSessionId(forkedSessionId);
       setPreviewTabs([]);
       setActivePreviewId(null);
-      void refreshSessionContextUsage(project.root, forkedSessionId);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function handleForkFromMessage(item: Extract<StreamItem, { kind: "message" }>) {
+    if (!activeProject || !activeSessionId) return;
+
+    if (!item.checkpointUuid) {
+      setError("这个会话还没有可 fork 的 assistant checkpoint。");
+      return;
+    }
+
+    const session = activeProject.sessions.find((s) => s.id === activeSessionId);
+    if (!session) return;
+
+    try {
+      setError(null);
+      const forkedProcess = await forkAgentReplProcess(
+        activeProject.root,
+        session.id,
+        item.checkpointUuid,
+        selectedChatModel,
+        permissionState?.currentMode ?? "default",
+      );
+      const forkedSessionId = forkedProcess.sessionId;
+      const detail = await loadTypedRuntimeSessionWithRetry(activeProject.root, forkedSessionId, 80);
+      const artifacts = runtimeSessionToArtifacts(detail, activeProject.root);
+      const forkedTitle = firstUserTitleFromStream(artifacts.items) ?? `Fork · ${session.title}`;
+
+      setProjects((currentProjects) =>
+        currentProjects.map((candidate) =>
+          candidate.id === activeProject.id
+            ? {
+                ...candidate,
+                sessions: dedupeSessions([
+                  {
+                    id: forkedSessionId,
+                    title: forkedTitle,
+                    processStatus: "active",
+                    processPid: undefined,
+                  },
+                  ...candidate.sessions,
+                ]),
+              }
+            : candidate,
+        ),
+      );
+      setExpandedFolders((folders) => new Set(folders).add(activeProject.id));
+      setActiveView("workspace");
+      setActiveProjectId(activeProject.id);
+      setActiveSessionId(forkedSessionId);
+      setPreviewTabs([]);
+      setActivePreviewId(null);
     } catch (reason) {
       setError(String(reason));
     }
@@ -861,12 +637,6 @@ export function App() {
     if (activeSessionId === session.id) {
       setActiveProjectId(project.id);
       setActiveSessionId(fallbackSession.id);
-      setSessionStreams((streams) => ({
-        ...streams,
-        [fallbackSession.id]:
-          streams[fallbackSession.id] ??
-          welcomeStream(project.name, fallbackSession.title),
-      }));
     }
   }
 
@@ -928,12 +698,6 @@ export function App() {
     setActiveView("workspace");
     setActiveProjectId(project.id);
     setActiveSessionId(hiddenSession.sessionId);
-    setSessionStreams((streams) => ({
-      ...streams,
-      [hiddenSession.sessionId]:
-        streams[hiddenSession.sessionId] ??
-        welcomeStream(project.name, restoredTitle),
-    }));
   }
 
   function upsertPreviewTab(tab: PreviewTab) {
@@ -955,7 +719,6 @@ export function App() {
   }
 
   async function handleOpenPreviewLink(link: StreamLink) {
-    setOpenProcessMessageIds(new Set());
     if (!activeProject) {
       setError("Add a project folder first.");
       return;
@@ -1004,58 +767,6 @@ export function App() {
     }
   }
 
-  function assistantDebugPayload(
-    item: Extract<StreamItem, { kind: "message" }>,
-    action: "view" | "copy",
-  ) {
-    const bundle = assistantDebugBundles[item.id];
-    const details = assistantTurnDetails(item, bundle ?? null);
-    return {
-      kind: "agent-ui.assistant-message-debug",
-      action,
-      generatedAt: new Date().toISOString(),
-      sessionId: bundle?.sessionId ?? activeSessionId,
-      root: bundle?.root ?? activeProject?.root ?? null,
-      messageId: item.id,
-      userMessage: bundle?.userMessage ?? null,
-      transportMessage: bundle?.transportMessage ?? null,
-      referencedFiles: bundle?.fileReferences ?? item.fileReferences ?? null,
-      displayedMessage: item.text,
-      displayedProgressText: item.progressText ?? null,
-      displayStatus: item.status ?? null,
-      summary: {
-        progressLineCount: details.progressLines.length,
-        commandCount: details.commandUses.length,
-        toolUseCount: details.toolUses.length,
-        toolResultCount: details.toolResults.length,
-        eventCount: details.eventCount,
-      },
-      debugSourceSummary: debugStorageSourceCounts(bundle?.events ?? []),
-      commands: details.commandUses.map((tool) => ({
-        name: toolName(tool),
-        command: commandFromToolUse(tool),
-        raw: tool,
-      })),
-      toolUses: details.toolUses.map((tool) => ({
-        name: toolName(tool),
-        summary: summarizeToolUse(tool),
-        raw: tool,
-      })),
-      bundleDisplayText: bundle?.displayText ?? null,
-      completed: bundle?.completed ?? null,
-      eventCount: bundle?.events.length ?? 0,
-      events: (bundle?.events ?? []).map((event) => ({
-        eventType: event.eventType,
-        receivedAt: new Date(event.receivedAt).toISOString(),
-        debugStorageSource: debugStorageSource(event),
-        payload: event.payload,
-      })),
-    };
-  }
-
-  // handleToggleAssistantProcess, handleToggleSessionUsage, handleViewAssistantUsage,
-  // handleViewAssistantDebug, handleCopyAssistantDebug are now handled by useStreamState
-
   function handlePermissionModeChange(nextMode: PermissionMode) {
     if (!activeProject) {
       return;
@@ -1071,7 +782,7 @@ export function App() {
 
   return (
     <main
-      className={`app-shell ${activeView === "settings" || activeView === "skills" ? "settings-mode" : (activePreview || openProcessMessageIds.size > 0) ? "has-preview" : ""}`}
+      className={`app-shell ${activeView === "settings" || activeView === "skills" ? "settings-mode" : (activePreview || isDetailPanelActive) ? "has-preview" : ""}`}
     >
       <aside className="side-panel" aria-label="Project and skills">
         <WorkspaceTreeView
@@ -1166,79 +877,27 @@ export function App() {
         />
       ) : (
         <SessionDialogView
-          activeSessionTitle={activeSessionTitle}
           activeSessionId={activeSessionId}
-          isDebugOpen={isDebugOpen}
-          onToggleSessionUsage={handleToggleSessionUsage}
-          onSetIsDebugOpen={setIsDebugOpen}
-          sessionUsageSnapshotsForSession={sessionUsageSnapshotsForSession}
-          streamUsageByBundleKey={streamUsageByBundleKey}
-          streamItems={streamItems}
-          assistantDebugBundles={assistantDebugBundles}
-          openAssistantUsageMessageId={openAssistantUsageMessageId}
-          openAssistantDebugMessageId={openAssistantDebugMessageId}
-          openProcessMessageIds={openProcessMessageIds}
-          copiedDebugMessageId={copiedDebugMessageId}
-          copyToast={copyToast}
-          error={error}
           activeProject={activeProject}
-          isRunningTurn={isRunningTurn}
-          isInterruptingTurn={isInterruptingTurn}
-          forkingMessageId={forkingMessageId}
-          pendingPermission={pendingPermission}
-          isResolvingFileReferences={isResolvingFileReferences}
-          onViewAssistantDebug={handleViewAssistantDebug}
-          onCopyAssistantDebug={handleCopyAssistantDebug}
-          onViewAssistantUsage={handleViewAssistantUsage}
-          onToggleAssistantProcess={handleToggleAssistantProcess}
-          onOpenPreviewLink={handleOpenPreviewLink}
-          onSetOpenAssistantUsageMessageId={setOpenAssistantUsageMessageId}
-          onForkFromMessage={(item) => agentTurn.handleForkFromMessage(item)}
-          assistantDebugPayload={assistantDebugPayload}
-          prompt={prompt}
-          onPromptChange={handlePromptChange}
-          onPromptKeyDown={handlePromptKeyDown}
-          onSubmit={handlePromptSubmit}
-          canSendPrompt={canSendPrompt}
-          onInterruptTurn={agentTurn.handleInterruptTurn}
-          textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
-          promptHighlightRef={promptHighlightRef as React.RefObject<HTMLDivElement>}
-          promptImeStateRef={promptImeStateRef}
-          markPromptImeActive={markPromptImeActive}
-          fileReferences={fileReferences}
-          onRemoveFileReference={removeFileReference}
-          fileMention={fileMention}
-          fileSuggestions={fileSuggestions}
-          fileSuggestionIndex={fileSuggestionIndex}
-          isSearchingFiles={isSearchingFiles}
-          onSelectFileSuggestion={selectFileSuggestion}
-          onUpdateFileMentionFromInput={updateFileMentionFromInput}
-          onUpdateSlashCommandMenuFromInput={updateSlashCommandMenuFromInput}
-          slashCommandMenu={slashCommandMenu}
-          slashRootOptions={slashRootOptions}
-          slashLeafOptions={slashLeafOptions}
-          slashLeafTitle={slashLeafTitle}
-          slashLeafDescription={slashLeafDescription}
-          slashLeafEmptyText={slashLeafEmptyText}
-          onSetSlashCommandMenu={onSetSlashCommandMenu}
-          onSelectSlashRootItem={selectSlashRootItem}
-          onSelectSlashItem={selectSlashItem}
-          onPermissionAllow={(answers?: Record<string, string>) => agentTurn.handlePermissionDecision(true, answers)}
-          onPermissionDeny={() => agentTurn.handlePermissionDecision(false)}
-          onPermissionModeChange={(mode) => handlePermissionModeChange(mode as any)}
+          activeSessionTitle={activeSessionTitle}
+          projects={projects}
+          setProjects={setProjects}
+          onSelectSession={selectSession}
+          error={error}
+          setError={setError}
           permissionState={permissionState}
-          selectedChatModel={selectedChatModel}
-          chatModelOptions={chatModelOptions}
-          onChatModelChange={setSelectedChatModel}
-          contextUsageError={contextUsageError}
-          activeContextUsage={activeContextUsage}
-          contextUsageLabel={contextUsageLabel}
-          isCompacting={!!(activeSessionId && isCompactingBySession[activeSessionId])}
+          onPermissionModeChange={(mode) => handlePermissionModeChange(mode as any)}
           previewTabs={previewTabs}
           activePreview={activePreview}
           onSetActivePreviewId={setActivePreviewId}
           onClosePreviewTab={closePreviewTab}
           onCloseAllPreviews={() => setPreviewTabs([])}
+          onOpenPreviewLink={handleOpenPreviewLink}
+          chatModelOptions={chatModelOptions}
+          selectedChatModel={selectedChatModel}
+          onChatModelChange={setSelectedChatModel}
+          onForkFromMessage={handleForkFromMessage}
+          onDetailPanelActiveChange={setIsDetailPanelActive}
         />
       )}
 

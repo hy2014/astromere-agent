@@ -43,8 +43,6 @@ interface AgentTurnDeps {
   activeSessionId: string | null;
   selectedChatModel: string;
   permissionState: AgentPermissionState | null;
-  prompt: string;
-  fileReferences: LocalFileReference[];
   // Stream state callbacks
   updateSessionStream: (
     sessionId: string,
@@ -66,10 +64,18 @@ interface AgentTurnDeps {
   setProjects: (
     updater: (folders: ProjectFolder[]) => ProjectFolder[],
   ) => void;
-  setPrompt: (value: string) => void;
-  setFileReferences: (updater: (current: LocalFileReference[]) => LocalFileReference[]) => void;
-  closeFileSuggestions: () => void;
   setError: (error: string | null) => void;
+  // Internal state (moved from internal useState to View layer)
+  isRunningTurn: boolean;
+  setIsRunningTurn: (updater: boolean | ((prev: boolean) => boolean)) => void;
+  forkingMessageId: string | null;
+  setForkingMessageId: (id: string | null) => void;
+  isInterruptingTurn: boolean;
+  setIsInterruptingTurn: (value: boolean) => void;
+  pendingPermissions: Array<PendingPermission>;
+  setPendingPermissions: (updater: Array<PendingPermission> | ((prev: Array<PendingPermission>) => Array<PendingPermission>)) => void;
+  isResolvingFileReferences: boolean;
+  setIsResolvingFileReferences: (value: boolean) => void;
 }
 
 // --- Inline helpers (from App.tsx, used only in this hook) ---
@@ -291,27 +297,23 @@ export function useAgentTurn(deps: AgentTurnDeps) {
     activeSessionId,
     selectedChatModel,
     permissionState,
-    prompt,
-    fileReferences,
     updateSessionStream,
     setAssistantDebugBundles,
     refreshSessionContextUsage,
     currentBundleBySessionRef,
     setProjects,
-    setPrompt,
-    setFileReferences,
-    closeFileSuggestions,
     setError,
+    isRunningTurn,
+    setIsRunningTurn,
+    forkingMessageId,
+    setForkingMessageId,
+    isInterruptingTurn,
+    setIsInterruptingTurn,
+    pendingPermissions,
+    setPendingPermissions,
+    isResolvingFileReferences,
+    setIsResolvingFileReferences,
   } = deps;
-
-  const [isRunningTurn, setIsRunningTurn] = useState(false);
-  const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
-  const [isInterruptingTurn, setIsInterruptingTurn] = useState(false);
-  const [pendingPermissions, setPendingPermissions] = useState<
-    Array<PendingPermission>
-  >([]);
-  const [isResolvingFileReferences, setIsResolvingFileReferences] =
-    useState(false);
 
   const pendingPermission = activeSessionId
     ? (pendingPermissions.find(
@@ -366,10 +368,12 @@ export function useAgentTurn(deps: AgentTurnDeps) {
     [],
   );
 
-  const submitPrompt = useCallback(async () => {
-    const trimmed = prompt.trim();
+  const submitPrompt = useCallback(async (
+    input: { text: string; fileReferences: LocalFileReference[] },
+  ) => {
+    const trimmed = input.text.trim();
     if (
-      (!trimmed && fileReferences.length === 0) ||
+      (!trimmed && input.fileReferences.length === 0) ||
       !activeProject ||
       !activeSessionId ||
       isRunningTurn ||
@@ -379,7 +383,7 @@ export function useAgentTurn(deps: AgentTurnDeps) {
       return;
     }
 
-    const referencedFiles = fileReferences;
+    const referencedFiles = input.fileReferences;
     const displayPrompt =
       trimmed ||
       `请阅读这些引用文件：${referencedFiles.map((reference) => `@${reference.path}`).join(", ")}`;
@@ -390,6 +394,51 @@ export function useAgentTurn(deps: AgentTurnDeps) {
     let injectedFileReferences: import("../types").LocalFileReferenceSummary[] =
       [];
 
+    // 先渲染 pending 消息，避免 await 延迟
+    const pendingAssistantText = "Assistant is thinking…";
+    console.time('[submit] enter-to-sync');
+    setAssistantDebugBundles((bundles) => ({
+      ...bundles,
+      [pendingId]: {
+        messageId: pendingId,
+        modelCallIds: [],
+        sessionId: targetSessionId,
+        root: activeProject.root,
+        userMessage: displayPrompt,
+        transportMessage: inputForClaude,
+        fileReferences: undefined,
+        displayText: pendingAssistantText,
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+        completed: false,
+        events: [],
+      },
+    }));
+    console.time('[submit] sync: updateSessionStream + setIsRunningTurn');
+    updateSessionStream(targetSessionId, (items) => [
+      ...items,
+      {
+        id: `user-${Date.now()}`,
+        kind: "message",
+        role: "user",
+        text: displayPrompt,
+        links: [],
+        fileReferences: undefined,
+      },
+      {
+        id: pendingId,
+        kind: "message",
+        role: "assistant",
+        text: pendingAssistantText,
+        status: "streaming",
+      },
+    ]);
+    setIsRunningTurn(true);
+    setError(null);
+    console.timeEnd('[submit] sync: updateSessionStream + setIsRunningTurn');
+    console.timeEnd('[submit] enter-to-sync');
+
+    // 异步读取 @ 文件引用，然后更新 bundle 的 fileReferences
     setIsResolvingFileReferences(true);
     try {
       const referencePayload = await buildPromptWithLocalFileReferences(
@@ -403,32 +452,36 @@ export function useAgentTurn(deps: AgentTurnDeps) {
     } catch (reason) {
       setError(`Read referenced files failed: ${String(reason)}`);
       setIsResolvingFileReferences(false);
+      updateSessionStream(targetSessionId, (items) =>
+        items.map((item) =>
+          item.id === pendingId && item.kind === "message"
+            ? { ...item, text: `Agent turn failed: ${String(reason)}`, status: "complete" }
+            : item,
+        ),
+      );
+      setIsRunningTurn(false);
       return;
     }
     setIsResolvingFileReferences(false);
 
-    const pendingAssistantText = "Assistant is thinking…";
-
-    setAssistantDebugBundles((bundles) => ({
-      ...bundles,
-      [pendingId]: {
-        messageId: pendingId,
-        modelCallIds: [],
-        sessionId: targetSessionId,
-        root: activeProject.root,
-        userMessage: displayPrompt,
-        transportMessage: inputForClaude,
-        fileReferences:
-          injectedFileReferences.length > 0
-            ? injectedFileReferences
-            : undefined,
-        displayText: pendingAssistantText,
-        startedAt: Date.now(),
-        updatedAt: Date.now(),
-        completed: false,
-        events: [],
-      },
-    }));
+    // 有 @ 文件引用时更新 bundle 的 fileReferences
+    if (injectedFileReferences.length > 0) {
+      setAssistantDebugBundles((bundles) => {
+        const existing = bundles[pendingId];
+        if (!existing) return bundles;
+        return {
+          ...bundles,
+          [pendingId]: { ...existing, fileReferences: injectedFileReferences },
+        };
+      });
+      updateSessionStream(targetSessionId, (items) =>
+        items.map((item) =>
+          item.id.startsWith("user-")
+            ? { ...item, fileReferences: injectedFileReferences }
+            : item,
+        ),
+      );
+    }
 
     if (
       activeProject.sessions.find(
@@ -451,34 +504,6 @@ export function useAgentTurn(deps: AgentTurnDeps) {
         ),
       );
     }
-
-    updateSessionStream(targetSessionId, (items) => [
-      ...items,
-      {
-        id: `user-${Date.now()}`,
-        kind: "message",
-        role: "user",
-        text: displayPrompt,
-        links: [],
-        fileReferences:
-          injectedFileReferences.length > 0
-            ? injectedFileReferences
-            : undefined,
-      },
-      {
-        id: pendingId,
-        kind: "message",
-        role: "assistant",
-        text: pendingAssistantText,
-        status: "streaming",
-      },
-    ]);
-
-    setPrompt("");
-    setFileReferences(() => []);
-    closeFileSuggestions();
-    setIsRunningTurn(true);
-    setError(null);
 
     ensureAgentReplProcess(
       activeProject.root,
@@ -513,8 +538,6 @@ export function useAgentTurn(deps: AgentTurnDeps) {
         setIsRunningTurn(false);
       });
   }, [
-    prompt,
-    fileReferences,
     activeProject,
     activeSessionId,
     selectedChatModel,
@@ -526,9 +549,6 @@ export function useAgentTurn(deps: AgentTurnDeps) {
     setAssistantDebugBundles,
     currentBundleBySessionRef,
     setProjects,
-    setPrompt,
-    setFileReferences,
-    closeFileSuggestions,
     setError,
     clearPendingPermissionsForSession,
   ]);
