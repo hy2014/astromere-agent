@@ -546,7 +546,7 @@ function extractRenderCalls(fnNode: Node): RenderCallSite[] {
  * 从函数/渲染函数体中找出所有 renderView({view: Xxx, ...}) 调用，
  * 提取目标 View 的组件名。
  */
-function extractRenderViewTargets(node: Node): string[] {
+export function extractRenderViewTargets(node: Node): string[] {
     const targets: string[] = [];
 
     // 检查 node 本身是不是 renderView 调用（处理箭头表达式体）
@@ -993,33 +993,36 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
 
 // ========== CLI Entry ==========
 
-const args = process.argv.slice(2);
-const fileIndex = args.indexOf("--file");
-const fIndex = args.indexOf("-f");
-const cliFilePath = fileIndex !== -1 && args.length > fileIndex + 1
-    ? args[fileIndex + 1]
-    : fIndex !== -1 && args.length > fIndex + 1
-        ? args[fIndex + 1]
-        : null;
+const isMainModule = process.argv[1]?.endsWith("parser.ts") || process.argv[1]?.endsWith("parser/parser.ts");
+if (isMainModule) {
+    const args = process.argv.slice(2);
+    const fileIndex = args.indexOf("--file");
+    const fIndex = args.indexOf("-f");
+    const cliFilePath = fileIndex !== -1 && args.length > fileIndex + 1
+        ? args[fileIndex + 1]
+        : fIndex !== -1 && args.length > fIndex + 1
+            ? args[fIndex + 1]
+            : null;
 
-if (!cliFilePath) {
-    console.error("Usage: npx tsx parser/parser.ts --file <path>");
-    process.exit(1);
+    if (!cliFilePath) {
+        console.error("Usage: npx tsx parser/parser.ts --file <path>");
+        process.exit(1);
+    }
+
+    const allViews: ViewNode[] = [];
+    const allFns: FnDetail[] = [];
+
+    for (const filePath of [cliFilePath]) {
+        const { view, fns } = buildCodeGraph(filePath);
+        allViews.push(view);
+        allFns.push(...fns);
+    }
+
+    const graph: CodeGraph = {
+        version: new Date().toISOString(),
+        views: allViews,
+        fns: allFns,
+    };
+
+    console.log(JSON.stringify(graph, null, 2));
 }
-
-const allViews: ViewNode[] = [];
-const allFns: FnDetail[] = [];
-
-for (const filePath of [cliFilePath]) {
-    const { view, fns } = buildCodeGraph(filePath);
-    allViews.push(view);
-    allFns.push(...fns);
-}
-
-const graph: CodeGraph = {
-    version: new Date().toISOString(),
-    views: allViews,
-    fns: allFns,
-};
-
-console.log(JSON.stringify(graph, null, 2));
