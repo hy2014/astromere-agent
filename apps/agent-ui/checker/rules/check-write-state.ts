@@ -377,6 +377,24 @@ export function checkWriteState(
         }
     }
 
+    // 收集模块级非函数变量（let / var / const 非函数），这些不能作为调用目标
+    const moduleNonFnVars = new Set<string>();
+    for (const stmt of ctx.sourceFile.statements) {
+        if (ts.isVariableStatement(stmt)) {
+            for (const decl of stmt.declarationList.declarations) {
+                if (ts.isIdentifier(decl.name)) {
+                    const init = decl.initializer;
+                    // 跳过函数表达式 const fn = () => {} (已被 check-render-fns 禁止)
+                    if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) continue;
+                    // 跳过 useCallback/useMemo 包装
+                    if (init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) &&
+                        (init.expression.text === "useCallback" || init.expression.text === "useMemo")) continue;
+                    moduleNonFnVars.add(decl.name.text);
+                }
+            }
+        }
+    }
+
     // 扫描文件级函数（不包括 View）
     for (const stmt of ctx.sourceFile.statements) {
         let fn: ts.FunctionDeclaration | ts.ArrowFunction | undefined;
@@ -416,8 +434,24 @@ export function checkWriteState(
                 // 放行：WriteState
                 if (name === "WriteState") return;
 
-                // 放行：模块级函数名（renderMcpXxx 等）
-                if (moduleFnNames.has(name)) return;
+                // 放行：模块级函数名（白名单：fn() 调用、foo(fn) 传参、{ key: fn } 值、onClick={fn}、obj.method）
+                if (moduleFnNames.has(name)) {
+                    const parent = node.parent;
+                    const isCall = parent && ts.isCallExpression(parent);
+                    const isPropValue = parent && (ts.isPropertyAssignment(parent) || ts.isShorthandPropertyAssignment(parent));
+                    const isJsxValue = parent && ts.isJsxExpression(parent);
+                    const isPropName = parent && ts.isPropertyAccessExpression(parent) && parent.name === node;
+                    if (isCall || isPropValue || isJsxValue || isPropName) {
+                        return; // 白名单内，放行
+                    }
+                    // 不在白名单内
+                    ctx.addViolation(
+                        "WriteState 规范",
+                        `函数 "${name}" 不能当作对象使用`,
+                        node,
+                    );
+                    return;
+                }
 
                 // 放行：参数 / 局部变量
                 if (localNames.has(name)) return;
@@ -425,8 +459,19 @@ export function checkWriteState(
                 // 放行：属性访问的 property 名（.map, .trim, .name 等）
                 if (node.parent && ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) return;
 
-                // 放行：函数调用目标 foo(...)
-                if (node.parent && ts.isCallExpression(node.parent) && node.parent.expression === node) return;
+                // 放行：函数调用目标 foo(...)（仅限不可变函数）
+                if (node.parent && ts.isCallExpression(node.parent) && node.parent.expression === node) {
+                    // 如果调用的目标是模块级 mutable 变量（let/var），仍然报违规
+                    if (moduleNonFnVars.has(name)) {
+                        ctx.addViolation(
+                            "WriteState 规范",
+                            `文件级函数调用了模块级变量 "${name}"，const/let 变量不能作为函数调用`,
+                            node,
+                        );
+                        return;
+                    }
+                    return;
+                }
 
                 // 放行：JSX 标签 <div>, <span>, </div>
                 if (node.parent && (ts.isJsxOpeningElement(node.parent) || ts.isJsxSelfClosingElement(node.parent) || ts.isJsxClosingElement(node.parent))) return;
@@ -452,6 +497,9 @@ export function checkWriteState(
                     "console", "parseInt", "parseFloat", "isNaN", "isFinite", "decodeURI", "encodeURI",
                 ]);
                 if (GLOBALS.has(name)) return;
+
+                // 放行：外部 viewFn（经过跨文件解析确认）
+                if (ctx.importedViewFns.has(name)) return;
 
                 // 违规：引用了外部变量
                 ctx.addViolation(

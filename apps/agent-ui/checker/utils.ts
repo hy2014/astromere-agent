@@ -1,5 +1,7 @@
 // checker/utils.ts
 import * as ts from "typescript";
+import * as fs from "fs";
+import * as path from "path";
 import {RuleContext} from "./types";
 
 /**
@@ -193,4 +195,146 @@ export function isDepCall(node: ts.Node): boolean {
     return ts.isCallExpression(node) &&
         ts.isIdentifier(node.expression) &&
         node.expression.text === "dep";
+}
+
+/**
+ * 解析 import 声明，确认导入的组件是否确实是其他文件的 viewFn
+ * 只解析相对路径（./ ../），跳过 node_modules
+ */
+export function resolveImportedViewFns(sourceFile: ts.SourceFile, fsPath: string): Set<string> {
+    const viewFnNames = new Set<string>();
+    const dir = path.dirname(fsPath);
+
+    function checkFile(targetFile: string, name: string): boolean {
+        if (!fs.existsSync(targetFile)) return false;
+        try {
+            const sourceCode = fs.readFileSync(targetFile, "utf-8");
+            const sf = ts.createSourceFile(targetFile, sourceCode, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+            const dummyCtx = { violations: [], addViolation: () => {} } as unknown as RuleContext;
+            const result = collectPropVars(sf, dummyCtx);
+            if (!result.viewFn) return false;
+
+            let fnName: string | undefined;
+            if (ts.isFunctionDeclaration(result.viewFn) && result.viewFn.name) {
+                fnName = result.viewFn.name.text;
+            } else if (
+                result.viewFn.parent &&
+                ts.isVariableDeclaration(result.viewFn.parent) &&
+                ts.isIdentifier(result.viewFn.parent.name)
+            ) {
+                fnName = result.viewFn.parent.name.text;
+            }
+
+            return fnName === name;
+        } catch {
+            return false;
+        }
+    }
+
+    function resolvePath(modulePath: string, names: string[]) {
+        const base = path.resolve(dir, modulePath);
+
+        // 尝试直接文件：.tsx / .ts
+        for (const ext of [".tsx", ".ts"]) {
+            const target = base + ext;
+            for (const name of names) {
+                if (checkFile(target, name)) {
+                    viewFnNames.add(name);
+                }
+            }
+            if ([...viewFnNames].some(n => names.includes(n))) return; // 找到了就不继续
+        }
+
+        // 尝试 index 文件：dir/index.tsx / dir/index.ts
+        for (const ext of [".tsx", ".ts"]) {
+            const target = path.join(base, "index" + ext);
+            for (const name of names) {
+                if (checkFile(target, name)) {
+                    viewFnNames.add(name);
+                }
+            }
+            if ([...viewFnNames].some(n => names.includes(n))) return;
+        }
+    }
+
+    for (const stmt of sourceFile.statements) {
+        if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+
+        const modulePath = stmt.moduleSpecifier.text;
+        // 只解析相对路径
+        if (!modulePath.startsWith(".")) continue;
+
+        const names: string[] = [];
+        if (stmt.importClause) {
+            // import XxxView from "..."
+            if (stmt.importClause.name) {
+                names.push(stmt.importClause.name.text);
+            }
+            // import { XxxView } from "..."
+            if (stmt.importClause.namedBindings && ts.isNamedImports(stmt.importClause.namedBindings)) {
+                for (const spec of stmt.importClause.namedBindings.elements) {
+                    names.push(spec.name.text);
+                }
+            }
+        }
+
+        if (names.length > 0) {
+            resolvePath(modulePath, names);
+        }
+    }
+
+    return viewFnNames;
+}
+
+/**
+ * 解析 import 的 viewFn 的目标文件，返回它的 Props 接口字段名
+ */
+export function getViewFnPropNames(
+    viewFnName: string,
+    sourceFile: ts.SourceFile,
+    fsPath: string,
+): Set<string> | null {
+    const dir = path.dirname(fsPath);
+
+    function tryFile(targetFile: string): Set<string> | null {
+        if (!fs.existsSync(targetFile)) return null;
+        try {
+            const code = fs.readFileSync(targetFile, "utf-8");
+            const sf = ts.createSourceFile(targetFile, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+            const dummyCtx = { violations: [], addViolation: () => {} } as unknown as RuleContext;
+            const result = collectPropVars(sf, dummyCtx);
+            return result.propVars.size > 0 ? new Set(result.propVars) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    for (const stmt of sourceFile.statements) {
+        if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+        if (!stmt.importClause) continue;
+
+        // 检查这个 import 里是否包含目标 viewFn 名
+        let hasName = false;
+        if (stmt.importClause.name && stmt.importClause.name.text === viewFnName) hasName = true;
+        if (!hasName && stmt.importClause.namedBindings && ts.isNamedImports(stmt.importClause.namedBindings)) {
+            hasName = stmt.importClause.namedBindings.elements.some(spec => spec.name.text === viewFnName);
+        }
+        if (!hasName) continue;
+
+        const modulePath = stmt.moduleSpecifier.text;
+        if (!modulePath.startsWith(".")) return null;
+
+        const base = path.resolve(dir, modulePath);
+
+        for (const ext of [".tsx", ".ts"]) {
+            const result = tryFile(base + ext);
+            if (result) return result;
+        }
+        for (const ext of [".tsx", ".ts"]) {
+            const result = tryFile(path.join(base, "index" + ext));
+            if (result) return result;
+        }
+        break;
+    }
+    return null;
 }

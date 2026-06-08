@@ -289,4 +289,32 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
         ts.forEachChild(node, checkEventsShorthand);
     }
     checkEventsShorthand(ctx.sourceFile);
+
+    // ════════════════════════════════════════════════════════
+    // 规则 6：禁止所有函数参数使用默认值，必须显式传参
+    // 常量默认值（数字、字符串、布尔值等）豁免
+    // ════════════════════════════════════════════════════════
+    function isConstantLiteral(expr: ts.Expression): boolean {
+        return ts.isStringLiteral(expr) ||
+            ts.isNumericLiteral(expr) ||
+            expr.kind === ts.SyntaxKind.TrueKeyword ||
+            expr.kind === ts.SyntaxKind.FalseKeyword ||
+            expr.kind === ts.SyntaxKind.NullKeyword;
+    }
+
+    function checkNoDefaultParams(node: ts.Node) {
+        if (ts.isFunctionDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
+            for (const param of node.parameters) {
+                if (param.initializer && !isConstantLiteral(param.initializer)) {
+                    ctx.addViolation(
+                        "函数参数规范",
+                        `函数参数不允许有默认值（"${param.name.getText()}"），所有数据必须通过参数显式传递`,
+                        param.initializer,
+                    );
+                }
+            }
+        }
+        ts.forEachChild(node, checkNoDefaultParams);
+    }
+    checkNoDefaultParams(ctx.sourceFile);
 }
