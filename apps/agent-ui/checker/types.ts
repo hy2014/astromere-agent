@@ -17,5 +17,7 @@ export interface RuleContext {
     stateVars: Set<string>;
     propVars: Set<string>;
     memoVars: Set<string>;
+    importedViewFns: Set<string>;
+    typeChecker?: ts.TypeChecker;
     addViolation: (rule: string, message: string, node?: ts.Node) => void;
 }

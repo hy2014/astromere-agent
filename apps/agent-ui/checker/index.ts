@@ -7,19 +7,54 @@ import * as ts from "typescript";
 import { checkRenderFns } from "./rules/check-render-fns";
 
 import { Violation, RuleContext } from "./types";
-import { getCodeLine, collectStateVars, collectPropVars } from "./utils";
+import { getCodeLine, collectStateVars, collectPropVars, resolveImportedViewFns } from "./utils";
 import {checkViewLayer} from "./rules/check-view-layer";
 import {checkWriteState} from "./rules/check-write-state";
 import {checkRenderView} from "./rules/check-render-view";
+import {checkUseCallback} from "./rules/check-use-callback";
+import {checkPropsFlow} from "./rules/check-props-flow";
 
 // ...
-export function check(sourceCode: string, fileName: string = "component.tsx"): Violation[] {
-    const sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+export function check(sourceCode: string, fileName: string = "component.tsx", fsPath?: string): Violation[] {
+    let sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const stateVars = collectStateVars(sourceFile);
 
     const violations: Violation[] = [];
     const propVars = new Set<string>();
     const memoVars = new Set<string>();
+
+    // 创建 TypeChecker（不解析 node_modules，仅当前文件的类型即可）
+    let typeChecker: ts.TypeChecker | undefined;
+    if (fsPath) {
+        try {
+            const projectRoot = path.dirname(fsPath);
+            let configPath: string | undefined;
+            let dir = projectRoot;
+            while (dir.length > 1) {
+                const candidate = path.join(dir, "tsconfig.json");
+                if (fs.existsSync(candidate)) { configPath = candidate; break; }
+                dir = path.dirname(dir);
+            }
+            let parsedConfig: ts.ParsedCommandLine;
+            if (configPath) {
+                const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
+                parsedConfig = ts.parseJsonConfigFileContent(configFile.config, ts.sys, path.dirname(configPath));
+            } else {
+                parsedConfig = ts.parseJsonConfigFileContent({ compilerOptions: { target: ts.ScriptTarget.Latest, jsx: ts.JsxEmit.ReactJSX } }, ts.sys, projectRoot);
+            }
+            parsedConfig.options.skipLibCheck = true;
+            parsedConfig.options.skipDefaultLibCheck = true;
+            parsedConfig.options.noUnusedLocals = false;
+            parsedConfig.options.noUnusedParameters = false;
+            const host = ts.createCompilerHost(parsedConfig.options);
+            const program = ts.createProgram([fsPath], parsedConfig.options, host);
+            typeChecker = program.getTypeChecker();
+            const programSf = program.getSourceFile(fsPath);
+            if (programSf) sourceFile = programSf;
+        } catch {
+            // TypeChecker 不可用时优雅降级
+        }
+    }
 
     const ctx: RuleContext = {
         sourceFile,
@@ -28,6 +63,8 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
         stateVars,
         propVars,
         memoVars,
+        importedViewFns: new Set<string>(),
+        typeChecker,
         addViolation(rule: string, message: string, node?: ts.Node) {
             const line = node
                 ? sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1
@@ -41,6 +78,12 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
             });
         },
     };
+
+    // 解析 import 的 viewFn（跨文件确认）
+    if (fsPath) {
+        const importedViewFns = resolveImportedViewFns(sourceFile, fsPath);
+        importedViewFns.forEach(v => ctx.importedViewFns.add(v));
+    }
 
     const result = collectPropVars(sourceFile, ctx);
     result.propVars.forEach(v => ctx.propVars.add(v));
@@ -95,10 +138,12 @@ export function check(sourceCode: string, fileName: string = "component.tsx"): V
         console.log(`   轻量计算（简单取值、拼接、比较等）建议直接写在 renderFn 内部，不需要 memo 槽位。\n`);
     }
 
-    checkRenderFns(ctx);
+    checkRenderFns(ctx, result.viewFn);
     checkViewLayer(ctx, result.viewFn)
     checkWriteState(ctx, result.viewFn);
-    checkRenderView(ctx, result.viewFn);
+    checkRenderView(ctx, result.viewFn, fsPath);
+    checkUseCallback(ctx, result.viewFn);
+    checkPropsFlow(ctx, result.viewFn);
     violations.sort((a, b) => (a.line || 0) - (b.line || 0));
     return violations.slice(0, 100);
 }
@@ -135,10 +180,44 @@ function main() {
 
     const sourceCode = fs.readFileSync(absolutePath, "utf-8");
     const fileName = path.basename(absolutePath);
-    const violations = check(sourceCode, fileName);
+    const violations = check(sourceCode, fileName, absolutePath);
 
     if (violations.length > 0) {
-        console.log(`\n❌ 发现 ${violations.length} 条违规：\n`);
+        console.log(`
+╔══════════════════════════════════════════════════════════════════════╗
+║                      View 架构核心规则                              ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+────────────────────────────────────────────────────────────────────
+三层渲染模型
+────────────────────────────────────────────────────────────────────
+  View (React 组件)      → 根节点，声明 state/props/events/memo 四槽
+  renderFn(state, props,  → 中间层，渲染逻辑从 View 提取
+            events, memo)
+  renderView({ fn, props }) → 叶子节点，调其他文件的 View 组件
+
+────────────────────────────────────────────────────────────────────
+数据流原则：层层传递，单向追溯
+────────────────────────────────────────────────────────────────────
+  1. View 定义四种槽的合法值
+  2. render() 调用只能从父层同名槽取子集下传
+  3. renderView 的 props 只能来自当前层的 state/props/events
+  4. 不能跨槽传递，不能凭空计算，不能用 any 跳过检查
+  5. checker 的作用：强制数据溯源。每条违规都意味着数据来源不可追踪
+
+────────────────────────────────────────────────────────────────────
+禁止做的操作
+────────────────────────────────────────────────────────────────────
+  • state: any / props: any / events: any / memo: any（断溯源）
+  • 不经过 renderFn 直接调用 View 组件
+  • 不在最外层定义的函数引用外部变量（包括默认参数绕过）
+  • renderFn 内部禁止 hooks
+  • View 组件不能出现在函数参数中
+
+────────────────────────────────────────────────────────────────────
+`);
+
+        console.log(`❌ 发现 ${violations.length} 条违规：\n`);
         violations.forEach((v, idx) => {
             console.log(`  ${idx + 1}. [${v.rule}] ${v.message}`);
             if (v.line) console.log(`     行 ${v.line}: ${v.codeLine}`);

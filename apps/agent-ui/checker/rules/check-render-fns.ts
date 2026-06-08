@@ -12,13 +12,16 @@ function getCheckFns(sourceFile: ts.SourceFile): string[] {
 }
 
 function unwrapParenthesized(expr: ts.Expression): ts.Expression {
-    while (ts.isParenthesizedExpression(expr)) {
-        expr = expr.expression;
+    while (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr) || ts.isNonNullExpression(expr) || ts.isSatisfiesExpression(expr)) {
+        if (ts.isParenthesizedExpression(expr)) expr = expr.expression;
+        else if (ts.isAsExpression(expr)) expr = expr.expression;
+        else if (ts.isNonNullExpression(expr)) expr = expr.expression;
+        else if (ts.isSatisfiesExpression(expr)) expr = expr.expression;
     }
     return expr;
 }
 
-function isRenderFn(node: ts.Node): node is ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression {
+export function isRenderFn(node: ts.Node): node is ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression {
     if (!ts.isFunctionDeclaration(node) && !ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) {
         return false;
     }
@@ -27,8 +30,8 @@ function isRenderFn(node: ts.Node): node is ts.FunctionDeclaration | ts.ArrowFun
     if (!ts.isObjectBindingPattern(params[0].name)) return false;  // state
     if (!ts.isObjectBindingPattern(params[1].name)) return false;  // props
     if (!ts.isObjectBindingPattern(params[2].name) && !ts.isArrayBindingPattern(params[2].name)) return false;  // events
-    if (params.length >= 4 && !ts.isIdentifier(params[3].name)) return false;  // ext
-    if (params.length === 5 && !ts.isObjectBindingPattern(params[4].name)) return false;  // memo
+    if (params.length >= 4 && !ts.isIdentifier(params[3].name) && !ts.isObjectBindingPattern(params[3].name)) return false;  // memo or empty
+    if (params.length >= 5 && !ts.isObjectBindingPattern(params[4].name)) return false;  // memo (second slot, 5‑param overload)
     return true;
 }
 
@@ -88,7 +91,7 @@ function getRenderFnName(node: ts.Node): string {
     return "anonymous";
 }
 
-export function checkRenderFns(ctx: RuleContext): void {
+export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration | ts.ArrowFunction | null): void {
     const checkClassNames = getCheckFns(ctx.sourceFile);
 
     const renderFns: RenderFnInfo[] = [];
@@ -111,11 +114,12 @@ export function checkRenderFns(ctx: RuleContext): void {
             const eventsParams = ts.isObjectBindingPattern(eventsName)
                 ? getBindingNames(eventsName)
                 : getArrayBindingNames(eventsName as ts.ArrayBindingPattern);
-            const extParamName = node.parameters.length >= 4 && ts.isIdentifier(node.parameters[3].name)
-                ? (node.parameters[3].name as ts.Identifier).text
-                : undefined;
-            const memoParams = node.parameters.length === 5
-                ? getBindingNames(node.parameters[4].name as ts.ObjectBindingPattern)
+            const memoParams = node.parameters.length >= 4 && ts.isObjectBindingPattern(node.parameters[3].name)
+                ? getBindingNames(node.parameters[3].name)
+                : node.parameters.length >= 4 && ts.isIdentifier(node.parameters[3].name) && node.parameters[3].name.text === "memo" && node.parameters[3].type && ts.isTypeLiteralNode(node.parameters[3].type)
+                ? node.parameters[3].type.members
+                    .filter((m): m is ts.PropertySignature & { name: ts.Identifier } => ts.isPropertySignature(m) && ts.isIdentifier(m.name))
+                    .map(m => m.name.text)
                 : [];
 
             const body = getFunctionBody(node);
@@ -152,7 +156,6 @@ export function checkRenderFns(ctx: RuleContext): void {
                 stateParams,
                 propsParams,
                 eventsParams,
-                extParamName,
                 memoParams,
                 rootClassName,
             });
@@ -161,6 +164,133 @@ export function checkRenderFns(ctx: RuleContext): void {
     }
 
     collect(ctx.sourceFile);
+
+    // ════════════════════════════════════════════════════════
+    // 规则: 禁止 const 箭头函数/函数表达式，必须用 function 声明
+    // ════════════════════════════════════════════════════════
+    for (const stmt of ctx.sourceFile.statements) {
+        if (ts.isVariableStatement(stmt)) {
+            for (const decl of stmt.declarationList.declarations) {
+                if (ts.isIdentifier(decl.name) && decl.initializer) {
+                    const init = decl.initializer;
+                    let isFn = false;
+                    // 直接是箭头/函数表达式
+                    if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
+                        isFn = true;
+                    }
+                    // useMemo 返回函数
+                    if (ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === "useMemo" && init.arguments.length > 0) {
+                        const callback = init.arguments[0];
+                        if (callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) {
+                            const body = callback.body;
+                            const returnValue = ts.isBlock(body)
+                                ? body.statements.filter(ts.isReturnStatement).find(s => s.expression)?.expression
+                                : body;
+                            if (returnValue && (ts.isArrowFunction(returnValue) || ts.isFunctionExpression(returnValue))) {
+                                isFn = true;
+                            }
+                        }
+                    }
+                    if (isFn) {
+                        ctx.addViolation(
+                            "函数声明规范",
+                            `"${decl.name.text}" 是函数，应使用 function 声明而不是 const 赋值`,
+                            decl,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // 规则: 返回 JSX 的函数必须符合 renderFn 规范
+    // 纯 AST 静态分析，不依赖 TypeChecker，不被 `: any` 绕过
+    // ════════════════════════════════════════════════════════
+
+    // ── Helper: 判断表达式是否包含 JSX ──
+    function expressionContainsJSX(expr: ts.Expression): boolean {
+        expr = unwrapParenthesized(expr);
+        if (ts.isJsxElement(expr) || ts.isJsxSelfClosingElement(expr) || ts.isJsxFragment(expr)) {
+            return true;
+        }
+        // 三元表达式：递归检查两个分支
+        if (ts.isConditionalExpression(expr)) {
+            return expressionContainsJSX(expr.whenTrue) || expressionContainsJSX(expr.whenFalse);
+        }
+        return false;
+    }
+
+    // ── Helper: 判断函数体是否返回 JSX（不穿透内层函数） ──
+    function functionReturnsJSX(fn: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): boolean {
+        const body = fn.body;
+        if (!body) return false;
+
+        // 箭头函数表达式体: () => <div/>
+        if (!ts.isBlock(body)) {
+            return expressionContainsJSX(body);
+        }
+
+        // 块体：搜索所有 return 语句
+        let found = false;
+        function walk(node: ts.Node) {
+            if (found) return;
+            // 不穿透内层函数（它们有自己的 return）
+            if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node)) && node !== fn) {
+                return;
+            }
+            if (ts.isReturnStatement(node) && node.expression && expressionContainsJSX(node.expression)) {
+                found = true;
+                return;
+            }
+            ts.forEachChild(node, walk);
+        }
+        walk(body);
+        return found;
+    }
+
+    const renderFnNamesSet = new Set(renderFns.map(rf => rf.name));
+
+    function checkReturnType(node: ts.Node, name?: string) {
+        // 跳过 View 组件（React 组件，不需要 renderFn 签名）
+        if (viewFn) {
+            if (ts.isFunctionDeclaration(node) && node === viewFn) return;
+            if (ts.isVariableDeclaration(node) && node.initializer === viewFn) return;
+        }
+
+        // 跳过已识别的 renderFn
+        if (name && renderFnNamesSet.has(name)) return;
+
+        let fn: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | undefined;
+        if (ts.isFunctionDeclaration(node)) fn = node;
+        else if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) fn = node;
+        else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+            (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+            fn = node.initializer;
+            name = name || node.name.text;
+        }
+
+        if (!fn || !name) return;
+
+        if (functionReturnsJSX(fn)) {
+            ctx.addViolation(
+                "renderFn 规范",
+                `"${name}" 返回 JSX，应改为符合 renderFn 规范的函数（参数: state, props, events, memo）并通过 render() 调用`,
+                fn,
+            );
+        }
+    }
+
+    for (const stmt of ctx.sourceFile.statements) {
+        if (ts.isFunctionDeclaration(stmt)) {
+            checkReturnType(stmt, stmt.name?.text);
+        }
+        if (ts.isVariableStatement(stmt)) {
+            for (const decl of stmt.declarationList.declarations) {
+                if (ts.isIdentifier(decl.name)) checkReturnType(decl, decl.name.text);
+            }
+        }
+    }
 
     // ── 调用位置检查（无需 renderFn 被识别也执行） ──
 
@@ -269,6 +399,112 @@ export function checkRenderFns(ctx: RuleContext): void {
         ts.forEachChild(node, checkEventsConfig);
     }
     checkEventsConfig(ctx.sourceFile);
+
+    // ════════════════════════════════════════════════════════
+    // 规则: render() 的 state/props/events/memo 必须是调用者的子集
+    // 层层检查：renderFn1 调 renderFn2 时，传的值必须在 renderFn1 的对应参数中存在
+    // ════════════════════════════════════════════════════════
+    function checkRenderSlotSubsets(node: ts.Node) {
+        if (ts.isCallExpression(node)) {
+            const callee = node.expression;
+            const isRender = (ts.isIdentifier(callee) && callee.text === "render") ||
+                (ts.isPropertyAccessExpression(callee) && callee.name.text === "render");
+            if (!isRender || node.arguments.length < 1) { ts.forEachChild(node, checkRenderSlotSubsets); return; }
+
+            const arg0 = node.arguments[0];
+            if (!arg0 || !ts.isObjectLiteralExpression(arg0)) { ts.forEachChild(node, checkRenderSlotSubsets); return; }
+
+            // 找调用者（向上找最近的函数声明）
+            let callingFn: ts.Node | null = null;
+            let cur: ts.Node | undefined = node.parent;
+            while (cur) {
+                if (ts.isFunctionDeclaration(cur) || ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) {
+                    callingFn = cur;
+                    break;
+                }
+                cur = cur.parent;
+            }
+
+            const inRenderFn = callingFn ? isRenderFn(callingFn) : false;
+
+            // 获取调用者的各槽位可用 key
+            let callerStateKeys: Set<string>;
+            let callerPropsKeys: Set<string>;
+            let callerEventsKeys: Set<string>;
+            let callerMemoKeys: Set<string>;
+
+            if (inRenderFn && callingFn) {
+                const params = (callingFn as ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression).parameters;
+                callerStateKeys = new Set(
+                    params.length >= 1 && ts.isObjectBindingPattern(params[0].name)
+                        ? getBindingNames(params[0].name) : []
+                );
+                callerPropsKeys = new Set(
+                    params.length >= 2 && ts.isObjectBindingPattern(params[1].name)
+                        ? getBindingNames(params[1].name) : []
+                );
+                callerEventsKeys = new Set(
+                    params.length >= 3 && ts.isObjectBindingPattern(params[2].name)
+                        ? getBindingNames(params[2].name)
+                        : params.length >= 3 && ts.isArrayBindingPattern(params[2].name)
+                            ? getArrayBindingNames(params[2].name as ts.ArrayBindingPattern) : []
+                );
+                callerMemoKeys = new Set(
+                    params.length >= 4 && ts.isObjectBindingPattern(params[3].name)
+                        ? getBindingNames(params[3].name) : []
+                );
+            } else {
+                // View 层：不限制 events 来源，只校验 state/props/memo
+                callerStateKeys = ctx.stateVars;
+                callerPropsKeys = ctx.propVars;
+                callerEventsKeys = new Set<string>(); // 空集合 = 不校验 events
+                callerMemoKeys = ctx.memoVars;
+            }
+
+            const slotMap: Record<string, Set<string>> = {
+                state: callerStateKeys,
+                props: callerPropsKeys,
+                events: callerEventsKeys,
+                memo: callerMemoKeys,
+            };
+
+            for (const [slotName, callerKeys] of Object.entries(slotMap)) {
+                if (callerKeys.size === 0 && slotName === "events") continue; // View 层 events 不校验
+                const slotProp = arg0.properties.find(
+                    p => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === slotName
+                ) as ts.PropertyAssignment | undefined;
+                if (!slotProp) continue;
+
+                const slotObj = unwrapParenthesized(slotProp.initializer);
+                if (!slotObj || !ts.isObjectLiteralExpression(slotObj)) continue;
+
+                for (const prop of slotObj.properties) {
+                    let key: string | undefined;
+                    if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+                        key = prop.name.text;
+                    } else if (ts.isShorthandPropertyAssignment(prop)) {
+                        key = prop.name.text;
+                    } else if (ts.isSpreadAssignment(prop)) {
+                        ctx.addViolation(
+                            "render 子集检查",
+                            `render() 的 ${slotName} 中不允许使用 spread（...），破坏 slot 键级追踪`,
+                            prop
+                        );
+                        continue;
+                    }
+                    if (key && !callerKeys.has(key)) {
+                        ctx.addViolation(
+                            "render 子集检查",
+                            `render() 的 ${slotName} 中 "${key}" 未在调用方的 ${slotName} 参数中声明`,
+                            prop
+                        );
+                    }
+                }
+            }
+        }
+        ts.forEachChild(node, checkRenderSlotSubsets);
+    }
+    checkRenderSlotSubsets(ctx.sourceFile);
 
     if (renderFns.length === 0) return;
 
