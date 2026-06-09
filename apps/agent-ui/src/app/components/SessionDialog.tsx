@@ -1,29 +1,17 @@
 /* @checkFns detail-panel */
-import {useState, useEffect, useMemo, useCallback} from "react";
-import type {
-  AgentPermissionState,
-  StreamItem,
-  StreamLink,
-} from "../../types";
-import type {LocalFileReference, PreviewTab, ProjectFolder, DebugStreamEvent} from "../types";
+import {useCallback, useEffect, useMemo, useState} from "react";
+import type {AgentPermissionState, StreamItem, StreamLink,} from "../../types";
+import type {LocalFileReference, PreviewTab, ProjectFolder} from "../types";
 import {render, renderView} from "../../core/dep";
 import {PreviewPanelView} from "./PreviewPanel";
 import {PromptInputAreaView} from "./PromptInputArea";
 import {MessagesStreamView} from "./messages-stream";
 import {assistantTurnTimeline, compactCountLabel} from "../debug-utils";
 import {formatDebugTime} from "../file-utils";
-import {SessionUsageDashboardView} from "./usage-components";
-import {
-  ensureAgentReplProcess,
-  sendAgentReplInput,
-  interruptAgentTurn,
-} from "../../runtime";
-import {
-  startStreamEventListener,
-  getSessionData,
-  addCallback,
-} from "../../hooks/stream-event-bus";
+import {ensureAgentReplProcess, interruptAgentTurn, sendAgentReplInput,} from "../../runtime";
+import {addCallback, getSessionData, startStreamEventListener,} from "../../hooks/stream-event-bus";
 import {queryItemList} from "../stream-handlers/message-detail";
+
 // ─── Props interface ─────────────────────────────────────────────────────
 
 export interface SessionDialogProps {

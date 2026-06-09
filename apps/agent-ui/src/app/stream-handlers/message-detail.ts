@@ -1,10 +1,7 @@
-import type { AgentReplStreamEvent } from "../../types";
-import type { DebugStreamEvent } from "../types";
-import {
-  createDebugEvent,
-  modelCallIdFromEvent,
-} from "../stream-processor";
-import { getSessionData } from "../../hooks/stream-event-bus";
+import type {AgentReplStreamEvent} from "../../types";
+import type {DebugStreamEvent} from "../types";
+import {createDebugEvent, modelCallIdFromEvent,} from "../stream-processor";
+import {getSessionData} from "../../hooks/stream-event-bus";
 
 // ── Types ──────────────────────────────────────────────────────────────
 

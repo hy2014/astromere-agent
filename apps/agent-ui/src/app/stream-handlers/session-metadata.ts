@@ -1,4 +1,4 @@
-import type { AgentReplStreamEvent } from "../../types";
+import type {AgentReplStreamEvent} from "../../types";
 
 export type SessionMetadataEvent = {
   processStatus?: "active" | "stopped";

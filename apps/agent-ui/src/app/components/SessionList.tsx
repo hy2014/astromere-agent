@@ -1,9 +1,6 @@
 /* @checkFns tree-branch */
 import {useState} from "react";
-import type {
-  ProjectFolder,
-  ProjectSession,
-} from "../types";
+import type {ProjectFolder, ProjectSession,} from "../types";
 import {render} from "../../core/dep";
 
 // ─── SessionList ────────────────────────────────────────────────────────

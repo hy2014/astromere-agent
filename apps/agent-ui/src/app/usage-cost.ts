@@ -1,5 +1,5 @@
 import type {AgentContextUsage, AgentReplStreamEvent, ModelSettings} from "../types";
-import type {BundleUsageSnapshot, BundleUsageTotals, ModelCallUsageSnapshot, ModelCallUsage} from "../tauri";
+import type {BundleUsageSnapshot, BundleUsageTotals, ModelCallUsage, ModelCallUsageSnapshot} from "../tauri";
 import type {
   AssistantMessageDebugBundle,
   BundleUsageModelCost,

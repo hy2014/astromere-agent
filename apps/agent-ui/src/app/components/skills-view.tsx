@@ -1,5 +1,5 @@
 /* @checkFns skills-installed-view */
-import {useEffect, useMemo, useState} from "react";
+import {useEffect, useState} from "react";
 import {listSkills} from "../../runtime";
 import type {SkillsReport, SkillSummary} from "../../types";
 import type {ProjectFolder, SkillViewMode} from "../types";

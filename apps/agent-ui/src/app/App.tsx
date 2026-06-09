@@ -2,33 +2,30 @@ import {open as openDialog} from "@tauri-apps/plugin-dialog";
 import {useEffect, useMemo, useRef, useState} from "react";
 import type {RemoteProfile} from "../runtime";
 import {
-  addWorkspaceRegistryEntry,
-  forkAgentReplProcess,
-  getAgentPermissionState,
-  getAgentReplProcessStatus,
-  getDefaultWorkspace,
-  killAgentReplProcess,
-  listRuntimeSessions,
-  loadModelSettings,
-  loadTypedRuntimeSession,
-  loadWorkspaceRegistry,
-  openWorkspace,
-  readGitDiff,
-  readLocalReferenceFile,
-  readWorkspaceFile,
-  removeWorkspaceRegistryEntry,
-  setAgentPermissionMode,
+    addWorkspaceRegistryEntry,
+    forkAgentReplProcess,
+    getAgentPermissionState,
+    getDefaultWorkspace,
+    killAgentReplProcess,
+    listRuntimeSessions,
+    loadModelSettings,
+    loadWorkspaceRegistry,
+    openWorkspace,
+    readGitDiff,
+    readLocalReferenceFile,
+    readWorkspaceFile,
+    removeWorkspaceRegistryEntry,
+    setAgentPermissionMode,
 } from "../runtime";
 import "../styles/mcp.css";
 import "./App.css";
-import {setEventHandle} from "../hooks/stream-event-bus";
-import {addCallback} from "../hooks/stream-event-bus";
+import {addCallback, setEventHandle} from "../hooks/stream-event-bus";
 import type {SessionMetadataEvent} from "./stream-handlers/session-metadata";
+import {handleSessionMetadataEvent} from "./stream-handlers/session-metadata";
 import {handleControlRequestEvent} from "./stream-handlers/control-request";
 import {handleCompactingEvent} from "./stream-handlers/compacting";
 import {handleContextUsageEvent} from "./stream-handlers/context-usage";
 import {handleSessionStatusEvent} from "./stream-handlers/turn-status";
-import {handleSessionMetadataEvent} from "./stream-handlers/session-metadata";
 import {TerminalView} from "./Terminal";
 import {RemoteTerminalPlaceholder} from "./RemoteTerminalPlaceholder";
 import {SkillsView} from "./components/skills-view";
@@ -37,44 +34,34 @@ import {SettingsView} from "./components/settings-view";
 import {SessionDialogView} from "./components/SessionDialog";
 import {WorkspaceTreeView} from "./components/workspace-tree";
 import {
-  createPendingSession,
-  dedupeSessions,
-  firstUserTitleFromStream,
-  hiddenSessionsStorageKey,
-  isNewSessionId,
-  loadHiddenSessions,
-  projectIdFromRoot,
-  sessionKey,
-  sessionsFromRuntimeSummaries,
-  uniqueHiddenSessions,
-  welcomeStream,
+    createPendingSession,
+    dedupeSessions,
+    firstUserTitleFromStream,
+    hiddenSessionsStorageKey,
+    isNewSessionId,
+    loadHiddenSessions,
+    projectIdFromRoot,
+    sessionKey,
+    sessionsFromRuntimeSummaries,
+    uniqueHiddenSessions,
 } from "./session";
 import {
-  clientDebugLog,
-  debugStorageSource,
-  debugStorageSourceCounts,
-  loadActiveRemoteProfileSnapshot,
-  loadTypedRuntimeSessionWithRetry,
-  shouldReadAsLocalReference,
+    clientDebugLog,
+    loadActiveRemoteProfileSnapshot,
+    loadTypedRuntimeSessionWithRetry,
+    shouldReadAsLocalReference,
 } from "./file-utils";
-import {bundleUsageStorageKey,} from "./usage-cost";
-import {collapseAssistantTurns,} from "./stream-processor";
-import {
-  commandFromToolUse,
-  runtimeSessionToArtifacts,
-  summarizeToolUse,
-  toolName,
-} from "./debug-utils";
+import {runtimeSessionToArtifacts,} from "./debug-utils";
 import type {AgentPermissionState, AgentReplStreamEvent, PermissionMode, StreamItem, StreamLink,} from "../types";
-import {loadBundleUsageSnapshotsForSession, sqliteDatabaseInfo,} from "../tauri";
+import {sqliteDatabaseInfo,} from "../tauri";
 import type {
-  AppView,
-  HiddenSession,
-  PreviewTab,
-  ProjectFolder,
-  ProjectSession,
-  SessionUsageIndicatorKey,
-  SlashRootItem,
+    AppView,
+    HiddenSession,
+    PreviewTab,
+    ProjectFolder,
+    ProjectSession,
+    SessionUsageIndicatorKey,
+    SlashRootItem,
 } from "./types";
 
 // Types moved to ./types
