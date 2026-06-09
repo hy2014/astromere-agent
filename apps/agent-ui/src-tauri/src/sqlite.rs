@@ -442,6 +442,7 @@ pub struct ModelCallUsage {
     pub completed_at_ms: Option<i64>,
     pub updated_at_ms: i64,
     pub source: String,
+    pub cost_amount: Option<f64>,
 }
 
 fn ensure_model_call_usage_table(conn: &Connection) -> Result<(), String> {
@@ -464,6 +465,7 @@ fn ensure_model_call_usage_table(conn: &Connection) -> Result<(), String> {
             completed_at_ms               INTEGER,
             updated_at_ms                 INTEGER NOT NULL,
             source                        TEXT NOT NULL DEFAULT 'stream',
+            cost_amount                   REAL,
 
             created_at                    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at                    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -508,11 +510,13 @@ pub fn save_model_call_usage(usage: ModelCallUsage) -> Result<(), String> {
             completed_at_ms,
             updated_at_ms,
             source,
+            cost_amount,
             updated_at
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5,
             ?6, ?7, ?8, ?9,
             ?10, ?11, ?12, ?13,
+            ?14,
             CURRENT_TIMESTAMP
         )
         ON CONFLICT(model_call_id, session_id) DO UPDATE SET
@@ -527,6 +531,7 @@ pub fn save_model_call_usage(usage: ModelCallUsage) -> Result<(), String> {
             completed_at_ms           = excluded.completed_at_ms,
             updated_at_ms             = excluded.updated_at_ms,
             source                    = excluded.source,
+            cost_amount               = excluded.cost_amount,
             updated_at                = CURRENT_TIMESTAMP
         "#,
         params![
@@ -543,6 +548,7 @@ pub fn save_model_call_usage(usage: ModelCallUsage) -> Result<(), String> {
             usage.completed_at_ms,
             usage.updated_at_ms,
             usage.source,
+            usage.cost_amount,
         ],
     )
     .map_err(error_to_string)?;
@@ -566,7 +572,7 @@ pub fn load_model_call_usage(
             input_tokens, output_tokens,
             cache_read_input_tokens, cache_creation_input_tokens,
             started_at_ms, completed_at_ms, updated_at_ms,
-            source
+            source, cost_amount
         FROM model_call_usage
         WHERE model_call_id = ?1 AND session_id = ?2
         "#,
@@ -586,6 +592,7 @@ pub fn load_model_call_usage(
                 completed_at_ms: row.get(10)?,
                 updated_at_ms: row.get(11)?,
                 source: row.get(12)?,
+                cost_amount: row.get(13)?,
             })
         },
     )
@@ -612,7 +619,7 @@ pub fn load_model_call_usages_for_session(
                 input_tokens, output_tokens,
                 cache_read_input_tokens, cache_creation_input_tokens,
                 started_at_ms, completed_at_ms, updated_at_ms,
-                source
+                source, cost_amount
             FROM model_call_usage
             WHERE session_id = ?1
             ORDER BY COALESCE(started_at_ms, updated_at_ms), model_call_id
@@ -636,8 +643,84 @@ pub fn load_model_call_usages_for_session(
                 completed_at_ms: row.get(10)?,
                 updated_at_ms: row.get(11)?,
                 source: row.get(12)?,
+                cost_amount: row.get(13)?,
             })
         })
+        .map_err(error_to_string)?;
+
+    let mut usages = Vec::new();
+    for row in rows {
+        usages.push(row.map_err(error_to_string)?);
+    }
+
+    Ok(usages)
+}
+
+#[tauri::command]
+pub fn load_model_call_usages(
+    model_call_ids: Vec<String>,
+    session_id: String,
+) -> Result<Vec<ModelCallUsage>, String> {
+    let (conn, _path) = open_sqlite_database()?;
+    ensure_model_call_usage_table(&conn)?;
+
+    if model_call_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if session_id.trim().is_empty() {
+        return Err("model call usages missing sessionId".to_string());
+    }
+
+    // 构建动态 IN 查询
+    let placeholders: Vec<String> = model_call_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 2))
+        .collect();
+    let sql = format!(
+        r#"
+        SELECT
+            model_call_id, session_id, project_root,
+            model, stop_reason,
+            input_tokens, output_tokens,
+            cache_read_input_tokens, cache_creation_input_tokens,
+            started_at_ms, completed_at_ms, updated_at_ms,
+            source, cost_amount
+        FROM model_call_usage
+        WHERE session_id = ?1
+          AND model_call_id IN ({})
+        ORDER BY COALESCE(started_at_ms, updated_at_ms), model_call_id
+        "#,
+        placeholders.join(", "),
+    );
+
+    let mut statement = conn.prepare(&sql).map_err(error_to_string)?;
+
+    // 绑定 session_id 到 ?1
+    let mut rows = statement
+        .query_map(
+            rusqlite::params_from_iter(std::iter::once(&session_id as &dyn rusqlite::types::ToSql).chain(
+                model_call_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql),
+            )),
+            |row| {
+                Ok(ModelCallUsage {
+                    model_call_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    root: row.get(2)?,
+                    model: row.get(3)?,
+                    stop_reason: row.get(4)?,
+                    input_tokens: row.get(5)?,
+                    output_tokens: row.get(6)?,
+                    cache_read_input_tokens: row.get(7)?,
+                    cache_creation_input_tokens: row.get(8)?,
+                    started_at_ms: row.get(9)?,
+                    completed_at_ms: row.get(10)?,
+                    updated_at_ms: row.get(11)?,
+                    source: row.get(12)?,
+                    cost_amount: row.get(13)?,
+                })
+            },
+        )
         .map_err(error_to_string)?;
 
     let mut usages = Vec::new();

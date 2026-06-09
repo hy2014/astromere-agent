@@ -25,18 +25,6 @@ import type { AgentReplStreamEvent } from "../types";
  *                   callback(data)                     ← 通知 View
  */
 
-// ── 旧版（逐步取消） ──
-
-type EventHandler = (event: AgentReplStreamEvent) => void;
-const oldHandlers = new Set<EventHandler>();
-
-export function onStreamEvent(handler: EventHandler): () => void {
-  oldHandlers.add(handler);
-  return () => { oldHandlers.delete(handler); };
-}
-
-// ── 新版 ──
-
 type EventHandle = (event: AgentReplStreamEvent, prevData: unknown) => unknown | null;
 type EventCallback = (data: unknown, sessionId: string) => void;
 
@@ -92,12 +80,6 @@ export function startStreamEventListener(): void {
   if (started) return;
   started = true;
   listenAgentReplEvents((event) => {
-    // 旧版（逐步取消）
-    for (const handler of oldHandlers) {
-      handler(event);
-    }
-
-    // 新版：handle(event, prevData) → newData | null
     for (const [name, handle] of Object.entries(eventHandles)) {
       const sessionId = event.sessionId;
       const prevData = data[name]?.[sessionId];

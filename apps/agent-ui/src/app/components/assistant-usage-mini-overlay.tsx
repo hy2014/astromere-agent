@@ -1,13 +1,34 @@
 /* @checkFns assistant-usage-mini-backdrop */
-import type {BundleUsageSnapshot} from "../../tauri";
+import type {ModelCallUsage} from "../../tauri";
+import type {AggregatedUsage} from "../usage-cost";
 import {render} from "../../core/dep";
-import {usageShortId, formatBundleUsageCost, formatBundleUsageHitRate, usageTotalsFromUsage, usageFormatValue} from "../usage-cost";
+import {usageShortId, usageFormatValue} from "../usage-cost";
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+
+function hitRateFromTotals(totals: AggregatedUsage["totals"]): number | null {
+  const totalInput =
+    totals.totalInputTokens ||
+    totals.inputTokens + totals.cacheReadInputTokens + totals.cacheCreationInputTokens;
+  if (!totalInput || totalInput <= 0) return null;
+  return totals.cacheReadInputTokens / totalInput;
+}
+
+function formatCost(totalCost: number | null): string {
+  if (totalCost == null) return "unavailable";
+  return `¥${totalCost.toFixed(4)}`;
+}
+
+function formatHitRate(totals: AggregatedUsage["totals"]): string {
+  const rate = hitRateFromTotals(totals);
+  return rate == null ? "unavailable" : `${(rate * 100).toFixed(2)}%`;
+}
 
 // ─── Props interface ─────────────────────────────────────────────────
 
 interface AssistantUsageMiniOverlayProps {
   bundleId: string;
-  snapshot: BundleUsageSnapshot | null;
+  aggregated: AggregatedUsage;
   onClose: () => void;
 }
 
@@ -21,11 +42,11 @@ function onStopPropagation(event: React.MouseEvent): void {
 
 function renderMiniOverlayContent(
   {}: Record<string, never>,
-  { bundleId, snapshot }: { bundleId: string; snapshot: BundleUsageSnapshot | null },
+  { bundleId, aggregated }: { bundleId: string; aggregated: AggregatedUsage },
   { onClose, onStopPropagation: _onStopPropagation }: { onClose: () => void; onStopPropagation: (e: React.MouseEvent) => void },
 ) {
-  const usage = snapshot?.usage ?? null;
-  const cost = formatBundleUsageCost(snapshot);
+  const { totals, usages, totalCost } = aggregated;
+  const cost = formatCost(totalCost);
 
   return (
     <div className="assistant-usage-mini-backdrop" role="presentation" onClick={onClose}>
@@ -41,65 +62,50 @@ function renderMiniOverlayContent(
           <span>{usageShortId(bundleId)}</span>
         </header>
 
-        {!snapshot ? (
-          <div className="debug-empty">Usage snapshot missing for this assistant bundle.</div>
-        ) : null}
-
-        {snapshot && usage ? (
-          <>
-            <div className="usage-grid">
-              {[
-                ["totalInputTokens", "Total input", usage.totalInputTokens],
-                ["inputTokens", "Input", usage.inputTokens],
-                ["outputTokens", "Output", usage.outputTokens],
-                ["cacheReadInputTokens", "Cache hit input", usage.cacheReadInputTokens],
-                ["cacheCreationInputTokens", "Cache create input", usage.cacheCreationInputTokens],
-                ["hitRate", "Hit rate", formatBundleUsageHitRate(snapshot)],
-                ["modelCalls", "Model calls", snapshot.modelCallUsages.length],
-                ["costAmount", "Cost", cost],
-              ].map(([key, label, value]) => (
-                <div className="usage-card" key={String(key)}>
-                  <span>{label}</span>
-                  <strong>{String(value ?? 0)}</strong>
-                </div>
-              ))}
+        <div className="usage-grid">
+          {[
+            ["totalInputTokens", "Total input", totals.totalInputTokens],
+            ["inputTokens", "Input", totals.inputTokens],
+            ["outputTokens", "Output", totals.outputTokens],
+            ["cacheReadInputTokens", "Cache hit input", totals.cacheReadInputTokens],
+            ["cacheCreationInputTokens", "Cache create input", totals.cacheCreationInputTokens],
+            ["hitRate", "Hit rate", formatHitRate(totals)],
+            ["modelCalls", "Model calls", usages.length],
+            ["costAmount", "Cost", cost],
+          ].map(([key, label, value]) => (
+            <div className="usage-card" key={String(key)}>
+              <span>{label}</span>
+              <strong>{String(value ?? 0)}</strong>
             </div>
+          ))}
+        </div>
 
-            <div className="usage-note">
-              source={snapshot.source} · status={snapshot.status} · modelCalls={snapshot.modelCallIds.length}
-            </div>
-
-            {snapshot.modelCallUsages.length > 0 ? (
-              <div className="usage-table-wrapper">
-                <table className="usage-table">
-                  <thead><tr>
-                    <th>Model call</th><th>Model</th><th>Stop</th><th>Selected</th>
-                    <th>Input</th><th>Output</th><th>Cache read</th><th>Cache create</th>
-                  </tr></thead>
-                  <tbody>
-                    {snapshot.modelCallUsages.map((call) => {
-                      const callUsage = usageTotalsFromUsage(call.usage);
-                      return (
-                        <tr key={call.modelCallId}>
-                          <td title={call.modelCallId}>{usageShortId(call.modelCallId)}</td>
-                          <td>{call.model ?? "unknown"}</td>
-                          <td>{call.stopReason ?? "—"}</td>
-                          <td>{call.selectedReason}</td>
-                          <td>{usageFormatValue(callUsage.inputTokens, "input_tokens")}</td>
-                          <td>{usageFormatValue(callUsage.outputTokens, "output_tokens")}</td>
-                          <td>{usageFormatValue(callUsage.cacheReadInputTokens, "cache_read_input_tokens")}</td>
-                          <td>{usageFormatValue(callUsage.cacheCreationInputTokens, "cache_creation_input_tokens")}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="debug-empty">No model-call usage rows for this bundle.</div>
-            )}
-          </>
-        ) : null}
+        {usages.length > 0 ? (
+          <div className="usage-table-wrapper">
+            <table className="usage-table">
+              <thead><tr>
+                <th>Model call</th><th>Model</th><th>Stop</th><th>Selected</th>
+                <th>Input</th><th>Output</th><th>Cache read</th><th>Cache create</th>
+              </tr></thead>
+              <tbody>
+                {usages.map((call: ModelCallUsage) => (
+                  <tr key={call.modelCallId}>
+                    <td title={call.modelCallId}>{usageShortId(call.modelCallId)}</td>
+                    <td>{call.model ?? "unknown"}</td>
+                    <td>{call.stopReason ?? "—"}</td>
+                    <td>db</td>
+                    <td>{usageFormatValue(call.inputTokens, "input_tokens")}</td>
+                    <td>{usageFormatValue(call.outputTokens, "output_tokens")}</td>
+                    <td>{usageFormatValue(call.cacheReadInputTokens, "cache_read_input_tokens")}</td>
+                    <td>{usageFormatValue(call.cacheCreationInputTokens, "cache_creation_input_tokens")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="debug-empty">No model-call usage rows for this bundle.</div>
+        )}
       </section>
     </div>
   );
@@ -109,12 +115,12 @@ function renderMiniOverlayContent(
 
 export function AssistantUsageMiniOverlayView({
   bundleId,
-  snapshot,
+  aggregated,
   onClose,
 }: AssistantUsageMiniOverlayProps) {
   return render({
     state: {},
-    props: { bundleId, snapshot },
+    props: { bundleId, aggregated },
     fn: renderMiniOverlayContent,
     events: { onClose, onStopPropagation },
     memo: undefined,

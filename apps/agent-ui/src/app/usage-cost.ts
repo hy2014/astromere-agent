@@ -1,5 +1,5 @@
 import type {AgentContextUsage, AgentReplStreamEvent, ModelSettings} from "../types";
-import type {BundleUsageSnapshot, BundleUsageTotals, ModelCallUsageSnapshot} from "../tauri";
+import type {BundleUsageSnapshot, BundleUsageTotals, ModelCallUsageSnapshot, ModelCallUsage} from "../tauri";
 import type {
   AssistantMessageDebugBundle,
   BundleUsageModelCost,
@@ -738,6 +738,49 @@ export function contextUsageLabel(usage: AgentContextUsage | null | undefined): 
     ? formatContextTokens(maxTokens)
     : formatContextTokens(DEFAULT_CONTEXT_USAGE_AUTO_COMPACT_THRESHOLD);
   return `上下文：${current}/${denominator}(${contextUsageAutoCompactEnabledLabel(usage)})`;
+}
+
+// ── Aggregate ModelCallUsage[] from DB ────────────────────────────────
+//
+// 从 Rust DB 加载的 ModelCallUsage[] 聚合成 overlay 可直接使用的格式。
+// 使用方式和之前 BundleUsageSnapshot 一样。
+
+export type AggregatedUsage = {
+  usages: ModelCallUsage[];
+  totals: BundleUsageTotals;
+  totalCost: number | null;
+};
+
+export function aggregateModelCallUsages(usages: ModelCallUsage[]): AggregatedUsage {
+  let totals: BundleUsageTotals = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    totalInputTokens: 0,
+  };
+  let totalCost: number | null = null;
+  let hasCost = false;
+
+  for (const u of usages) {
+    totals = addUsageTotals(totals, {
+      inputTokens: u.inputTokens,
+      outputTokens: u.outputTokens,
+      cacheReadInputTokens: u.cacheReadInputTokens,
+      cacheCreationInputTokens: u.cacheCreationInputTokens,
+      totalInputTokens: u.inputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens,
+    });
+    if (typeof u.costAmount === "number" && Number.isFinite(u.costAmount)) {
+      totalCost = (totalCost ?? 0) + u.costAmount;
+      hasCost = true;
+    }
+  }
+
+  return {
+    usages,
+    totals,
+    totalCost: hasCost ? totalCost : null,
+  };
 }
 
 export function contextUsageFromBundleSnapshot(

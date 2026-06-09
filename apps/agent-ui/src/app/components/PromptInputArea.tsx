@@ -7,9 +7,12 @@ import {formatFileSize} from "../stream-processor";
 import type {FileMentionState, LocalFileReference, SlashCommandMenuState, SlashRootItem,} from "../types";
 import type {AgentReplCapabilityItem} from "../../runtime";
 import {usePromptInput} from "../../hooks/usePromptInput";
-import {onStreamEvent, startStreamEventListener} from "../../hooks/stream-event-bus";
-import {getAgentContextUsage} from "../../runtime";
+import {addCallback} from "../../hooks/stream-event-bus";
+import {getAgentContextUsage, respondAgentPermission} from "../../runtime";
 import {isNewSessionId} from "../file-utils";
+import type {PendingPermission, ControlRequestData} from "../stream-handlers/control-request";
+import type {ContextUsageSignal} from "../stream-handlers/context-usage";
+import {WriteState} from "./SessionDialog";
 
 interface AgentPermissionState {
   currentMode: string;
@@ -20,9 +23,7 @@ interface PromptInputAreaProps {
   // Session state
   activeProject: string | null;
   activeSessionId: string | null;
-  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block";
-  pendingPermissions: any[];
-  isResolvingFileReferences: boolean;
+  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block" | "forking";
 
   // Permission state
   permissionState: AgentPermissionState | null;
@@ -36,8 +37,6 @@ interface PromptInputAreaProps {
   // Callbacks from SessionDialogView
   onSubmitPrompt: (input: { text: string; fileReferences: LocalFileReference[] }) => void;
   onInterruptTurn: () => void;
-  onPermissionAllow: (answers?: Record<string, string>) => void;
-  onPermissionDeny: () => void;
   onOpenPreviewLink: (link: StreamLink) => void;
 }
 
@@ -46,8 +45,6 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     activeProject,
     activeSessionId,
     turnStatus,
-    pendingPermissions,
-    isResolvingFileReferences,
     permissionState,
     onPermissionModeChange,
     selectedChatModel,
@@ -55,12 +52,45 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     onChatModelChange,
     onSubmitPrompt,
     onInterruptTurn,
-    onPermissionAllow,
-    onPermissionDeny,
     onOpenPreviewLink,
   } = props;
 
-  const pendingPermission = pendingPermissions.find((p) => p.sessionId === activeSessionId) ?? null;
+  // ── 本地 controlCard state（来自 event bus） ──
+  const [controlCard, setControlCard] = useState<PendingPermission | null>(null);
+  useEffect(() => {
+    return addCallback("control-request", (data, _sessionId) => {
+      const cr = data as ControlRequestData;
+      setControlCard(cr.permission);
+    });
+  }, []);
+
+  // ref 用于 submitWithPrompt 的 guard（避免依赖 cycle）
+  const controlCardRef = useRef(controlCard);
+  controlCardRef.current = controlCard;
+
+  // ── 权限响应处理 ──
+  const handlePermissionDecision = useCallback(
+    (approved: boolean, answers: Record<string, string> | undefined, permission: PendingPermission) => {
+      setControlCard(null);
+      WriteState.setTurnStatus("running");
+      const updatedInput =
+        permission.isQuestion && approved && answers && permission.input
+          ? { ...(permission.input as Record<string, unknown>), answers }
+          : undefined;
+      respondAgentPermission(
+        permission.root,
+        permission.sessionId,
+        permission.requestId,
+        approved,
+        updatedInput,
+      ).catch((reason) => {
+        console.error("[controlCard] respondAgentPermission failed:", reason);
+        WriteState.setTurnStatus("idle");
+        // bus still holds the permission data; next event re-pushes the card
+      });
+    },
+    [],
+  );
 
   // ── Internal state ──
   const [prompt, setPrompt] = useState("");
@@ -92,29 +122,27 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
       .catch((reason) => setContextUsageError(String(reason)));
   }, [activeSessionId, activeProject]);
 
-  // 订阅 event bus：turn_complete/startup 刷新 + system 更新 compacting
+  // 订阅 event bus：turn_complete/startup 刷新 context usage
   useEffect(() => {
-    startStreamEventListener();
-    return onStreamEvent((event) => {
-      if (event.eventType === "turn_complete" || event.eventType === "startup") {
-        const sid = event.sessionId;
-        if (activeProject && sid && !isNewSessionId(sid)) {
-          getAgentContextUsage(activeProject, sid)
-            .then((usage) => {
-              setContextUsageError(null);
-              setActiveContextUsage(usage);
-            })
-            .catch((reason) => setContextUsageError(String(reason)));
-        }
-      }
-      if (event.eventType === "system") {
-        const payload = event.payload as Record<string, unknown>;
-        if (payload.subtype === "status" && "status" in payload) {
-          setIsCompacting(payload.status === "compacting");
-        }
+    return addCallback("context-usage", (data, sessionId) => {
+      const signal = data as ContextUsageSignal;
+      if (signal.refresh && activeProject && sessionId === activeSessionId && !isNewSessionId(sessionId)) {
+        getAgentContextUsage(activeProject, sessionId)
+          .then((usage) => {
+            setContextUsageError(null);
+            setActiveContextUsage(usage);
+          })
+          .catch((reason) => setContextUsageError(String(reason)));
       }
     });
-  }, [activeProject]);
+  }, [activeProject, activeSessionId]);
+
+  // 订阅 event bus：system status.compacting → 更新压缩状态
+  useEffect(() => {
+    return addCallback("compacting", (data, _sessionId) => {
+      setIsCompacting(data as boolean);
+    });
+  }, []);
 
   const contextUsageLabel = (usage: AgentContextUsage | null | undefined): string => {
     if (!usage) return "";
@@ -132,6 +160,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
   onSubmitPromptRef.current = onSubmitPrompt;
 
   const submitWithPrompt = useCallback(() => {
+    if (controlCardRef.current) return;
     console.time('[submit] total: 点击Send到UI展示');
     onSubmitPromptRef.current({ text: promptRef.current, fileReferences: fileReferencesRef.current });
     setPrompt("");
@@ -154,8 +183,6 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     onSubmitPrompt: submitWithPrompt,
     prompt, setPrompt,
     fileReferences, setFileReferences,
-    isResolvingFileReferences,
-    setIsResolvingFileReferences: () => {},
     fileMention, setFileMention,
     fileSuggestions, setFileSuggestions,
     fileSuggestionIndex, setFileSuggestionIndex,
@@ -174,18 +201,18 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
   return (
     <form className="prompt-box" onSubmit={promptInput.handlePromptSubmit}>
       <div className="prompt-frame">
-        {pendingPermission && activeSessionId === pendingPermission.sessionId ? (
-          pendingPermission.isQuestion ? (
+        {controlCard && activeSessionId === controlCard.sessionId ? (
+          controlCard.isQuestion ? (
             <AskQuestionCardView
-              permission={pendingPermission}
-              onConfirm={onPermissionAllow}
-              onCancel={onPermissionDeny}
+              permission={controlCard}
+              onConfirm={(answers) => handlePermissionDecision(true, answers, controlCard)}
+              onCancel={() => handlePermissionDecision(false, undefined, controlCard)}
             />
           ) : (
             <PermissionRequestView
-              permission={pendingPermission}
-              onAllow={() => onPermissionAllow()}
-              onDeny={onPermissionDeny}
+              permission={controlCard}
+              onAllow={() => handlePermissionDecision(true, undefined, controlCard)}
+              onDeny={() => handlePermissionDecision(false, undefined, controlCard)}
             />
           )
         ) : null}
@@ -272,7 +299,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                 ? "Type a message, use @ to reference workspace files..."
                 : "Add a project folder before starting a conversation..."
             }
-            disabled={!activeProject || !activeSessionId || turnStatus !== "idle" || isResolvingFileReferences}
+            disabled={!activeProject || !activeSessionId || turnStatus !== "idle"}
           />
           {fileMention.active ? (
             <div className="file-mention-menu" role="listbox">
@@ -430,7 +457,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
               upload(todo)
             </button>
           </div>
-          {turnStatus !== "idle" || pendingPermission ? (
+          {turnStatus !== "idle" || controlCard ? (
             <button
               className="send-button stop"
               type="button"
@@ -445,7 +472,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
             type="submit"
             disabled={!canSendPrompt}
           >
-            {isResolvingFileReferences ? "READING" : turnStatus !== "idle" ? "RUNNING" : "SEND"}
+            {turnStatus !== "idle" ? "RUNNING" : "SEND"}
           </button>
         </div>
       </div>

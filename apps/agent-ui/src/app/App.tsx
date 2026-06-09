@@ -21,6 +21,14 @@ import {
 } from "../runtime";
 import "../styles/mcp.css";
 import "./App.css";
+import {setEventHandle} from "../hooks/stream-event-bus";
+import {addCallback} from "../hooks/stream-event-bus";
+import type {SessionMetadataEvent} from "./stream-handlers/session-metadata";
+import {handleControlRequestEvent} from "./stream-handlers/control-request";
+import {handleCompactingEvent} from "./stream-handlers/compacting";
+import {handleContextUsageEvent} from "./stream-handlers/context-usage";
+import {handleSessionStatusEvent} from "./stream-handlers/turn-status";
+import {handleSessionMetadataEvent} from "./stream-handlers/session-metadata";
 import {TerminalView} from "./Terminal";
 import {RemoteTerminalPlaceholder} from "./RemoteTerminalPlaceholder";
 import {SkillsView} from "./components/skills-view";
@@ -52,7 +60,6 @@ import {
 import {bundleUsageStorageKey,} from "./usage-cost";
 import {collapseAssistantTurns,} from "./stream-processor";
 import {
-  assistantTurnDetails,
   commandFromToolUse,
   runtimeSessionToArtifacts,
   summarizeToolUse,
@@ -129,6 +136,30 @@ export function App() {
       .catch((reason) => {
         console.warn("[sqlite] database init failed", reason);
       });
+
+    setEventHandle("control-request", handleControlRequestEvent);
+    setEventHandle("compacting", handleCompactingEvent);
+    setEventHandle("context-usage", handleContextUsageEvent);
+    setEventHandle("session-status", handleSessionStatusEvent);
+    setEventHandle("session-metadata", handleSessionMetadataEvent);
+  }, []);
+
+  // 订阅 session-metadata：更新 session 进程状态（会话列表显示用）
+  useEffect(() => {
+    return addCallback("session-metadata", (data, sessionId) => {
+      const meta = data as SessionMetadataEvent;
+      if (!meta.processStatus) return;
+      setProjects((folders) =>
+        folders.map((f) => ({
+          ...f,
+          sessions: f.sessions.map((s) =>
+            s.id === sessionId
+              ? { ...s, processStatus: meta.processStatus!, processPid: meta.processPid ?? s.processPid }
+              : s
+          ),
+        })),
+      );
+    });
   }, []);
 
   const [projects, setProjects] = useState<ProjectFolder[]>([]);

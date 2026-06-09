@@ -12,7 +12,6 @@ type Props = {
   setActiveView?: (view: any) => void
   setActiveProjectId?: (id: string) => void
   setActiveSessionId?: (id: string) => void
-  setSessionStreams?: (updater: (streams: any) => any) => void
   onForkWorktreeSession?: (session: any) => void
   onHideWorktreeSession?: (session: any) => void
 }
@@ -24,7 +23,7 @@ const BRANCH_PREFIXES = [
   { label: "custom", value: "" },
 ]
 
-export function WorktreePanel({ root, onCreate, onRemove, activeSessionId, projectId, projectName, setActiveView, setActiveProjectId, setActiveSessionId, setSessionStreams, onForkWorktreeSession, onHideWorktreeSession }: Props) {
+export function WorktreePanel({ root, onCreate, onRemove, activeSessionId, projectId, projectName, setActiveView, setActiveProjectId, setActiveSessionId, onForkWorktreeSession, onHideWorktreeSession }: Props) {
   const [worktrees, setWorktrees] = useState<WorktreeItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -84,12 +83,6 @@ export function WorktreePanel({ root, onCreate, onRemove, activeSessionId, proje
     if (setActiveView) setActiveView("workspace")
     if (setActiveProjectId && projectId) setActiveProjectId(projectId)
     if (setActiveSessionId) setActiveSessionId(sessionId)
-    if (setSessionStreams) {
-      setSessionStreams((streams: any) => ({
-        ...streams,
-        [sessionId]: streams[sessionId] ?? [],
-      }))
-    }
   }
 
   const closeModal = () => {
