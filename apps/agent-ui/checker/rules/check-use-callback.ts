@@ -162,45 +162,45 @@ function inspectUseCallback(
         return;
     }
 
-    // 收集 handleXxx 使用了哪些 state/props 变量（callback 参数之后的所有传参）
-    // 只支持解构后的 Identifier（props.xxx 不支持）
+    // ── 白名单：逐个检查每个 extra arg ──
+    // 所有传参必须能被 checker 追踪来源，不认识的传参模式直接报错
     const extraArgNames = new Set<string>();
     for (let i = cbParams.length; i < handleArgs.length; i++) {
         const arg = handleArgs[i];
         if (ts.isIdentifier(arg)) {
             extraArgNames.add(arg.text);
+        } else if (ts.isPropertyAccessExpression(arg) && ts.isIdentifier(arg.expression)) {
+            extraArgNames.add(arg.expression.text);
+        } else {
+            ctx.addViolation(
+                "useCallback 规范",
+                `"${handleName}" 第 ${i + 1} 个参数 "${arg.getText()}" 无法追踪来源，` +
+                `handleXxx 的传参必须使用 Identifier（变量名）。${USAGE_HINT}`,
+                arg,
+            );
         }
     }
 
-    // 收集 deps 中的变量名（只支持 Identifier，必须解构）
+    // ── 白名单：逐个检查每个 dep ──
+    // deps 数组的每个元素必须是解构后的 Identifier
     const depNamesSet = new Set<string>();
     for (const dep of deps.elements) {
         if (ts.isIdentifier(dep)) {
             depNamesSet.add(dep.text);
-        }
-    }
-
-    // 规则 6 & 7: deps 校验
-    for (const dep of deps.elements) {
-        if (!ts.isIdentifier(dep)) {
+        } else {
             ctx.addViolation(
                 "useCallback 规范",
                 `deps 中的 "${dep.getText()}" 不是有效的变量名，state/props 必须先解构再使用。${USAGE_HINT}`,
                 dep,
             );
-            continue;
         }
+    }
 
-        // 规则 6: deps 必须是 state/props 变量
-        if (!ctx.stateVars.has(dep.text) && !ctx.propVars.has(dep.text)) {
-            ctx.addViolation(
-                "useCallback 规范",
-                `deps 中的 "${dep.text}" 不是 state/props 变量。${USAGE_HINT}`,
-                dep,
-            );
-        }
+    // ── 双向校验：extra args ⇄ deps ──
 
-        // 规则 7: deps 中 handleXxx 没用到要报错
+    // 方向 A：deps 中的每个变量，handleXxx 必须用了
+    for (const dep of deps.elements) {
+        if (!ts.isIdentifier(dep)) continue;
         if (!extraArgNames.has(dep.text)) {
             ctx.addViolation(
                 "useCallback 规范",
@@ -208,18 +208,26 @@ function inspectUseCallback(
                 dep,
             );
         }
-    }
-
-    // 规则 7b（反向）: handleXxx 用到的 state/props 变量必须都在 deps 中
-    extraArgNames.forEach(name => {
-        if (!ctx.stateVars.has(name) && !ctx.propVars.has(name)) return;
-        if (!depNamesSet.has(name)) {
+        // deps 中的变量必须是 state/props
+        if (!ctx.stateVars.has(dep.text) && !ctx.propVars.has(dep.text)) {
             ctx.addViolation(
                 "useCallback 规范",
-                `"${handleName}" 使用了 "${name}" 但未出现在 deps 中。useCallback 的 deps 必须与 handleXxx 的参数一一对应。${USAGE_HINT}`,
-                call,
+                `deps 中的 "${dep.text}" 不是 state/props 变量。${USAGE_HINT}`,
+                dep,
             );
         }
+    }
+
+    // 方向 B：handleXxx 的每个 extra arg，必须出现在 deps 中
+    extraArgNames.forEach(name => {
+        if (depNamesSet.has(name)) return;
+
+        ctx.addViolation(
+            "useCallback 规范",
+            `"${handleName}" 使用了 "${name}" 但未出现在 deps 中。` +
+            `useCallback 的 deps 必须与 handleXxx 的参数一一对应。${USAGE_HINT}`,
+            call,
+        );
     });
 
     // 规则 8 & 9: 检查 handleXxx 函数体

@@ -390,5 +390,6 @@ export function SkillsView({activeProject}: SkillsViewProps) {
     props: {},
     fn: renderSkillsPanel,
     events: {updateQuery, updateViewMode, updateSelectedSkillId},
+    memo: {},
   });
 }

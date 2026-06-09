@@ -426,6 +426,228 @@ pub fn load_bundle_usage_snapshots_for_session(
 // Usage/cost will be rebuilt from Claws Code jsonl message usage in a later implementation.
 // Keep this file limited to generic SQLite utilities for now.
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCallUsage {
+    pub model_call_id: String,
+    pub session_id: String,
+    pub root: String,
+    pub model: Option<String>,
+    pub stop_reason: Option<String>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
+    pub started_at_ms: Option<i64>,
+    pub completed_at_ms: Option<i64>,
+    pub updated_at_ms: i64,
+    pub source: String,
+}
+
+fn ensure_model_call_usage_table(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS model_call_usage (
+            model_call_id                 TEXT NOT NULL,
+            session_id                    TEXT NOT NULL,
+            project_root                  TEXT NOT NULL,
+
+            model                         TEXT,
+            stop_reason                   TEXT,
+
+            input_tokens                  INTEGER NOT NULL DEFAULT 0,
+            output_tokens                 INTEGER NOT NULL DEFAULT 0,
+            cache_read_input_tokens       INTEGER NOT NULL DEFAULT 0,
+            cache_creation_input_tokens   INTEGER NOT NULL DEFAULT 0,
+
+            started_at_ms                 INTEGER,
+            completed_at_ms               INTEGER,
+            updated_at_ms                 INTEGER NOT NULL,
+            source                        TEXT NOT NULL DEFAULT 'stream',
+
+            created_at                    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at                    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+            PRIMARY KEY (model_call_id, session_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_model_call_usage_session
+            ON model_call_usage(session_id);
+        "#,
+    )
+    .map_err(error_to_string)?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_model_call_usage(usage: ModelCallUsage) -> Result<(), String> {
+    let (conn, _path) = open_sqlite_database()?;
+    ensure_model_call_usage_table(&conn)?;
+
+    if usage.model_call_id.trim().is_empty() {
+        return Err("model call usage missing modelCallId".to_string());
+    }
+    if usage.session_id.trim().is_empty() {
+        return Err("model call usage missing sessionId".to_string());
+    }
+
+    conn.execute(
+        r#"
+        INSERT INTO model_call_usage (
+            model_call_id,
+            session_id,
+            project_root,
+            model,
+            stop_reason,
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            started_at_ms,
+            completed_at_ms,
+            updated_at_ms,
+            source,
+            updated_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5,
+            ?6, ?7, ?8, ?9,
+            ?10, ?11, ?12, ?13,
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT(model_call_id, session_id) DO UPDATE SET
+            project_root              = excluded.project_root,
+            model                     = excluded.model,
+            stop_reason               = excluded.stop_reason,
+            input_tokens              = excluded.input_tokens,
+            output_tokens             = excluded.output_tokens,
+            cache_read_input_tokens   = excluded.cache_read_input_tokens,
+            cache_creation_input_tokens = excluded.cache_creation_input_tokens,
+            started_at_ms             = excluded.started_at_ms,
+            completed_at_ms           = excluded.completed_at_ms,
+            updated_at_ms             = excluded.updated_at_ms,
+            source                    = excluded.source,
+            updated_at                = CURRENT_TIMESTAMP
+        "#,
+        params![
+            usage.model_call_id,
+            usage.session_id,
+            usage.root,
+            usage.model,
+            usage.stop_reason,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens,
+            usage.started_at_ms,
+            usage.completed_at_ms,
+            usage.updated_at_ms,
+            usage.source,
+        ],
+    )
+    .map_err(error_to_string)?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn load_model_call_usage(
+    model_call_id: String,
+    session_id: String,
+) -> Result<ModelCallUsage, String> {
+    let (conn, _path) = open_sqlite_database()?;
+    ensure_model_call_usage_table(&conn)?;
+
+    conn.query_row(
+        r#"
+        SELECT
+            model_call_id, session_id, project_root,
+            model, stop_reason,
+            input_tokens, output_tokens,
+            cache_read_input_tokens, cache_creation_input_tokens,
+            started_at_ms, completed_at_ms, updated_at_ms,
+            source
+        FROM model_call_usage
+        WHERE model_call_id = ?1 AND session_id = ?2
+        "#,
+        params![model_call_id, session_id],
+        |row| {
+            Ok(ModelCallUsage {
+                model_call_id: row.get(0)?,
+                session_id: row.get(1)?,
+                root: row.get(2)?,
+                model: row.get(3)?,
+                stop_reason: row.get(4)?,
+                input_tokens: row.get(5)?,
+                output_tokens: row.get(6)?,
+                cache_read_input_tokens: row.get(7)?,
+                cache_creation_input_tokens: row.get(8)?,
+                started_at_ms: row.get(9)?,
+                completed_at_ms: row.get(10)?,
+                updated_at_ms: row.get(11)?,
+                source: row.get(12)?,
+            })
+        },
+    )
+    .map_err(error_to_string)
+}
+
+#[tauri::command]
+pub fn load_model_call_usages_for_session(
+    session_id: String,
+) -> Result<Vec<ModelCallUsage>, String> {
+    let (conn, _path) = open_sqlite_database()?;
+    ensure_model_call_usage_table(&conn)?;
+
+    if session_id.trim().is_empty() {
+        return Err("model call usages missing sessionId".to_string());
+    }
+
+    let mut statement = conn
+        .prepare(
+            r#"
+            SELECT
+                model_call_id, session_id, project_root,
+                model, stop_reason,
+                input_tokens, output_tokens,
+                cache_read_input_tokens, cache_creation_input_tokens,
+                started_at_ms, completed_at_ms, updated_at_ms,
+                source
+            FROM model_call_usage
+            WHERE session_id = ?1
+            ORDER BY COALESCE(started_at_ms, updated_at_ms), model_call_id
+            "#,
+        )
+        .map_err(error_to_string)?;
+
+    let rows = statement
+        .query_map(params![session_id.clone()], |row| {
+            Ok(ModelCallUsage {
+                model_call_id: row.get(0)?,
+                session_id: row.get(1)?,
+                root: row.get(2)?,
+                model: row.get(3)?,
+                stop_reason: row.get(4)?,
+                input_tokens: row.get(5)?,
+                output_tokens: row.get(6)?,
+                cache_read_input_tokens: row.get(7)?,
+                cache_creation_input_tokens: row.get(8)?,
+                started_at_ms: row.get(9)?,
+                completed_at_ms: row.get(10)?,
+                updated_at_ms: row.get(11)?,
+                source: row.get(12)?,
+            })
+        })
+        .map_err(error_to_string)?;
+
+    let mut usages = Vec::new();
+    for row in rows {
+        usages.push(row.map_err(error_to_string)?);
+    }
+
+    Ok(usages)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

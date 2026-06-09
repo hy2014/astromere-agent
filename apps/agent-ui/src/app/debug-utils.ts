@@ -763,3 +763,98 @@ export function runtimeSessionToArtifacts(
   flushPendingAssistant();
   return { items, bundles };
 }
+
+export function assistantTurnTimeline(
+  events: DebugStreamEvent[],
+): {
+  timeline: AssistantProcessTimelineItem[];
+  progressLines: string[];
+  toolUses: Record<string, unknown>[];
+  toolResults: DebugStreamEvent[];
+  commandUses: Record<string, unknown>[];
+  eventCount: number;
+} {
+  const timeline: AssistantProcessTimelineItem[] = [];
+  const seenTools = new Set<string>();
+  const toolUses: Record<string, unknown>[] = [];
+  const toolResults: DebugStreamEvent[] = [];
+
+  for (const [index, event] of events.entries()) {
+    const baseId = `${event.id}:process:${index}`;
+    const tools = toolUsesFromProcessEvent(event);
+    if (tools.length > 0) {
+      for (const [toolIndex, tool] of tools.entries()) {
+        const key =
+          (typeof tool.id === "string" && tool.id.trim()) || summarizeToolUse(tool);
+        if (!seenTools.has(key)) {
+          seenTools.add(key);
+          toolUses.push(tool);
+          timeline.push({
+            id: `${baseId}:tool:${toolIndex}`,
+            kind: "tool_call",
+            title: toolName(tool),
+            detail: summarizeToolUse(tool),
+            tool,
+            receivedAt: event.receivedAt,
+          });
+        }
+      }
+      continue;
+    }
+
+    if (isToolResultEvent(event)) {
+      toolResults.push(event);
+      timeline.push({
+        id: `${baseId}:tool-result`,
+        kind: "tool_result",
+        title: "Tool result",
+        detail: summarizeToolResultEvent(event),
+        receivedAt: event.receivedAt,
+      });
+      continue;
+    }
+
+    if (isPermissionEvent(event)) {
+      const isApproved = event.eventType.includes("approved") || event.eventType.includes("response");
+      timeline.push({
+        id: `${baseId}:permission`,
+        kind: "permission",
+        title: isApproved
+          ? "Permission response"
+          : "Permission request",
+        detail: summarizePermissionEvent(event),
+        allowed: isApproved,
+        receivedAt: event.receivedAt,
+      });
+      continue;
+    }
+
+    if (event.eventType === "turn_text" || event.eventType === "assistant_tool_use") {
+      const processText = textFromProcessEvent(event);
+      if (processText) {
+        timeline.push({
+          id: `${baseId}:text`,
+          kind: "text",
+          title: "Assistant",
+          detail: truncateProcessDetail(processText, 1600),
+          receivedAt: event.receivedAt,
+        });
+      }
+    }
+  }
+
+  const commandUses = toolUses.filter((tool) => commandFromToolUse(tool));
+  const progressLines = timeline
+    .filter((entry): entry is Extract<AssistantProcessTimelineItem, { kind: "text" }> => entry.kind === "text")
+    .map((entry) => entry.detail)
+    .filter(Boolean);
+
+  return {
+    timeline,
+    progressLines,
+    toolUses,
+    toolResults,
+    commandUses,
+    eventCount: events.length,
+  };
+}

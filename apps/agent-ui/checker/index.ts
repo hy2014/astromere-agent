@@ -13,6 +13,7 @@ import {checkWriteState} from "./rules/check-write-state";
 import {checkRenderView} from "./rules/check-render-view";
 import {checkUseCallback} from "./rules/check-use-callback";
 import {checkPropsFlow} from "./rules/check-props-flow";
+import {checkNoMutableModuleVars} from "./rules/check-no-mutable-module-vars";
 
 // ...
 export function check(sourceCode: string, fileName: string = "component.tsx", fsPath?: string): Violation[] {
@@ -88,6 +89,8 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
     const result = collectPropVars(sourceFile, ctx);
     result.propVars.forEach(v => ctx.propVars.add(v));
 
+    const eventCallbackVars = new Set<string>();
+
     // 从 View 函数体收集 memo 变量（从 state 派生的 const 变量）
     if (result.viewFn) {
         const viewBody = ts.isArrowFunction(result.viewFn)
@@ -106,21 +109,17 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
                     const init = node.initializer;
                     if (!init) return;
                     if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return;
-                    let dependsOnState = false;
-                    if (ts.isCallExpression(init)) {
-                        const callee = init.expression;
-                        if (ts.isIdentifier(callee) && (callee.text === "useMemo" || callee.text === "useCallback")) {
-                            dependsOnState = true;
+                    // 跳过纯别名：const X = Y（Y 已在 state/memo 中），X 只是别名不是派生值
+                    if (ts.isIdentifier(init) && (stateVars.has(init.text) || memoVars.has(init.text))) return;
+                    if (ts.isCallExpression(init) && ts.isIdentifier(init.expression)) {
+                        const calleeText = init.expression.text;
+                        if (calleeText === "useMemo") {
+                            memoVars.add(varName);
+                        }
+                        if (calleeText === "useCallback") {
+                            eventCallbackVars.add(varName);
                         }
                     }
-                    if (!dependsOnState) {
-                        function checkRef(n: ts.Node) {
-                            if (ts.isIdentifier(n) && (stateVars.has(n.text) || memoVars.has(n.text))) dependsOnState = true;
-                            ts.forEachChild(n, checkRef);
-                        }
-                        checkRef(init);
-                    }
-                    if (dependsOnState) memoVars.add(varName);
                 }
                 ts.forEachChild(node, collectMemoVars);
             }
@@ -132,7 +131,12 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
     console.log(`\n📌 搜集结果:`);
     console.log(`   View layer states: [${[...ctx.stateVars].join(", ")}]`);
     console.log(`   View layer props:  [${[...ctx.propVars].join(", ")}]`);
-    console.log(`   View layer memos:  [${[...ctx.memoVars].join(", ")}]\n`);
+    console.log(`   View layer memos:  [${[...ctx.memoVars].join(", ")}]`);
+    if (eventCallbackVars.size > 0) {
+        console.log(`   View layer event callbacks: [${[...eventCallbackVars].join(", ")}]\n`);
+    } else {
+        console.log(``);
+    }
     if (ctx.memoVars.size > 0) {
         console.log(`⚠️  提示: 检测到 ${ctx.memoVars.size} 个 memo 派生变量。memo 仅应在计算逻辑较重（遍历/过滤/排序大量数据等）时使用。`);
         console.log(`   轻量计算（简单取值、拼接、比较等）建议直接写在 renderFn 内部，不需要 memo 槽位。\n`);
@@ -144,6 +148,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
     checkRenderView(ctx, result.viewFn, fsPath);
     checkUseCallback(ctx, result.viewFn);
     checkPropsFlow(ctx, result.viewFn);
+    checkNoMutableModuleVars(ctx, result.viewFn);
     violations.sort((a, b) => (a.line || 0) - (b.line || 0));
     return violations.slice(0, 100);
 }

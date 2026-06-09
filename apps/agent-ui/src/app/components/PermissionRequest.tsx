@@ -81,5 +81,6 @@ export function PermissionRequestView({permission, onAllow, onDeny}: PermissionR
     props: {permission, onAllow, onDeny},
     fn: renderPermissionRequestCard,
     events: {onAllow, onDeny},
+    memo: {},
   });
 }

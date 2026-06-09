@@ -468,9 +468,9 @@ function renderMcpServersViewServerList(
   },
 ) {
   if (rows.length === 0) {
-    return render({state: {}, props: {}, fn: renderMcpServersViewEmpty, events: { handleAddServer, handleAddExampleServer }});
+    return render({state: {}, props: {}, fn: renderMcpServersViewEmpty, events: { handleAddServer, handleAddExampleServer }, memo: {}});
   }
-  return render({state: { rows, editingId }, props: {}, fn: renderMcpServerTable, events: { toggleEditing, removeServerRow }});
+  return render({state: { rows, editingId }, props: {}, fn: renderMcpServerTable, events: { toggleEditing, removeServerRow }, memo: {}});
 }
 
 function renderMcpServersViewEditCard(
@@ -550,7 +550,7 @@ function renderMcpServersViewEditCard(
 
           {row.envRows.length === 0 ? <p>No environment variables.</p> : null}
 
-          {render({state: {}, props: {}, fn: renderMcpEnvList, events: { updateEnvRow, removeEnvRow }, exts: { envRows: row.envRows, rowId: row.id }})}
+          {render({state: {}, props: {}, fn: renderMcpEnvList, events: { updateEnvRow, removeEnvRow }, memo: { envRows: row.envRows, rowId: row.id }})}
         </section>
       </div>
     </article>
@@ -630,11 +630,11 @@ export function McpServersView() {
           <strong>MCP Servers</strong>
           {render({state: {}, props: {}, fn: renderMcpServersViewSavedIndicator, events: {}, memo: { hasUnsavedChanges }})}
         </div>
-        {render({state: { isLoading, isSaving }, props: {}, fn: renderMcpServersViewTopbarNav, events: { reloadMcpSettings, handleAddServer }})}
+        {render({state: { isLoading, isSaving }, props: {}, fn: renderMcpServersViewTopbarNav, events: { reloadMcpSettings, handleAddServer }, memo: {}})}
       </header>
 
       <main className="mcp-clean-page">
-        {render({state: { configPath }, props: {}, fn: renderMcpServersViewHero, events: {}})}
+        {render({state: { configPath }, props: {}, fn: renderMcpServersViewHero, events: {}, memo: {}})}
 
         {render({state: {}, props: {}, fn: renderMcpServersViewStats, events: {}, memo: { summary }})}
 
@@ -644,13 +644,13 @@ export function McpServersView() {
               <h2>Server startup entries</h2>
               <p>Matches the standard <code>{`{ mcpServers: { name: { command, args, env } } }`}</code> shape.</p>
             </div>
-            {render({state: {}, props: {}, fn: renderMcpPanelAddButton, events: { handleAddServer }})}
+            {render({state: {}, props: {}, fn: renderMcpPanelAddButton, events: { handleAddServer }, memo: {}})}
           </header>
 
           <div className="mcp-clean-list">
-            {render({state: { rows, editingId }, props: {}, fn: renderMcpServersViewServerList, events: { handleAddServer, handleAddExampleServer, toggleEditing, removeServerRow }})}
+            {render({state: { rows, editingId }, props: {}, fn: renderMcpServersViewServerList, events: { handleAddServer, handleAddExampleServer, toggleEditing, removeServerRow }, memo: {}})}
 
-            {render({state: { rows, editingId }, props: {}, fn: renderMcpServersViewEditCard, events: { toggleEditing, updateServerRow, addEnvRow, updateEnvRow, removeEnvRow }})}
+            {render({state: { rows, editingId }, props: {}, fn: renderMcpServersViewEditCard, events: { toggleEditing, updateServerRow, addEnvRow, updateEnvRow, removeEnvRow }, memo: {}})}
           </div>
 
           <footer className="mcp-clean-actions">

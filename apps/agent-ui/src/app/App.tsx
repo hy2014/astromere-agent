@@ -149,7 +149,6 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>("workspace");
   const [error, setError] = useState<string | null>(null);
-  const [isDetailPanelActive, setIsDetailPanelActive] = useState(false);
   const [chatModelOptions, setChatModelOptions] = useState<string[]>([
     "deepseek-v4-flash",
     "deepseek-v4-pro",
@@ -337,6 +336,12 @@ export function App() {
 
 
   function selectSession(project: ProjectFolder, sessionId: string) {
+    // 如果当前 session 还有进程在运行，禁止切换
+    const currentSession = activeProject?.sessions.find((s) => s.id === activeSessionId);
+    if (currentSession?.processStatus === "active") {
+      setError("当前会话正在运行中，请等待完成后再切换会话");
+      return;
+    }
     const sessionTitle =
       project.sessions.find((session) => session.id === sessionId)?.title ??
       "会话";
@@ -782,7 +787,7 @@ export function App() {
 
   return (
     <main
-      className={`app-shell ${activeView === "settings" || activeView === "skills" ? "settings-mode" : (activePreview || isDetailPanelActive) ? "has-preview" : ""}`}
+      className={`app-shell ${activeView === "settings" || activeView === "skills" ? "settings-mode" : ""}`}
     >
       <aside className="side-panel" aria-label="Project and skills">
         <WorkspaceTreeView
@@ -897,7 +902,6 @@ export function App() {
           selectedChatModel={selectedChatModel}
           onChatModelChange={setSelectedChatModel}
           onForkFromMessage={handleForkFromMessage}
-          onDetailPanelActiveChange={setIsDetailPanelActive}
         />
       )}
 

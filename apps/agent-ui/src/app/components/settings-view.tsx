@@ -229,7 +229,7 @@ function renderSettingsContent(
   }
 
   if (settingsSection === "sessions") {
-    return render({state: {}, props: { hiddenSessions }, fn: renderSessionsPanel, events: { onRestoreSession }});
+    return render({state: {}, props: { hiddenSessions }, fn: renderSessionsPanel, events: { onRestoreSession }, memo: {}});
   }
 
   return renderModelsPanel();
@@ -246,14 +246,14 @@ export function SettingsView({ hiddenSessions, onRestoreSession }: SettingsViewP
 
   return (
     <section className="settings-view" aria-label="System settings">
-      {render({state: { settingsSection }, props: {}, fn: renderSettingsTopbar, events: { goToSettingsSection }})}
+      {render({state: { settingsSection }, props: {}, fn: renderSettingsTopbar, events: { goToSettingsSection }, memo: {}})}
 
       <div className="settings-body">
-        {render({state: { settingsSection }, props: {}, fn: renderSettingsSidebar, events: { goToSettingsSection }})}
+        {render({state: { settingsSection }, props: {}, fn: renderSettingsSidebar, events: { goToSettingsSection }, memo: {}})}
 
         <section className="settings-content" aria-label="Models configuration">
           <div className="settings-content-inner">
-            {render({state: { settingsSection }, props: { hiddenSessions }, fn: renderSettingsContent, events: { onRestoreSession }})}
+            {render({state: { settingsSection }, props: { hiddenSessions }, fn: renderSettingsContent, events: { onRestoreSession }, memo: {}})}
           </div>
         </section>
       </div>

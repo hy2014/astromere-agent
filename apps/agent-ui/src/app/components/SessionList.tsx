@@ -186,5 +186,6 @@ export function SessionListView({
     props: {project, activeSessionId, onSelectSession, onForkSession, onHideSession, onCreateSession},
     fn: renderSessionList,
     events: {selectSessionWithStop, onToggleMenu, forkSessionWithStop, hideSessionWithStop, createSessionWithStop},
+    memo: {},
   });
 }
