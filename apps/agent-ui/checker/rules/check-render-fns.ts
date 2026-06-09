@@ -476,7 +476,17 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
                 if (!slotProp) continue;
 
                 const slotObj = unwrapParenthesized(slotProp.initializer);
-                if (!slotObj || !ts.isObjectLiteralExpression(slotObj)) continue;
+                if (!slotObj) continue;
+
+                // 所有 slot 值必须是 { key } 或 { key: value } 解构格式
+                if (!ts.isObjectLiteralExpression(slotObj)) {
+                    ctx.addViolation(
+                        "render 子集检查",
+                        `render() 的 ${slotName} 必须是对象字面量 { ... }，收到了 "${slotObj.getText()}"`,
+                        slotProp
+                    );
+                    continue;
+                }
 
                 for (const prop of slotObj.properties) {
                     let key: string | undefined;

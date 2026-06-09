@@ -55,5 +55,6 @@ export function FileReferenceTrayView({
     props: {fileReferences, onOpenPreviewLink, onRemoveReference},
     fn: renderFileReferenceTray,
     events: {onOpenPreviewLink, onRemoveReference},
+    memo: {},
   });
 }

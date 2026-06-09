@@ -1,29 +1,26 @@
 import { createElement, type ComponentType } from "react";
 
-type RenderFn<S = any, P = any, E = any, X = any> = (
+type RenderFn<S = any, P = any, E = any, M = any> = (
     state: S,
     props: P,
     events: E,
-    exts?: X,
-    memo?: any,
+    memo: M,
 ) => JSX.Element;
 
-export function render<S, P, E, X = any>({
+export function render<S, P, E, M>({
     state,
     props,
     fn,
     events,
-    exts,
     memo,
 }: {
     state: S;
     props: P;
-    fn: RenderFn<S, P, E, X>;
+    fn: RenderFn<S, P, E, M>;
     events: E;
-    exts?: X;
-    memo?: any;
+    memo: M;
 }): JSX.Element {
-    return fn(state, props, events, exts, memo);
+    return fn(state, props, events, memo);
 }
 
 /**
@@ -48,4 +45,42 @@ export function renderView<P = Record<string, any>>({
 }): JSX.Element {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return createElement(fn as any, props as any);
+}
+
+type RenderListItemFn<S = any, P = any, E = any> = (
+    state: S,
+    props: P,
+    events: E,
+    ext: any,
+) => JSX.Element;
+
+/**
+ * renderList — 列表渲染
+ *
+ * 替代 rows.map((row) => render({ fn, state, props, events, exts: { row } }))。
+ * 每条 item 自动作为 ext 传入 renderFn。
+ *
+ * @example
+ * renderList({
+ *   state: {},
+ *   props: {},
+ *   fn: renderRow,
+ *   events: { onDelete },
+ *   items: rows,
+ * })
+ */
+export function renderList<S, P, E>({
+    state,
+    props,
+    fn,
+    events,
+    items,
+}: {
+    state: S;
+    props: P;
+    fn: RenderListItemFn<S, P, E>;
+    events: E;
+    items: any[];
+}): JSX.Element[] {
+    return items.map((item) => fn(state, props, events, item));
 }

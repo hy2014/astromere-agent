@@ -156,6 +156,13 @@ export function checkWriteState(
                     `WriteState.${key} 只能赋值为 useState 的 setter 函数 "${key}"，不能赋值其他值`,
                     stmt,
                 );
+            } else if (!stateSetters.has(right.text)) {
+                ctx.addViolation(
+                    "WriteState 规范",
+                    `WriteState.${key} 只能赋值为 useState 的 setter，` +
+                    `"${right.text}" 不是一个 useState 的 setter 函数（并非通过 const [, setX] = useState() 声明）`,
+                    stmt,
+                );
             }
         }
     }
@@ -189,20 +196,39 @@ export function checkWriteState(
             for (const decl of stmt.declarationList.declarations) {
                 if (!ts.isIdentifier(decl.name) || !decl.initializer) continue;
 
-                // 跳过 hook 调用（useState, useMemo, useEffect 等）
-                if (ts.isCallExpression(decl.initializer) &&
-                    ts.isIdentifier(decl.initializer.expression) &&
-                    /^use/.test(decl.initializer.expression.text)) {
-                    continue;
-                }
+                // const [x, setX] = useState() — 解构赋值放行
+                if (!ts.isIdentifier(decl.name)) continue;
+                if (!decl.initializer) continue;
 
+                // 规则 2a: 箭头函数/函数表达式 → 禁止
                 if (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) {
                     ctx.addViolation(
                         "WriteState 规范",
                         `View 函数内禁止定义函数 "${decl.name.text}"，请移到文件级别`,
                         decl,
                     );
+                    continue;
                 }
+
+                // 规则 2c: View 内 const 必须是 useMemo / useCallback / useState 之一
+                // 其他 hook（useRef、useEffect、useContext 等）同样禁止
+                const hookName = ts.isCallExpression(decl.initializer) &&
+                    ts.isIdentifier(decl.initializer.expression)
+                    ? decl.initializer.expression.text
+                    : null;
+                if (hookName && (hookName === "useMemo" || hookName === "useCallback")) {
+                    continue; // ✅ 允许
+                }
+
+                ctx.addViolation(
+                    "WriteState 规范",
+                    hookName
+                        ? `View 内 const "${decl.name.text}" 来自 ${hookName}()，` +
+                          `View 内只允许 useMemo / useCallback`
+                        : `View 内 const "${decl.name.text}" 的值来源不明，` +
+                          `View 内 const 只能来自 useMemo 或 useCallback`,
+                    decl,
+                );
             }
         }
     }
@@ -424,9 +450,18 @@ export function checkWriteState(
 
         const localNames = collectLocalNames(fn);
 
-        function checkExternalRef(node: ts.Node) {
-            // 不要穿透到内层函数（它们有自己的作用域）
-            if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && node !== fn) return;
+        function checkExternalRef(node: ts.Node, scope: Set<string> = localNames) {
+            // 穿透到内层函数：合并父级作用域，保留链式参数引用
+            if (node !== fn && (ts.isArrowFunction(node) || ts.isFunctionExpression(node))) {
+                const nestedScope = collectScope(node);
+                const combined = new Set([...scope, ...nestedScope]);
+                if (node.body && ts.isBlock(node.body)) {
+                    ts.forEachChild(node.body, (child) => checkExternalRef(child, combined));
+                } else if (node.body) {
+                    checkExternalRef(node.body, combined);
+                }
+                return;
+            }
 
             if (ts.isIdentifier(node)) {
                 const name = node.text;
@@ -453,8 +488,8 @@ export function checkWriteState(
                     return;
                 }
 
-                // 放行：参数 / 局部变量
-                if (localNames.has(name)) return;
+                // 放行：当前作用域的参数 / 局部变量
+                if (scope.has(name)) return;
 
                 // 放行：属性访问的 property 名（.map, .trim, .name 等）
                 if (node.parent && ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) return;
@@ -495,6 +530,19 @@ export function checkWriteState(
                     "Date", "Math", "JSON", "RegExp", "Map", "Set", "WeakMap", "WeakSet",
                     "Promise", "Error", "TypeError", "SyntaxError", "ReferenceError",
                     "console", "parseInt", "parseFloat", "isNaN", "isFinite", "decodeURI", "encodeURI",
+                    // Web API
+                    "TextEncoder", "TextDecoder",
+                    "fetch", "URL", "URLSearchParams",
+                    "Blob", "File", "FileReader", "FormData",
+                    "Headers", "Request", "Response",
+                    "AbortController", "AbortSignal",
+                    "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+                    "requestAnimationFrame", "cancelAnimationFrame",
+                    "IntersectionObserver", "MutationObserver", "ResizeObserver",
+                    "performance", "crypto", "Intl",
+                    "structuredClone", "Proxy", "Reflect",
+                    "localStorage", "sessionStorage",
+                    "location", "navigator", "history",
                 ]);
                 if (GLOBALS.has(name)) return;
 
@@ -508,9 +556,27 @@ export function checkWriteState(
                     node,
                 );
             }
-            ts.forEachChild(node, checkExternalRef);
+            ts.forEachChild(node, (child) => checkExternalRef(child, scope));
         }
         checkExternalRef(fn.body);
+    }
+
+    // 收集任意函数的参数 + 局部变量作为作用域
+    function collectScope(node: ts.ArrowFunction | ts.FunctionExpression): Set<string> {
+        const names = new Set<string>();
+        for (const p of node.parameters) {
+            collectBindingNames(p.name, names);
+        }
+        if (node.body && ts.isBlock(node.body)) {
+            function collectFromBlock(n: ts.Node) {
+                if (ts.isVariableDeclaration(n)) {
+                    collectBindingNames(n.name, names);
+                }
+                ts.forEachChild(n, collectFromBlock);
+            }
+            collectFromBlock(node.body);
+        }
+        return names;
     }
 
     // ════════════════════════════════════════════════════════

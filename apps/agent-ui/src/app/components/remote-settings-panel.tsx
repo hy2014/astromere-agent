@@ -320,6 +320,7 @@ export function RemoteSettingsPanelView() {
         props: {},
         fn: renderRemoteForm,
         events: { updateName, updateBaseUrl, updateToken, handleTestRemote, handleSaveProfile, handleUseDraftRemote, handleUseLocal },
+        memo: {},
       })}
 
       {render({
@@ -327,6 +328,7 @@ export function RemoteSettingsPanelView() {
         props: {},
         fn: renderRemoteProfileList,
         events: { handleUseRemote, handleDeleteRemote },
+        memo: {},
       })}
     </>
   );

@@ -331,3 +331,38 @@ export function loadBundleUsageSnapshotsForSession(
   return invoke("load_bundle_usage_snapshots_for_session", { sessionId });
 }
 
+// ── ModelCallUsage (new table, keyed by modelCallId + sessionId) ──
+
+export type ModelCallUsage = {
+  modelCallId: string;
+  sessionId: string;
+  root: string;
+  model?: string | null;
+  stopReason?: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  startedAtMs?: number | null;
+  completedAtMs?: number | null;
+  updatedAtMs: number;
+  source: string;
+};
+
+export function saveModelCallUsage(usage: ModelCallUsage): Promise<void> {
+  return invoke("save_model_call_usage", { usage });
+}
+
+export function loadModelCallUsage(
+  modelCallId: string,
+  sessionId: string,
+): Promise<ModelCallUsage> {
+  return invoke("load_model_call_usage", { modelCallId, sessionId });
+}
+
+export function loadModelCallUsagesForSession(
+  sessionId: string,
+): Promise<ModelCallUsage[]> {
+  return invoke("load_model_call_usages_for_session", { sessionId });
+}
+

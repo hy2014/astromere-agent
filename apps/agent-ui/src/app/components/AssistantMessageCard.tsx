@@ -2,7 +2,7 @@ import {useState, useMemo, useCallback} from "react";
 import type {StreamItem, StreamLink} from "../../types";
 import type {AssistantMessageDebugBundle} from "../types";
 import type {BundleUsageSnapshot} from "../../tauri";
-import {AssistantUsageMiniOverlayView} from "./usage-components";
+import {AssistantUsageMiniOverlayView} from "./assistant-usage-mini-overlay";
 import {RichMarkdownMessage} from "./preview-components";
 import {MessageImagePreviews} from "./image-reference-view";
 import {debugStorageSource, debugStorageSourceCounts} from "../file-utils";
@@ -17,7 +17,7 @@ export interface AssistantMessageCardProps {
   assistantLiveUsage: BundleUsageSnapshot | null;
   streamUsageByBundleKey: Record<string, BundleUsageSnapshot> | null;
   projectRoot: string;
-  isRunningTurn: boolean;
+  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block";
   forkingMessageId: string | null;
   pendingPermission: { sessionId?: string } | null;
   isResolvingFileReferences: boolean;
@@ -33,7 +33,7 @@ export function AssistantMessageCard({
   assistantLiveUsage,
   streamUsageByBundleKey = {} as Record<string, BundleUsageSnapshot>,
   projectRoot,
-  isRunningTurn,
+  turnStatus,
   forkingMessageId,
   pendingPermission,
   isResolvingFileReferences,
@@ -119,7 +119,7 @@ export function AssistantMessageCard({
           debugEventCount={assistantDebugBundle?.events.length ?? 0}
           usageLabel={bundleUsageButtonLabel(assistantLiveUsage)}
           isForkDisabled={Boolean(
-            !item.checkpointUuid || isRunningTurn ||
+            !item.checkpointUuid || turnStatus !== "idle" ||
             Boolean(forkingMessageId) || pendingPermission || isResolvingFileReferences,
           )}
           forkLabel={forkingMessageId === item.id ? "Forking…" : "Fork"}

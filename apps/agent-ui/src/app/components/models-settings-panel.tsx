@@ -455,5 +455,6 @@ export function ModelsSettingsPanelView() {
     props: {},
     fn: renderModelsSettingsPanel,
     events: {selectModel, updateSelectedModel, handleSaveSettings, discardSettings, handleTestConnection, toggleShowApiKey},
+    memo: {},
   });
 }

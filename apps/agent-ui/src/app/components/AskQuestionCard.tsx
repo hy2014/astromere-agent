@@ -194,5 +194,6 @@ export function AskQuestionCardView({permission, onConfirm, onCancel}: AskQuesti
     props: {permission, onConfirm, onCancel},
     fn: renderAskQuestionCard,
     events: {handleOptionSelect, handleConfirmAction, handleCancel},
+    memo: {},
   });
 }

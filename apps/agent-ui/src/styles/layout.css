@@ -1,12 +1,8 @@
 
 .app-shell {
   display: grid;
-  grid-template-columns: 240px minmax(560px, 1fr);
+  grid-template-columns: 240px minmax(560px, 1fr) auto;
   height: 100vh;
   overflow: hidden;
   background: #f8f9ff;
-}
-
-.app-shell.has-preview {
-  grid-template-columns: 240px minmax(560px, 1fr) 500px;
 }

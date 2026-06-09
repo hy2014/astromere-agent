@@ -29,7 +29,8 @@ export function TestView() {
         state: {name, avatar},
         props: {isPremium},
         fn: renderUserCard,
-        events: {onEdit}
+        events: {onEdit},
+        memo: {},
     })}
     </div>
     );

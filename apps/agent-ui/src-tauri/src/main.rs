@@ -14,6 +14,9 @@ use sqlite::{
     load_bundle_usage_snapshot,
     load_bundle_usage_snapshots_for_session,
     save_bundle_usage_snapshot,
+    save_model_call_usage,
+    load_model_call_usage,
+    load_model_call_usages_for_session,
 };
 use terminal::{terminal_kill, terminal_list, terminal_resize, terminal_spawn, terminal_write};
 
@@ -77,6 +80,9 @@ fn main() {
             save_bundle_usage_snapshot,
             load_bundle_usage_snapshot,
             load_bundle_usage_snapshots_for_session,
+            save_model_call_usage,
+            load_model_call_usage,
+            load_model_call_usages_for_session,
             terminal_spawn,
             terminal_write,
             terminal_kill,

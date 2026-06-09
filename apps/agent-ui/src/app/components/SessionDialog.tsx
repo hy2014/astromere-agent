@@ -1,10 +1,10 @@
 /* @checkFns detail-panel */
-import {useState, useRef, useEffect, useMemo, useCallback} from "react";
+import {useState, useEffect, useMemo, useCallback} from "react";
 import type {
   AgentPermissionState,
   StreamItem,
   StreamLink,
-  ModelSettings,
+  LocalFileReferenceSummary,
 } from "../../types";
 import type {AssistantMessageDebugBundle, LocalFileReference, PreviewTab, ProjectFolder, DebugStreamEvent} from "../types";
 import type {BundleUsageSnapshot} from "../../tauri";
@@ -12,16 +12,23 @@ import {render, renderView} from "../../core/dep";
 import {PreviewPanelView} from "./PreviewPanel";
 import {PromptInputAreaView} from "./PromptInputArea";
 import {MessagesStreamView, renderPromptHighlightedText} from "./messages-stream";
-import {assistantTurnDetails, compactCountLabel, runtimeSessionToArtifacts} from "../debug-utils";
+import {assistantTurnDetails, assistantTurnTimeline, compactCountLabel, runtimeSessionToArtifacts} from "../debug-utils";
 import {formatDebugTime} from "../file-utils";
-import {SessionUsageDashboard} from "./usage-components";
-import {useAgentTurn} from "../../hooks/useAgentTurn";
-import {loadTypedRuntimeSession, loadBundleUsageSnapshotsForSession} from "../../runtime";
+import {SessionUsageDashboardView} from "./usage-components";
+import {
+  ensureAgentReplProcess,
+  sendAgentReplInput,
+  interruptAgentTurn,
+  respondAgentPermission,
+  readLocalReferenceFile,
+  loadTypedRuntimeSession,
+} from "../../runtime";
 import {welcomeStream} from "../session";
-import {bundleUsageStorageKey, bundleUsageStatusFromEvent, calculateBundleUsageSnapshot} from "../usage-cost";
 import {
   onStreamEvent,
   startStreamEventListener,
+  getSessionData,
+  addCallback,
 } from "../../hooks/stream-event-bus";
 import {realSessionIdFromEvent, streamEventToItems, collapseAssistantTurns, resolveRuntimeBundleEvent, createDebugEvent, applyRuntimeDebugEventToBundle} from "../stream-processor";
 import {
@@ -29,8 +36,7 @@ import {
   permissionRequestIdFromEvent,
   permissionInputFromEvent,
 } from "../file-utils";
-import {saveBundleUsageSnapshot} from "../../tauri";
-import {loadModelSettings} from "../../runtime";
+import {queryItemList} from "../stream-handlers/message-detail";
 
 // ─── Props interface ─────────────────────────────────────────────────────
 
@@ -55,115 +61,611 @@ export interface SessionDialogProps {
   selectedChatModel: string;
   onChatModelChange: (model: string) => void;
   onForkFromMessage: (item: Extract<StreamItem, { kind: "message" }>) => void;
-  /** 通知父组件右侧详细面板（预览/过程）是否需要显示，用于控制 CSS Grid 第三列 */
-  onDetailPanelActiveChange?: (active: boolean) => void;
 }
+
+export type PendingPermission = {
+  root: string;
+  sessionId: string;
+  messageId: string;
+  requestId: string;
+  prompt: string;
+  toolName?: string;
+  input?: unknown;
+  rawJson?: unknown;
+  isQuestion?: boolean;
+  questions?: Array<{
+    question: string;
+    header?: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>;
+};
 
 // ─── WriteState (session loading effect 专用，不要扩展) ───────────────────
 
 const WriteState: {
   setSessionStreams: (updater: (streams: Record<string, StreamItem[]>) => Record<string, StreamItem[]>) => void;
   setAssistantDebugBundles: (updater: (bundles: Record<string, AssistantMessageDebugBundle>) => Record<string, AssistantMessageDebugBundle>) => void;
-  setStreamUsageByBundleKey: (updater: (usage: Record<string, BundleUsageSnapshot>) => Record<string, BundleUsageSnapshot>) => void;
-  setIsRunningTurn: (updater: boolean | ((current: boolean) => boolean)) => void;
-  setPendingPermissions: (updater: any[]) => void;
+  setTurnStatus: (updater: "idle" | "running" | "interrupt" | "ctrl_block" | ((prev: "idle" | "running" | "interrupt" | "ctrl_block") => "idle" | "running" | "interrupt" | "ctrl_block")) => void;
+  setPendingPermissions: (updater: any) => void;
   setIsResolvingFileReferences: (value: boolean) => void;
   setForkingMessageId: (id: string | null) => void;
-  setIsInterruptingTurn: (value: boolean) => void;
-  handlePermissionAllow: () => void;
-  handlePermissionDeny: () => void;
+  setDisplayDetailBundleId: (updater: string | null | ((current: string | null) => string | null)) => void;
 } = {} as any;
 
 // ─── File-level functions ────────────────────────────────────────────────
-
-function handlePermissionAllow() {
-  WriteState.handlePermissionAllow();
-}
-function handlePermissionDeny() {
-  WriteState.handlePermissionDeny();
-}
-
-interface ProcessDetailComputed {
-  processMessageId: string | null;
-  processDetails: ReturnType<typeof assistantTurnDetails> | null;
-  showProcess: boolean;
-  hasDetailContent: boolean;
-}
-
-function computeProcessDetails(
-  streamItems: StreamItem[],
-  assistantDebugBundles: Record<string, AssistantMessageDebugBundle>,
-  openProcessMessageIds: Set<string>,
-): ProcessDetailComputed {
-  const processMessageId =
-    openProcessMessageIds.size > 0
-      ? streamItems.find(
-          (s): s is Extract<StreamItem, { kind: "message" }> =>
-            s.kind === "message" && s.role === "assistant" && openProcessMessageIds.has(s.id),
-        )?.id ?? null
-      : null;
-  const processItem = processMessageId
-    ? streamItems.find(
-        (s): s is Extract<StreamItem, { kind: "message" }> =>
-          s.kind === "message" && s.role === "assistant" && s.id === processMessageId,
-      ) ?? null
-    : null;
-  const processDetails = processItem
-    ? assistantTurnDetails(processItem, assistantDebugBundles[processItem.id] ?? null)
-    : null;
-  const showProcess = Boolean(processDetails && processDetails.timeline.length > 0);
-  const hasDetailContent = showProcess && Boolean(processDetails);
-  return { processMessageId, processDetails, showProcess, hasDetailContent };
-}
 
 function computeShowPreview(activeProject: ProjectFolder | null, activePreview: PreviewTab | null): boolean {
   return activeProject !== null && activePreview !== null;
 }
 
-function computeUsageCount(streamUsageByBundleKey: Record<string, BundleUsageSnapshot>, activeSessionId: string | null): number {
-  if (!activeSessionId) return 0;
-  return Object.values(streamUsageByBundleKey).filter((s) => s.sessionId === activeSessionId).length;
+function computeActiveStreamItems(sessionStreams: Record<string, StreamItem[]>, activeSessionId: string | null): StreamItem[] {
+  return activeSessionId ? (sessionStreams[activeSessionId] ?? []) : [];
 }
 
-// ─── View-component wrappers ──
 
-const renderMessagesStream = (p: any) => renderView({ fn: MessagesStreamView, props: p });
-const renderPromptInput = (p: any) => renderView({ fn: PromptInputAreaView, props: p });
-const renderPreviewPanel = (p: any) => renderView({ fn: PreviewPanelView, props: p });
+function computeProcessData(
+  streamItems: StreamItem[],
+  assistantDebugBundles: Record<string, AssistantMessageDebugBundle>,
+  displayDetailBundleId: string | null,
+): { processDetails: ReturnType<typeof assistantTurnDetails> | null; showProcess: boolean } {
+  if (!displayDetailBundleId) return { processDetails: null, showProcess: false };
+  const item = streamItems.find(
+    (s): s is Extract<StreamItem, { kind: "message" }> =>
+      s.kind === "message" && s.role === "assistant" && s.id === displayDetailBundleId,
+  );
+  if (!item) return { processDetails: null, showProcess: false };
+  const details = assistantTurnDetails(item, assistantDebugBundles[displayDetailBundleId] ?? null);
+  return { processDetails: details, showProcess: Boolean(details?.timeline.length) };
+}
 
-// ─── renderFn functions ──────────────────────────────────────────────────
+function getStreamItemsFromState(sessionStreams: Record<string, StreamItem[]>, sessionId: string): StreamItem[] {
+  return sessionStreams[sessionId] ?? [];
+}
 
-function renderSessionHeader(
-  { sessionTitle, usageCount, sessionId }: { sessionTitle: string; usageCount: number; sessionId: string | null },
-  {}: Record<string, never>,
-  { onToggleSessionUsage }: { onToggleSessionUsage: () => void },
-) {
-  return (
-    <header className="workspace-header">
-      <div className="session-title-area">
-        <div className="session-title">
-          <span className="header-icon" aria-hidden="true">chat</span>
-          <h1>{sessionTitle}</h1>
-        </div>
-        <button className="debug-toggle" type="button" onClick={onToggleSessionUsage} disabled={!sessionId}>
-          Usage <span>{usageCount}</span>
-        </button>
-      </div>
-      <input className="session-search" placeholder="Search session content..." aria-label="Search session content" />
-    </header>
+// ─── Handle functions (file-level, use WriteState) ──────────────────────
+
+function onToggleAssistantProcess(messageId: string): void {
+  WriteState.setDisplayDetailBundleId((current: string | null) => (current === messageId ? null : messageId));
+}
+
+// ─── Effect extraction functions (file-level, use WriteState for state) ──
+
+function setupStreamEventEffect(): () => void {
+  startStreamEventListener();
+  return onStreamEvent((event) => {
+    const debugEntry = createDebugEvent(event);
+    const realSessionId = event.eventType === "turn_complete" ? realSessionIdFromEvent(event) : null;
+
+    // Stream items + bundle tracking: compute bundleId from latest sessionStreams
+    let resolvedRef: any = null;
+    // Use setState with updater to get latest streams
+    WriteState.setSessionStreams((streams) => {
+      const currentItems = streams[event.sessionId] ?? [];
+      const currentBundleId = (() => {
+        for (let i = currentItems.length - 1; i >= 0; i--) {
+          const s = currentItems[i];
+          if (s.kind === "message" && s.role === "assistant" && s.status !== "complete") {
+            return s.id;
+          }
+        }
+        return null;
+      })();
+      const resolved = resolveRuntimeBundleEvent(event, { [event.sessionId]: currentBundleId });
+      resolvedRef = resolved;
+      const nextItems = collapseAssistantTurns(
+        streamEventToItems(currentItems, resolved),
+      );
+
+      // Debug bundles update — 在 updater 内执行，与 setSessionStreams 在同一个 batch 中
+      WriteState.setAssistantDebugBundles((bundles) =>
+        applyRuntimeDebugEventToBundle(bundles, resolved, debugEntry),
+      );
+
+      return { ...streams, [event.sessionId]: nextItems };
+    });
+
+    // Real session redirect
+    if (realSessionId && realSessionId !== event.sessionId) {
+      WriteState.setSessionStreams((streams) => {
+        const oldItems = streams[event.sessionId] ?? [];
+        const existingNewItems = streams[realSessionId] ?? [];
+        const { [event.sessionId]: _removed, ...rest } = streams;
+        return { ...rest, [realSessionId]: existingNewItems.length > 0 ? existingNewItems : oldItems };
+      });
+    }
+  });
+}
+
+function setupTurnPermissionEventEffect(
+  setProjects: any,
+): () => void {
+  return onStreamEvent((event) => {
+    if (event.eventType === "permission_request" || event.eventType === "control_request") {
+      const tn = permissionToolNameFromEvent(event);
+      const requestId = permissionRequestIdFromEvent(event);
+      const permInput = permissionInputFromEvent(event);
+      const promptText = String(event.payload.prompt ?? `${tn} requests permission`);
+      const isQuestion = tn === "AskUserQuestion";
+      let questions: any[] | undefined;
+      if (isQuestion && permInput && typeof permInput === "object") {
+        const raw = permInput as Record<string, unknown>;
+        if (Array.isArray(raw.questions)) questions = raw.questions;
+      }
+      handleEnqueuePendingPermission({
+        root: event.root, sessionId: event.sessionId,
+        messageId: `permission:${event.sessionId}:${requestId || Date.now()}`,
+        requestId, prompt: promptText, toolName: tn, input: permInput,
+        rawJson: event.payload.raw_json ?? event.payload, isQuestion, questions,
+      });
+      WriteState.setTurnStatus("idle");
+    }
+
+    if (event.eventType === "startup" || event.eventType === "process_status") {
+      const pid = typeof event.payload.pid === "number" ? event.payload.pid : undefined;
+      const running = event.eventType === "startup" ? true : event.payload.running === true;
+      setProjects((folders: ProjectFolder[]) => folders.map((f: ProjectFolder) => ({
+        ...f, sessions: f.sessions.map((s: any) =>
+          s.id === event.sessionId ? { ...s, processStatus: running ? ("active" as const) : ("stopped" as const), processPid: running ? pid : undefined } : s),
+      })));
+    }
+
+    const realSessionId = event.eventType === "turn_complete" ? realSessionIdFromEvent(event) : null;
+    if (realSessionId && realSessionId !== event.sessionId) {
+      const pid = typeof event.payload.pid === "number" ? event.payload.pid : undefined;
+      setProjects((folders: ProjectFolder[]) => folders.map((f: ProjectFolder) => {
+        const sessions = f.sessions.map((s: any) =>
+          s.id === event.sessionId ? { ...s, id: realSessionId, isPending: false, processStatus: "active" as const, processPid: pid ?? s.processPid } : s);
+        return { ...f, sessions: sessions.filter((s: any, i: number, self: any[]) => self.findIndex((x: any) => x.id === s.id) === i) };
+      }));
+      // Note: turn_complete 处理（下方）会负责设置 turnStatus
+    }
+
+    if (event.eventType === "turn_complete" || event.eventType === "error" || event.eventType === "interrupt" || event.eventType === "process_exit") {
+      WriteState.setTurnStatus("idle");
+      handleClearPendingPermissionsForSession(event.sessionId);
+    }
+
+    if (event.eventType === "process_exit") {
+      setProjects((folders: ProjectFolder[]) => folders.map((f: ProjectFolder) => ({
+        ...f, sessions: f.sessions.map((s: any) =>
+          s.id === event.sessionId ? { ...s, processStatus: "stopped" as const, processPid: undefined } : s),
+      })));
+    }
+
+    if (event.eventType === "stderr") {
+      const detail = String(event.payload?.text ?? event.payload?.message ?? "").toLowerCase();
+      if (detail.includes("repl process stdout closed")) {
+        setProjects((folders: ProjectFolder[]) => folders.map((f: ProjectFolder) => ({
+          ...f, sessions: f.sessions.map((s: any) =>
+            s.id === event.sessionId ? { ...s, processStatus: "stopped" as const, processPid: undefined } : s),
+        })));
+      }
+      if (detail.includes("error") || detail.includes("failed") || detail.includes("missing_credentials")) {
+        WriteState.setTurnStatus("idle");
+        handleClearPendingPermissionsForSession(event.sessionId);
+      }
+    }
+  });
+}
+
+function loadSessionEffect(
+  activeRoot: string | undefined,
+  activeSessionId: string,
+  activeSessionTitle: string,
+  activeProject: ProjectFolder | null,
+  onSetError: (err: string | null) => void,
+): () => void {
+  // Guard: no session selected
+  if (!activeRoot || !activeSessionId) return () => {};
+  // Guard: pending session (not yet confirmed)
+  const session = activeProject?.sessions.find((s) => s.id === activeSessionId);
+  if (!session || session.isPending) return () => {};
+
+  let cancelled = false;
+  loadTypedRuntimeSession(activeRoot, activeSessionId)
+    .then((detail) => {
+      if (cancelled) return;
+      const artifacts = runtimeSessionToArtifacts(detail, activeRoot!);
+      WriteState.setAssistantDebugBundles((bundles) => ({ ...bundles, ...artifacts.bundles }));
+      WriteState.setSessionStreams((streams) => {
+        if ((streams[activeSessionId] ?? []).length > 0) return streams;
+        return { ...streams, [activeSessionId]: detail.messages.length > 0 ? artifacts.items : welcomeStream(activeProject!.name, activeSessionTitle) };
+      });
+    })
+    .catch((reason) => { if (!cancelled) onSetError(String(reason)); });
+  return () => { cancelled = true; };
+}
+
+// ─── Inline helpers (merged from useAgentTurn) ────────────────────────────
+
+function truncateSessionTitle(value: string): string {
+  const maxLength = 80;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxLength) {
+    return normalized || "新会话";
+  }
+  return `${normalized.slice(0, maxLength)}…`;
+}
+
+function localFileReferenceName(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").filter(Boolean).pop() || normalized || "file";
+}
+
+function sanitizeFenceContent(content: string): string {
+  return content.replace(/```/g, "`\u200b``");
+}
+
+function languageFence(language: string, path: string): string {
+  const normalized = language.trim() || path.split(".").pop() || "text";
+  return normalized.replace(/[^a-zA-Z0-9_-]/g, "") || "text";
+}
+
+function formatFileSize(bytes?: number | null): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes)) return "unknown size";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function buildPromptWithLocalFileReferences(
+  root: string,
+  userPrompt: string,
+  references: LocalFileReference[],
+  maxRefFileBytes: number,
+  maxRefTotalBytes: number,
+): Promise<{
+  prompt: string;
+  fileReferences: LocalFileReferenceSummary[];
+}> {
+  const uniqueReferences = Array.from(
+    new Map(
+      references.map((reference) => [reference.path, reference]),
+    ).values(),
+  );
+  if (uniqueReferences.length === 0) return { prompt: userPrompt, fileReferences: [] };
+  const blocks: string[] = [];
+  const fileSummaries: LocalFileReferenceSummary[] = [];
+  let totalBytes = 0;
+  for (const reference of uniqueReferences) {
+    if (totalBytes >= maxRefTotalBytes) {
+      blocks.push(`### ${reference.path}\nSkipped: total referenced file content limit reached.`);
+      fileSummaries.push({ path: reference.path, name: reference.name || localFileReferenceName(reference.path), language: reference.extension ?? undefined, size_bytes: reference.size_bytes ?? null, injected_bytes: 0, truncated: true, failed: true, error: "total referenced file content limit reached" });
+      continue;
+    }
+    try {
+      const file = await readLocalReferenceFile(root, reference.path);
+      const availableBytes = Math.max(0, maxRefTotalBytes - totalBytes);
+      const maxBytes = Math.min(maxRefFileBytes, availableBytes);
+      const encoded = new TextEncoder().encode(file.content);
+      const truncated = encoded.length > maxBytes;
+      const content = truncated ? new TextDecoder().decode(encoded.slice(0, maxBytes)) : file.content;
+      const injectedBytes = Math.min(encoded.length, maxBytes);
+      totalBytes += injectedBytes;
+      fileSummaries.push({ path: file.path, name: localFileReferenceName(file.path), language: file.language || reference.extension || "text", total_lines: file.total_lines, size_bytes: file.size_bytes, injected_bytes: injectedBytes, truncated, failed: false });
+      blocks.push([`### ${file.path}`, `- language: ${file.language || reference.extension || "text"}`, `- lines: ${file.total_lines}`, `- size: ${formatFileSize(file.size_bytes)}`, truncated ? `- note: content truncated to ${formatFileSize(maxBytes)} for this request` : null, "", `\`\`\`${languageFence(file.language, file.path)}`, sanitizeFenceContent(content), "```"].filter((line): line is string => line !== null).join("\n"));
+    } catch (reason) {
+      blocks.push(`### ${reference.path}\nFailed to read this referenced file: ${String(reason)}`);
+      fileSummaries.push({ path: reference.path, name: reference.name || localFileReferenceName(reference.path), language: reference.extension ?? undefined, size_bytes: reference.size_bytes ?? null, injected_bytes: 0, truncated: false, failed: true, error: String(reason) });
+    }
+  }
+  return { prompt: [userPrompt, "", "<agent-ui-local-file-references>", "The user referenced these local files with @. They may be inside or outside the current workspace. Treat them as read-only context snapshots for this turn. Use exact paths when citing or discussing them. If a file is truncated or failed to read, say so instead of guessing missing content.", "", blocks.join("\n\n"), "</agent-ui-local-file-references>"].filter(Boolean).join("\n"), fileReferences: fileSummaries };
+}
+
+// ─── Turn handler functions (file-level, use WriteState) ──────────────────
+
+function handleForkFromMessageAction(
+  item: Extract<StreamItem, { kind: "message" }>,
+  onFork: (item: Extract<StreamItem, { kind: "message" }>) => void,
+): void {
+  WriteState.setForkingMessageId(item.id);
+  // Fire-and-forget: onFork 是 async function（App.tsx 的 handleForkFromMessage），
+  // 等异步操作完成后自动清除 forkingMessageId
+  Promise.resolve(onFork(item))
+    .catch(() => {})
+    .finally(() => WriteState.setForkingMessageId(null));
+}
+
+function computePendingPermission(
+  activeSessionId: string | null,
+  pendingPermissions: PendingPermission[],
+): PendingPermission | null {
+  return activeSessionId
+    ? (pendingPermissions.find(
+        (p) => p.sessionId === activeSessionId,
+      ) ?? null)
+    : null;
+}
+
+function handleEnqueuePendingPermission(permission: PendingPermission): void {
+  if (!permission.requestId) return;
+  WriteState.setPendingPermissions((current: any) => {
+    const existingIndex = current.findIndex(
+      (item: any) => item.sessionId === permission.sessionId && item.requestId === permission.requestId,
+    );
+    if (existingIndex >= 0) {
+      const next = current.slice();
+      next[existingIndex] = permission;
+      return next;
+    }
+    return [...current, permission];
+  });
+}
+
+function handleRemovePendingPermission(sessionId: string, requestId: string): void {
+  WriteState.setPendingPermissions((current: any) =>
+    current.filter((p: any) => p.sessionId !== sessionId || p.requestId !== requestId),
   );
 }
 
+function handleClearPendingPermissionsForSession(sessionId: string): void {
+  WriteState.setPendingPermissions((current: any) =>
+    current.filter((p: any) => p.sessionId !== sessionId),
+  );
+}
+
+async function handleSubmitPromptAction(
+  input: { text: string; fileReferences: LocalFileReference[] },
+  activeProject: ProjectFolder | null,
+  activeSessionId: string | null,
+  selectedChatModel: string,
+  permissionState: AgentPermissionState | null,
+  pendingPermissionsVal: PendingPermission[],
+  turnStatusVal: "idle" | "running" | "interrupt" | "ctrl_block",
+  isResolvingFileReferencesVal: boolean,
+  forkingMessageIdVal: string | null,
+  setProjectsFn: (updater: (folders: ProjectFolder[]) => ProjectFolder[]) => void,
+  setErrorFn: (error: string | null) => void,
+): Promise<void> {
+  const pendingPermissionVal = computePendingPermission(activeSessionId, pendingPermissionsVal);
+  const trimmed = input.text.trim();
+  if (
+    (!trimmed && input.fileReferences.length === 0) ||
+    !activeProject ||
+    !activeSessionId ||
+    turnStatusVal !== "idle" ||
+    pendingPermissionVal ||
+    isResolvingFileReferencesVal ||
+    forkingMessageIdVal
+  ) {
+    return;
+  }
+
+  const referencedFiles = input.fileReferences;
+  const displayPrompt =
+    trimmed ||
+    `请阅读这些引用文件：${referencedFiles.map((reference) => `@${reference.path}`).join(", ")}`;
+  const pendingId = `assistant-pending-${Date.now()}`;
+  const targetSessionId = activeSessionId;
+  let inputForClaude = displayPrompt;
+  let injectedFileReferences: LocalFileReferenceSummary[] = [];
+
+  const pendingAssistantText = "Assistant is thinking…";
+  console.time('[submit] enter-to-sync');
+  WriteState.setAssistantDebugBundles((bundles) => ({
+    ...bundles,
+    [pendingId]: {
+      messageId: pendingId,
+      modelCallIds: [],
+      sessionId: targetSessionId,
+      root: activeProject.root,
+      userMessage: displayPrompt,
+      transportMessage: inputForClaude,
+      fileReferences: undefined,
+      displayText: pendingAssistantText,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      completed: false,
+      events: [],
+    },
+  }));
+  console.time('[submit] sync: updateSessionStream + setTurnStatus');
+  WriteState.setSessionStreams((streams) => ({
+    ...streams,
+    [targetSessionId]: collapseAssistantTurns([
+      ...(streams[targetSessionId] ?? []),
+      {
+        id: `user-${Date.now()}`,
+        kind: "message",
+        role: "user",
+        text: displayPrompt,
+        links: [],
+        fileReferences: undefined,
+      },
+      {
+        id: pendingId,
+        kind: "message",
+        role: "assistant",
+        text: pendingAssistantText,
+        status: "streaming",
+      },
+    ]),
+  }));
+  WriteState.setTurnStatus("running");
+  setErrorFn(null);
+  console.timeEnd('[submit] sync: updateSessionStream + setTurnStatus');
+  console.timeEnd('[submit] enter-to-sync');
+
+  WriteState.setIsResolvingFileReferences(true);
+  try {
+    const referencePayload = await buildPromptWithLocalFileReferences(
+      activeProject.root,
+      displayPrompt,
+      referencedFiles,
+      49152,
+      163840,
+    );
+    inputForClaude = referencePayload.prompt;
+    injectedFileReferences = referencePayload.fileReferences;
+  } catch (reason) {
+    setErrorFn(`Read referenced files failed: ${String(reason)}`);
+    WriteState.setIsResolvingFileReferences(false);
+    WriteState.setSessionStreams((streams) => ({
+      ...streams,
+      [targetSessionId]: (streams[targetSessionId] ?? []).map((item) =>
+        item.id === pendingId && item.kind === "message"
+          ? { ...item, text: `Agent turn failed: ${String(reason)}`, status: "complete" }
+          : item,
+      ),
+    }));
+    WriteState.setTurnStatus("idle");
+    return;
+  }
+  WriteState.setIsResolvingFileReferences(false);
+
+  if (injectedFileReferences.length > 0) {
+    WriteState.setAssistantDebugBundles((bundles) => {
+      const existing = bundles[pendingId];
+      if (!existing) return bundles;
+      return {
+        ...bundles,
+        [pendingId]: { ...existing, fileReferences: injectedFileReferences },
+      };
+    });
+    WriteState.setSessionStreams((streams) => ({
+      ...streams,
+      [targetSessionId]: (streams[targetSessionId] ?? []).map((item) =>
+        item.id.startsWith("user-")
+          ? { ...item, fileReferences: injectedFileReferences }
+          : item,
+      ),
+    }));
+  }
+
+  if (
+    activeProject.sessions.find(
+      (session) => session.id === targetSessionId,
+    )?.isPending
+  ) {
+    const nextTitle = truncateSessionTitle(displayPrompt);
+    setProjectsFn((folders) =>
+      folders.map((folder) =>
+        folder.id === activeProject.id
+          ? {
+              ...folder,
+              sessions: folder.sessions.map((session: any) =>
+                session.id === targetSessionId
+                  ? { ...session, title: nextTitle }
+                  : session,
+              ),
+            }
+          : folder,
+      ),
+    );
+  }
+
+  ensureAgentReplProcess(
+    activeProject.root,
+    targetSessionId,
+    selectedChatModel,
+    permissionState?.currentMode ?? "default",
+  )
+    .then((state: any) => {
+      const sessionId = state.sessionId || targetSessionId;
+      return sendAgentReplInput(
+        activeProject.root,
+        sessionId,
+        inputForClaude,
+      );
+    })
+    .catch((reason: any) => {
+      setErrorFn(String(reason));
+      handleClearPendingPermissionsForSession(targetSessionId);
+      WriteState.setSessionStreams((streams) => ({
+        ...streams,
+        [targetSessionId]: (streams[targetSessionId] ?? []).map((item) =>
+          item.id === pendingId && item.kind === "message"
+            ? { ...item, text: `Agent turn failed: ${String(reason)}`, status: "complete" }
+            : item,
+        ),
+      }));
+      WriteState.setTurnStatus("idle");
+    });
+}
+
+function handlePermissionDecisionAction(
+  approved: boolean,
+  answers: Record<string, string> | undefined,
+  activeSessionId: string | null,
+  pendingPermissionsVal: PendingPermission[],
+  setErrorFn: (error: string | null) => void,
+): void {
+  const pendingPermissionVal = computePendingPermission(activeSessionId, pendingPermissionsVal);
+  if (!pendingPermissionVal) return;
+  const target = pendingPermissionVal;
+  setErrorFn(null);
+  handleRemovePendingPermission(target.sessionId, target.requestId);
+  WriteState.setTurnStatus("running");
+  const updatedInput =
+    target.isQuestion && approved && answers && target.input
+      ? { ...(target.input as Record<string, unknown>), answers }
+      : undefined;
+  respondAgentPermission(
+    target.root,
+    target.sessionId,
+    target.requestId,
+    approved,
+    updatedInput,
+  ).catch((reason) => {
+    setErrorFn(String(reason));
+    handleEnqueuePendingPermission(target);
+    WriteState.setTurnStatus("idle");
+  });
+}
+
+function handleInterruptTurnAction(
+  turnStatusVal: "idle" | "running" | "interrupt" | "ctrl_block",
+  pendingPermissionsVal: PendingPermission[],
+  activeSessionIdVal: string | null,
+  activeProject: ProjectFolder | null,
+  setErrorFn: (error: string | null) => void,
+): void {
+  const pendingPermissionVal = computePendingPermission(activeSessionIdVal, pendingPermissionsVal);
+  if (turnStatusVal === "idle" || turnStatusVal === "interrupt") return;
+  WriteState.setTurnStatus("interrupt");
+  interruptAgentTurn(activeProject?.root ?? "", activeSessionIdVal ?? "")
+    .catch((reason) => setErrorFn(String(reason)))
+    .finally(() => {
+      // 权限清理由 setupTurnPermissionEventEffect 中的 event bus handler
+      // 在收到 interrupt 事件时自动完成（使用事件中的正确 sessionId）
+      WriteState.setTurnStatus("idle");
+    });
+}
+
+function handlePermissionAllow(
+  answers: Record<string, string> | undefined,
+  activeSessionId: string | null,
+  pendingPermissions: PendingPermission[],
+  setError: (err: string | null) => void,
+): void {
+  handlePermissionDecisionAction(true, answers, activeSessionId, pendingPermissions, setError);
+}
+function handlePermissionDeny(
+  activeSessionId: string | null,
+  pendingPermissions: PendingPermission[],
+  setError: (err: string | null) => void,
+): void {
+  handlePermissionDecisionAction(false, undefined, activeSessionId, pendingPermissions, setError);
+}
+
+// ─── renderFn functions ──────────────────────────────────────────────────
+
 function renderProcessTimeline(
-  { processDetails, processMessageId }: { processDetails: NonNullable<ProcessDetailComputed["processDetails"]>; processMessageId: string },
-  {}: Record<string, never>,
+  { displayDetailBundleId }:
+    { displayDetailBundleId: string | null },
+  { activeSessionId }: { activeSessionId: string | null },
   { onToggleAssistantProcess }: { onToggleAssistantProcess: (id: string) => void },
 ) {
-  const pd = processDetails;
+  if (!displayDetailBundleId) return <></>;
+  const sessionInfo = getSessionData<{ bundles: Record<string, string[]> }>(activeSessionId ?? "", "session-info");
+  const messageIds = sessionInfo?.bundles?.[displayDetailBundleId] ?? [];
+  const events = queryItemList(activeSessionId ?? "", messageIds);
+  const pd = assistantTurnTimeline(events);
   return (
     <div className="detail-content-overlay">
       <div className="detail-content-overlay-topbar">
-        <button type="button" onClick={() => onToggleAssistantProcess(processMessageId)} className="process-panel-close-btn" aria-label="Close process panel">×</button>
+        <button type="button" onClick={() => onToggleAssistantProcess(displayDetailBundleId)} className="process-panel-close-btn" aria-label="Close process panel">×</button>
       </div>
       <section className="file-workbench">
         <div className="detail-header">
@@ -182,7 +684,7 @@ function renderProcessTimeline(
         <div className="process-panel-timeline">
           <div className="message-section-label">时间线</div>
           <ol className="message-process-timeline">
-            {pd.timeline.map((entry) => (
+            {pd.timeline.map((entry: any) => (
               <li className={`process-timeline-item ${entry.kind}`} key={entry.id}>
                 <div className="process-timeline-marker" aria-hidden="true" />
                 <div className="process-timeline-content">
@@ -204,69 +706,58 @@ function renderProcessTimeline(
 }
 
 function renderDetailPanel(
-  { showProcess, processDetails, processMessageId, showPreview, activePreview }:
-    { showProcess: boolean; processDetails: ReturnType<typeof assistantTurnDetails> | null; processMessageId: string | null; showPreview: boolean; activePreview: PreviewTab | null },
-  { previewTabs, activeProject }: { previewTabs: PreviewTab[]; activeProject: ProjectFolder | null },
-  { onToggleAssistantProcess }: { onToggleAssistantProcess: (messageId: string) => void },
-  _ext?: { renderPreviewPanel: (p: any) => JSX.Element; renderProcessTimeline: (p: any, e: any, ev: any) => JSX.Element; previewEvents: { onSetActivePreviewId: (id: string | null) => void; onClosePreviewTab: (id: string) => void; onCloseAllPreviews: () => void; onOpenPreviewLink: (link: StreamLink) => void } },
+  { displayDetailBundleId }:
+    { displayDetailBundleId: string | null },
+  { activeSessionId, activeProject, activePreview, previewTabs }:
+    { activeSessionId: string | null; activeProject: ProjectFolder | null; activePreview: PreviewTab | null; previewTabs: PreviewTab[] },
+  { onToggleAssistantProcess, onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews, onOpenPreviewLink }:
+    { onToggleAssistantProcess: (messageId: string) => void; onSetActivePreviewId: (id: string | null) => void; onClosePreviewTab: (id: string) => void; onCloseAllPreviews: () => void; onOpenPreviewLink: (link: StreamLink) => void },
 ) {
-  const hasDetailContent = showProcess && Boolean(processDetails);
+  const showPreview = computeShowPreview(activeProject, activePreview);
+  const hasDetailContent = displayDetailBundleId !== null;
   if (!showPreview && !hasDetailContent) return <></>;
-  const ext = _ext ?? { renderPreviewPanel: () => <></>, renderProcessTimeline: () => <></>, previewEvents: { onSetActivePreviewId: () => {}, onClosePreviewTab: () => {}, onCloseAllPreviews: () => {}, onOpenPreviewLink: () => {} } };
   return (
     <aside className="detail-panel" aria-label="Detail panel">
-      <div className="detail-content-base" style={{ display: showPreview && !showProcess ? undefined : 'none' }}>
-        {showPreview && activePreview && ext.renderPreviewPanel({
+      <div className="detail-content-base" style={{ display: showPreview ? undefined : 'none' }}>
+        {showPreview && activePreview && renderView({ fn: PreviewPanelView, props: {
           activePreview, previewTabs, activeProject,
-          onSetActivePreviewId: ext.previewEvents.onSetActivePreviewId,
-          onClosePreviewTab: ext.previewEvents.onClosePreviewTab,
-          onCloseAllPreviews: ext.previewEvents.onCloseAllPreviews,
-          onOpenPreviewLink: ext.previewEvents.onOpenPreviewLink,
-        })}
+          onSetActivePreviewId,
+          onClosePreviewTab,
+          onCloseAllPreviews,
+          onOpenPreviewLink,
+        }})}
       </div>
-      {hasDetailContent && processDetails && processMessageId && ext.renderProcessTimeline(
-        { processDetails: processDetails as NonNullable<ProcessDetailComputed["processDetails"]>, processMessageId },
-        {},
-        { onToggleAssistantProcess },
-      )}
+      {hasDetailContent && render({
+        state: { displayDetailBundleId },
+        props: { activeSessionId },
+        fn: renderProcessTimeline,
+        events: { onToggleAssistantProcess },
+        memo: {},
+      })}
     </aside>
   );
 }
 
 function renderSessionDialog(
-  { streamItems, sessionTitle, usageCount, sessionId, showProcess, processDetails, processMessageId, showPreview, activePreview, isDebugOpen }:
-    { streamItems: StreamItem[]; sessionTitle: string; usageCount: number; sessionId: string | null; showProcess: boolean; processDetails: ReturnType<typeof assistantTurnDetails> | null; processMessageId: string | null; showPreview: boolean; activePreview: PreviewTab | null; isDebugOpen: boolean },
-  { activeSessionId, activeProject, isRunningTurn, isInterruptingTurn, forkingMessageId, pendingPermission, isResolvingFileReferences, error, previewTabs, permissionState, selectedChatModel, chatModelOptions, msvProps, sessionUsageData }:
-    { activeSessionId: string | null; activeProject: ProjectFolder | null; isRunningTurn: boolean; isInterruptingTurn: boolean; forkingMessageId: string | null; pendingPermission: any; isResolvingFileReferences: boolean; error: string | null; previewTabs: PreviewTab[]; permissionState: AgentPermissionState | null; selectedChatModel: string; chatModelOptions: string[]; msvProps: { assistantDebugBundles: Record<string, AssistantMessageDebugBundle>; getUsageSnapshotByBundleId: (bundleId: string) => BundleUsageSnapshot | null; currentBundleUsageVersion: number }; sessionUsageData: Record<string, BundleUsageSnapshot> },
-  { onToggleSessionUsage, onToggleAssistantProcess, onOpenPreviewLink, onForkFromMessage, onSubmitPrompt, onInterruptTurn, onPermissionAllow, onPermissionDeny, onPermissionModeChange, onChatModelChange, onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews }:
-    { onToggleSessionUsage: () => void; onToggleAssistantProcess: (messageId: string) => void; onOpenPreviewLink: (link: StreamLink) => void; onForkFromMessage: any; onSubmitPrompt: (input: { text: string; fileReferences: any[] }) => void; onInterruptTurn: () => void; onPermissionAllow: () => void; onPermissionDeny: () => void; onPermissionModeChange: (mode: string) => void; onChatModelChange: (model: string) => void; onSetActivePreviewId: (id: string | null) => void; onClosePreviewTab: (id: string) => void; onCloseAllPreviews: () => void },
-  _ext?: { renderMessagesStream: (p: any) => JSX.Element; renderPromptInput: (p: any) => JSX.Element; renderPreviewPanel: (p: any) => JSX.Element },
+  { sessionStreams, assistantDebugBundles, displayDetailBundleId, turnStatus, forkingMessageId, pendingPermissions, isResolvingFileReferences }:    { sessionStreams: Record<string, StreamItem[]>; assistantDebugBundles: Record<string, AssistantMessageDebugBundle>; displayDetailBundleId: string | null; turnStatus: "idle" | "running" | "interrupt" | "ctrl_block"; forkingMessageId: string | null; pendingPermissions: any[]; isResolvingFileReferences: boolean },
+  { activeSessionId, activeProject, error, previewTabs, activePreview, permissionState, selectedChatModel, chatModelOptions }:
+    { activeSessionId: string | null; activeProject: ProjectFolder | null; error: string | null; previewTabs: PreviewTab[]; activePreview: PreviewTab | null; permissionState: AgentPermissionState | null; selectedChatModel: string; chatModelOptions: string[] },
+  { onToggleAssistantProcess, onOpenPreviewLink, onForkFromMessage, onSubmitPrompt, onInterruptTurn, onEventPermissionAllow: onPermissionAllow, onEventPermissionDeny: onPermissionDeny, onPermissionModeChange, onChatModelChange, onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews }:
+    { onToggleAssistantProcess: (messageId: string) => void; onOpenPreviewLink: (link: StreamLink) => void; onForkFromMessage: any; onSubmitPrompt: (input: { text: string; fileReferences: any[] }) => void; onInterruptTurn: () => void; onEventPermissionAllow: (answers?: Record<string, string>) => void; onEventPermissionDeny: () => void; onPermissionModeChange: (mode: string) => void; onChatModelChange: (model: string) => void; onSetActivePreviewId: (id: string | null) => void; onClosePreviewTab: (id: string) => void; onCloseAllPreviews: () => void },
 ) {
-  const ext = _ext ?? { renderMessagesStream: () => <></>, renderPromptInput: () => <></>, renderPreviewPanel: () => <></> };
+  const streamItems = computeActiveStreamItems(sessionStreams, activeSessionId);
+  const pendingPermission = computePendingPermission(activeSessionId, pendingPermissions);
+  const messageStreamProps = { activeSessionId, activeProject, error, turnStatus, forkingMessageId, pendingPermission, isResolvingFileReferences, onOpenPreviewLink, onForkFromMessage, onToggleProcess: onToggleAssistantProcess, assistantDebugBundles };
   return (
     <>
       <section className="exploration-panel" aria-label="Exploration stream">
-        {render({ state: { sessionTitle, usageCount, sessionId }, props: {}, fn: renderSessionHeader, events: { onToggleSessionUsage } })}
+        {renderView({ fn: MessagesStreamView, props: messageStreamProps })}
 
-        {ext.renderMessagesStream({ activeSessionId, activeProject, error, isRunningTurn, forkingMessageId, pendingPermission, isResolvingFileReferences, onOpenPreviewLink, onForkFromMessage, onToggleProcess: onToggleAssistantProcess, getStreamItems: (sid: string) => streamItems, ...msvProps })}
-
-        {activeSessionId && isDebugOpen && (
-          <div className="usage-overlay-backdrop" role="presentation" onClick={onToggleSessionUsage}>
-            <div className="usage-overlay-panel" onClick={(e) => e.stopPropagation()}>
-              <div className="usage-overlay-header">
-                <button type="button" className="usage-overlay-close" onClick={onToggleSessionUsage}>×</button>
-              </div>
-              <SessionUsageDashboard activeSessionId={activeSessionId} usageByKey={sessionUsageData} />
-            </div>
-          </div>
-        )}
-
-        {ext.renderPromptInput({
+        {renderView({ fn: PromptInputAreaView, props: {
           activeProject: activeProject?.root ?? null,
           activeSessionId,
-          isRunningTurn,
-          pendingPermission,
-          isInterruptingTurn,
+          turnStatus,
+          pendingPermissions,
           isResolvingFileReferences,
           permissionState,
           onPermissionModeChange,
@@ -278,26 +769,19 @@ function renderSessionDialog(
           onPermissionAllow,
           onPermissionDeny,
           onOpenPreviewLink,
-        })}
+        }})}
       </section>
 
       {render({
-        state: { showProcess, processDetails, processMessageId, showPreview, activePreview },
-        props: { previewTabs, activeProject },
+        state: { displayDetailBundleId },
+        props: { activeSessionId, activeProject, activePreview, previewTabs },
         fn: renderDetailPanel,
-        events: { onToggleAssistantProcess },
-        exts: {
-          renderPreviewPanel: ext.renderPreviewPanel,
-          renderProcessTimeline: (pa: any, pb: any, pe: any) => render({ state: pa, props: pb, fn: renderProcessTimeline, events: pe }),
-          previewEvents: { onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews, onOpenPreviewLink },
-        },
+        events: { onToggleAssistantProcess, onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews, onOpenPreviewLink },
+        memo: {},
       })}
     </>
   );
 }
-
-// 模块级引用：MSV 注册 setAssistantDebugBundles，session loading + useAgentTurn 通过 WriteState 写入
-const _setAssistantDebugBundlesRef = { current: (() => {}) as any };
 
 // ─── View component ──────────────────────────────────────────────────────
 
@@ -306,310 +790,134 @@ export function SessionDialogView({
   error, setError, activeSessionTitle, permissionState, onPermissionModeChange,
   previewTabs, activePreview, onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews,
   onOpenPreviewLink, chatModelOptions, selectedChatModel, onChatModelChange,
-  onForkFromMessage, onDetailPanelActiveChange,
+  onForkFromMessage,
 }: SessionDialogProps) {
   // ── 共享 state ──
-  const [isRunningTurn, setIsRunningTurn] = useState(false);
+  const [turnStatus, setTurnStatus] = useState<"idle" | "running" | "interrupt" | "ctrl_block">("idle");
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
-  const [isInterruptingTurn, setIsInterruptingTurn] = useState(false);
   const [pendingPermissions, setPendingPermissions] = useState<any[]>([]);
   const [isResolvingFileReferences, setIsResolvingFileReferences] = useState(false);
-  const [isDebugOpen, setIsDebugOpen] = useState(false);
 
   // ── 全部的实时数据（event bus 唯一消费者） ──
   const [sessionStreams, setSessionStreams] = useState<Record<string, StreamItem[]>>({});
   const [assistantDebugBundles, setAssistantDebugBundles] = useState<Record<string, AssistantMessageDebugBundle>>({});
-  const [streamUsageByBundleKey, setStreamUsageByBundleKey] = useState<Record<string, BundleUsageSnapshot>>({});
-  const [currentBundleUsageVersion, setCurrentBundleUsageVersion] = useState(0);
-  const [currentSessionUsageVersion, setCurrentSessionUsageVersion] = useState(0);
-  const usageCostModelSettingsRef = useRef<ModelSettings | null>(null);
-  const currentBundleBySessionRef = useRef<Record<string, string | null>>({});
 
-  // 注册到模块 ref（供 useAgentTurn 写入 pending bundle）
-  _setAssistantDebugBundlesRef.current = setAssistantDebugBundles;
+  // Process 右侧面板
+  const [displayDetailBundleId, setDisplayDetailBundleId] = useState<string | null>(null);
 
-  // 加载 model settings
-  useEffect(() => {
-    let cancelled = false;
-    loadModelSettings()
-      .then((settings) => { if (!cancelled) usageCostModelSettingsRef.current = settings; })
-      .catch(() => { if (!cancelled) usageCostModelSettingsRef.current = null; });
-    return () => { cancelled = true; };
-  }, []);
-
-  const getUsageSnapshotByBundleId = useCallback(
-    (bundleId: string) => streamUsageByBundleKey[bundleUsageStorageKey(activeSessionId ?? "", bundleId)] ?? null,
-    [streamUsageByBundleKey, activeSessionId],
-  );
-
-  // ── 唯一事件订阅：stream items + debug bundles + usage save ──
-  useEffect(() => {
-    startStreamEventListener();
-    return onStreamEvent((event) => {
-      const resolved = resolveRuntimeBundleEvent(event, currentBundleBySessionRef.current);
-      const debugEntry = createDebugEvent(event);
-      const realSessionId = event.eventType === "turn_complete" ? realSessionIdFromEvent(event) : null;
-      if (event.eventType === "turn_text" || event.eventType === "tool_call") {
-        console.timeEnd('[submit] total: 点击Send到UI展示');
-      }
-
-      // 1. Stream items
-      setSessionStreams((streams) => ({
-        ...streams,
-        [event.sessionId]: collapseAssistantTurns(
-          streamEventToItems(streams[event.sessionId] ?? [], resolved),
-        ),
-      }));
-
-      if (realSessionId && realSessionId !== event.sessionId) {
-        setSessionStreams((streams) => {
-          const oldItems = streams[event.sessionId] ?? [];
-          const existingNewItems = streams[realSessionId] ?? [];
-          const { [event.sessionId]: _removed, ...rest } = streams;
-          return { ...rest, [realSessionId]: existingNewItems.length > 0 ? existingNewItems : oldItems };
-        });
-      }
-
-      // 2. Debug bundles + usage calculation + save
-      setAssistantDebugBundles((bundles) => {
-        const nextBundles = applyRuntimeDebugEventToBundle(bundles, resolved, debugEntry);
-        const bundle = resolved.bundleId ? nextBundles[resolved.bundleId] : null;
-        if (bundle) {
-          const snapshot = calculateBundleUsageSnapshot(
-            bundle,
-            bundleUsageStatusFromEvent(event),
-            resolved.completesBundle ? debugEntry.receivedAt : null,
-            usageCostModelSettingsRef.current,
-          );
-          setStreamUsageByBundleKey((current) => ({ ...current, [bundleUsageStorageKey(snapshot.sessionId, snapshot.bundleId)]: snapshot }));
-          const nowMs = Date.now();
-          const lastSaveKey = `__lastSaveMs_${snapshot.sessionId}_${snapshot.bundleId}`;
-          const lastSaveMs = (window as any)[lastSaveKey] ?? 0;
-          const shouldSave = resolved.completesBundle || nowMs - lastSaveMs > 5_000;
-          if (shouldSave && snapshot.usage.inputTokens + snapshot.usage.outputTokens > 0) {
-            (window as any)[lastSaveKey] = nowMs;
-            void saveBundleUsageSnapshot(snapshot).catch((reason) => {
-              console.error('[usage] saveBundleUsageSnapshot failed:', reason);
-            });
-            setCurrentBundleUsageVersion((v) => v + 1);
-          }
-        }
-        return nextBundles;
-      });
-
-      // 3. turn 结束事件 → bump session version
-      if (event.eventType === "turn_complete" || event.eventType === "error" || event.eventType === "interrupt" || event.eventType === "process_exit") {
-        setCurrentSessionUsageVersion((v) => v + 1);
-      }
-    });
-  }, []);
-
-  const activeStreamItems: StreamItem[] = activeSessionId
-    ? (sessionStreams[activeSessionId] ?? [])
-    : [];
-
-  // Process 右侧面板 — 主动跟踪当前展开的 process 消息
-  const [activeProcessMessageId, setActiveProcessMessageId] = useState<string | null>(null);
-  const handleToggleProcess = useCallback((messageId: string) => {
-    setActiveProcessMessageId((current) => (current === messageId ? null : messageId));
-  }, []);
-
-  const getStreamItems = useCallback(
-    (sessionId: string) => sessionStreams[sessionId] ?? [],
-    [sessionStreams],
-  );
-
-  const usageCount = activeSessionId
-    ? Object.values(streamUsageByBundleKey).filter((s) => s.sessionId === activeSessionId).length
-    : 0;
-  const showPreviewVal = computeShowPreview(activeProject, activePreview);
-
-  // 右侧 Process 面板数据
-  const processDetails = useMemo(() => {
-    if (!activeProcessMessageId || !activeSessionId) return null;
-    const items = sessionStreams[activeSessionId] ?? [];
-    const item = items.find(
-      (s): s is Extract<StreamItem, { kind: "message" }> =>
-        s.kind === "message" && s.role === "assistant" && s.id === activeProcessMessageId,
-    );
-    if (!item) return null;
-    return assistantTurnDetails(item, assistantDebugBundles[activeProcessMessageId] ?? null);
-  }, [activeProcessMessageId, activeSessionId, sessionStreams, assistantDebugBundles]);
-
-  const showProcess = Boolean(processDetails?.timeline.length);
-
-  // 通知父组件是否需要右侧详细面板（控制 CSS Grid 第三列）
-  useEffect(() => {
-    onDetailPanelActiveChange?.(showPreviewVal || showProcess);
-  }, [showPreviewVal, showProcess, onDetailPanelActiveChange]);
-
-  // ── WriteState registrations (给 session loading effect 用) ──
-  WriteState.setIsRunningTurn = setIsRunningTurn;
+  // ── WriteState registrations ──
+  WriteState.setTurnStatus = setTurnStatus;
   WriteState.setPendingPermissions = setPendingPermissions;
   WriteState.setIsResolvingFileReferences = setIsResolvingFileReferences;
   WriteState.setForkingMessageId = setForkingMessageId;
-  WriteState.setIsInterruptingTurn = setIsInterruptingTurn;
   WriteState.setSessionStreams = setSessionStreams;
-  WriteState.setAssistantDebugBundles = _setAssistantDebugBundlesRef.current;
+  WriteState.setDisplayDetailBundleId = setDisplayDetailBundleId;
+  WriteState.setAssistantDebugBundles = setAssistantDebugBundles;
 
-  // ── 事件订阅 (turn/permission/session 管理) ──
+  // ── Effects ──
+
+  useEffect(() => setupStreamEventEffect(), []);
+
+  useEffect(() => setupTurnPermissionEventEffect(setProjects), [setProjects]);
+
+  // ── Event bus callback: turn-status ──
   useEffect(() => {
-    startStreamEventListener();
-    return onStreamEvent((event) => {
-      if (event.eventType === "permission_request" || event.eventType === "control_request") {
-        const tn = permissionToolNameFromEvent(event);
-        const requestId = permissionRequestIdFromEvent(event);
-        const permInput = permissionInputFromEvent(event);
-        const promptText = String(event.payload.prompt ?? `${tn} requests permission`);
-        const isQuestion = tn === "AskUserQuestion";
-        let questions: any[] | undefined;
-        if (isQuestion && permInput && typeof permInput === "object") {
-          const raw = permInput as Record<string, unknown>;
-          if (Array.isArray(raw.questions)) questions = raw.questions;
-        }
-        agentTurnRef.current?.enqueuePendingPermission({
-          root: event.root, sessionId: event.sessionId,
-          messageId: `permission:${event.sessionId}:${requestId || Date.now()}`,
-          requestId, prompt: promptText, toolName: tn, input: permInput,
-          rawJson: event.payload.raw_json ?? event.payload, isQuestion, questions,
-        });
-        setIsRunningTurn(false);
-      }
-
-      if (event.eventType === "startup" || event.eventType === "process_status") {
-        const pid = typeof event.payload.pid === "number" ? event.payload.pid : undefined;
-        const running = event.eventType === "startup" ? true : event.payload.running === true;
-        setProjects((folders) => folders.map((f) => ({
-          ...f, sessions: f.sessions.map((s) =>
-            s.id === event.sessionId ? { ...s, processStatus: running ? "active" : "stopped" as const, processPid: running ? pid : undefined } : s),
-        })));
-      }
-
-      const realSessionId = event.eventType === "turn_complete" ? realSessionIdFromEvent(event) : null;
-      if (realSessionId && realSessionId !== event.sessionId) {
-        const pid = typeof event.payload.pid === "number" ? event.payload.pid : undefined;
-        setProjects((folders) => folders.map((f) => {
-          const sessions = f.sessions.map((s) =>
-            s.id === event.sessionId ? { ...s, id: realSessionId, isPending: false, processStatus: "active" as const, processPid: pid ?? s.processPid } : s);
-          return { ...f, sessions: sessions.filter((s, i, self) => self.findIndex((x) => x.id === s.id) === i) };
-        }));
-        setIsRunningTurn(true);
-      }
-
-      if (event.eventType === "turn_complete" || event.eventType === "error" || event.eventType === "interrupt" || event.eventType === "process_exit") {
-        setIsRunningTurn(false);
-        agentTurnRef.current?.clearPendingPermissionsForSession(event.sessionId);
-      }
-
-      if (event.eventType === "process_exit") {
-        setProjects((folders) => folders.map((f) => ({
-          ...f, sessions: f.sessions.map((s) =>
-            s.id === event.sessionId ? { ...s, processStatus: "stopped" as const, processPid: undefined } : s),
-        })));
-      }
-
-      if (event.eventType === "stderr") {
-        const detail = String(event.payload?.text ?? event.payload?.message ?? "").toLowerCase();
-        if (detail.includes("repl process stdout closed")) {
-          setProjects((folders) => folders.map((f) => ({
-            ...f, sessions: f.sessions.map((s) =>
-              s.id === event.sessionId ? { ...s, processStatus: "stopped" as const, processPid: undefined } : s),
-          })));
-        }
-        if (detail.includes("error") || detail.includes("failed") || detail.includes("missing_credentials")) {
-          setIsRunningTurn(false);
-          agentTurnRef.current?.clearPendingPermissionsForSession(event.sessionId);
-        }
-      }
+    return addCallback("session-status", (data, sessionId) => {
+      if (sessionId !== activeSessionId) return;
+      setTurnStatus(data as "idle" | "running" | "interrupt" | "ctrl_block");
     });
-  }, [setProjects]);
+  }, [activeSessionId]);
 
-  // ── Hook wiring ──
-  const agentTurn = useAgentTurn({
-    activeProject, activeSessionId, selectedChatModel, permissionState,
-    updateSessionStream: (sessionId: string, updater: (items: StreamItem[]) => StreamItem[]) => {
-      setSessionStreams((streams) => ({
-        ...streams,
-        [sessionId]: collapseAssistantTurns(updater(streams[sessionId] ?? [])),
-      }));
-    },
-    setAssistantDebugBundles: _setAssistantDebugBundlesRef.current,
-    refreshSessionContextUsage: async () => {},
-    currentBundleBySessionRef,
-    setProjects, setError,
-    isRunningTurn, setIsRunningTurn, forkingMessageId, setForkingMessageId,
-    isInterruptingTurn, setIsInterruptingTurn, pendingPermissions, setPendingPermissions,
-    isResolvingFileReferences, setIsResolvingFileReferences,
-  });
-  const agentTurnRef = useRef(agentTurn);
-  agentTurnRef.current = agentTurn;
+  // ── Computed values & thin event callbacks ──
 
-  WriteState.handlePermissionAllow = () => agentTurn.handlePermissionDecision(true);
-  WriteState.handlePermissionDeny = () => agentTurn.handlePermissionDecision(false);
+  const onEventEnqueuePendingPermission = useCallback(
+    (permission: PendingPermission) => handleEnqueuePendingPermission(permission),
+    [],
+  );
+  const onEventClearPendingPermissionsForSession = useCallback(
+    (sessionId: string) => handleClearPendingPermissionsForSession(sessionId),
+    [],
+  );
+  const onEventSubmitPrompt = useCallback(
+    (input: { text: string; fileReferences: LocalFileReference[] }) =>
+      handleSubmitPromptAction(
+        input, activeProject, activeSessionId, selectedChatModel, permissionState,
+        pendingPermissions, turnStatus, isResolvingFileReferences,
+        forkingMessageId,
+        setProjects, setError,
+      ),
+    [activeProject, activeSessionId, selectedChatModel, permissionState,
+      pendingPermissions, turnStatus, isResolvingFileReferences,
+      forkingMessageId, setProjects, setError],
+  );
+  const onEventPermissionDecision = useCallback(
+    (approved: boolean, answers?: Record<string, string>) =>
+      handlePermissionDecisionAction(
+        approved, answers,
+        activeSessionId, pendingPermissions, setError,
+      ),
+    [activeSessionId, pendingPermissions, setError],
+  );
+  const onEventInterruptTurn = useCallback(
+    () => handleInterruptTurnAction(
+      turnStatus, pendingPermissions, activeSessionId,
+      activeProject, setError,
+    ),
+    [turnStatus, pendingPermissions, activeSessionId, activeProject, setError],
+  );
 
-  // ── Session loading effect ──
+  const onEventPermissionAllow = useCallback(
+    (answers?: Record<string, string>) => handlePermissionAllow(answers, activeSessionId, pendingPermissions, setError),
+    [activeSessionId, pendingPermissions, setError],
+  );
+  const onEventPermissionDeny = useCallback(
+    () => handlePermissionDeny(activeSessionId, pendingPermissions, setError),
+    [activeSessionId, pendingPermissions, setError],
+  );
+
+  // Fork 操作：file-level handleForkFromMessageAction 负责设置/清除 forkingMessageId
+  const onEventForkFromMessage = useCallback(
+    (item: Extract<StreamItem, { kind: "message" }>) =>
+      handleForkFromMessageAction(item, onForkFromMessage),
+    [onForkFromMessage],
+  );
+  // 覆写 prop 变量以匹配 events 简写命名约定
+  onForkFromMessage = onEventForkFromMessage;
+
+  // Session loading effect
   useEffect(() => {
-    if (!activeProject || !activeSessionId || agentTurn.isRunningTurn || agentTurn.pendingPermission?.sessionId === activeSessionId) return;
-    if (activeProject.sessions.find((s) => s.id === activeSessionId)?.isPending) return;
-    let cancelled = false;
-    loadTypedRuntimeSession(activeProject.root, activeSessionId)
-      .then((detail) => {
-        if (cancelled) return;
-        const artifacts = runtimeSessionToArtifacts(detail, activeProject.root);
-        loadBundleUsageSnapshotsForSession(detail.id)
-          .then((snapshots) => {
-            setStreamUsageByBundleKey((current) => {
-              const next = { ...current };
-              for (const snapshot of snapshots) next[bundleUsageStorageKey(snapshot.sessionId, snapshot.bundleId)] = snapshot;
-              return next;
-            });
-            setCurrentSessionUsageVersion((v) => v + 1);
-          })
-          .catch((reason) => console.warn("[bundle-usage] failed to hydrate history usage snapshots", { sessionId: detail.id, reason }));
-        setAssistantDebugBundles((bundles) => ({ ...bundles, ...artifacts.bundles }));
-        setSessionStreams((streams) => {
-          if ((streams[activeSessionId] ?? []).length > 0) return streams;
-          return { ...streams, [activeSessionId]: detail.messages.length > 0 ? artifacts.items : welcomeStream(activeProject.name, activeSessionTitle) };
-        });
-      })
-      .catch((reason) => { if (!cancelled) setError(String(reason)); });
-    return () => { cancelled = true; };
-  }, [activeProject?.root, activeSessionId, activeSessionTitle, agentTurn.isRunningTurn, agentTurn.pendingPermission]);
+    loadSessionEffect(activeProject?.root, activeSessionId ?? "", activeSessionTitle, activeProject, setError);
+  }, [activeProject?.root, activeSessionId, activeSessionTitle, activeProject, setError]);
 
-  // ── 计算型 handlers ──
-  const onToggleSessionUsage = () => setIsDebugOpen((c) => !c);
+  // ── useMemo aliases for event shorthand naming ──
+  const onSubmitPrompt = useMemo(() => onEventSubmitPrompt, [onEventSubmitPrompt]);
+  const onInterruptTurn = useMemo(() => onEventInterruptTurn, [onEventInterruptTurn]);
 
   return render({
     state: {
-      streamItems: activeStreamItems, sessionTitle: activeProject?.sessions.find((s) => s.id === activeSessionId)?.title ?? "",
-      usageCount, sessionId: activeSessionId,
-      showProcess, processDetails, processMessageId: activeProcessMessageId,
-      showPreview: showPreviewVal, activePreview, isDebugOpen,
+      sessionStreams, assistantDebugBundles,
+      displayDetailBundleId, turnStatus, forkingMessageId,
+      pendingPermissions, isResolvingFileReferences,
     },
     props: {
-      activeSessionId, activeProject, isRunningTurn: agentTurn.isRunningTurn,
-      isInterruptingTurn: agentTurn.isInterruptingTurn, forkingMessageId: agentTurn.forkingMessageId,
-      pendingPermission: agentTurn.pendingPermission, isResolvingFileReferences: agentTurn.isResolvingFileReferences,
-      error, previewTabs, permissionState, selectedChatModel, chatModelOptions,
-      msvProps: { assistantDebugBundles, getUsageSnapshotByBundleId, currentBundleUsageVersion },
-      sessionUsageData: streamUsageByBundleKey,
+      activeSessionId, activeProject, error, previewTabs, activePreview,
+      permissionState, selectedChatModel, chatModelOptions,
     },
     fn: renderSessionDialog,
     events: {
-      onToggleSessionUsage,
-      onToggleAssistantProcess: handleToggleProcess,
+      onToggleAssistantProcess,
       onOpenPreviewLink,
       onForkFromMessage,
-      onSubmitPrompt: (input: any) => agentTurnRef.current?.submitPrompt(input),
-      onInterruptTurn: agentTurn.handleInterruptTurn,
-      onPermissionAllow: handlePermissionAllow,
-      onPermissionDeny: handlePermissionDeny,
+      onSubmitPrompt,
+      onInterruptTurn,
+      onEventPermissionAllow,
+      onEventPermissionDeny,
       onPermissionModeChange,
       onChatModelChange,
       onSetActivePreviewId,
       onClosePreviewTab,
       onCloseAllPreviews,
     },
-    exts: { renderMessagesStream, renderPromptInput, renderPreviewPanel },
+    memo: {},
   });
 }

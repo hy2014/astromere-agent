@@ -321,8 +321,7 @@
     min-width: 0;
   }
 
-  .app-shell,
-  .app-shell.has-preview {
+  .app-shell {
     grid-template-columns: 240px minmax(420px, 1fr);
   }
 

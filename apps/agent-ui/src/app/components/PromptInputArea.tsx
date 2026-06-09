@@ -20,24 +20,8 @@ interface PromptInputAreaProps {
   // Session state
   activeProject: string | null;
   activeSessionId: string | null;
-  isRunningTurn: boolean;
-  pendingPermission: {
-    root: string;
-    sessionId: string;
-    messageId: string;
-    requestId: string;
-    toolName?: string;
-    prompt: string;
-    input?: unknown;
-    isQuestion?: boolean;
-    questions?: Array<{
-      question: string;
-      header?: string;
-      options: Array<{ label: string; description?: string }>;
-      multiSelect?: boolean;
-    }>;
-  } | null;
-  isInterruptingTurn: boolean;
+  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block";
+  pendingPermissions: any[];
   isResolvingFileReferences: boolean;
 
   // Permission state
@@ -61,9 +45,8 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
   const {
     activeProject,
     activeSessionId,
-    isRunningTurn,
-    pendingPermission,
-    isInterruptingTurn,
+    turnStatus,
+    pendingPermissions,
     isResolvingFileReferences,
     permissionState,
     onPermissionModeChange,
@@ -76,6 +59,8 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     onPermissionDeny,
     onOpenPreviewLink,
   } = props;
+
+  const pendingPermission = pendingPermissions.find((p) => p.sessionId === activeSessionId) ?? null;
 
   // ── Internal state ──
   const [prompt, setPrompt] = useState("");
@@ -287,7 +272,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                 ? "Type a message, use @ to reference workspace files..."
                 : "Add a project folder before starting a conversation..."
             }
-            disabled={!activeProject || !activeSessionId || isRunningTurn || isResolvingFileReferences}
+            disabled={!activeProject || !activeSessionId || turnStatus !== "idle" || isResolvingFileReferences}
           />
           {fileMention.active ? (
             <div className="file-mention-menu" role="listbox">
@@ -423,7 +408,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                 onChatModelChange(event.target.value)
               }
               disabled={
-                !activeProject || !activeSessionId || isRunningTurn
+                !activeProject || !activeSessionId || turnStatus !== "idle"
               }
             >
               {chatModelOptions.map((model) => (
@@ -445,14 +430,14 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
               upload(todo)
             </button>
           </div>
-          {isRunningTurn || pendingPermission ? (
+          {turnStatus !== "idle" || pendingPermission ? (
             <button
               className="send-button stop"
               type="button"
               onClick={onInterruptTurn}
-              disabled={isInterruptingTurn}
+              disabled={turnStatus === "interrupt"}
             >
-              {isInterruptingTurn ? "STOPPING" : "STOP"}
+              {turnStatus === "interrupt" ? "STOPPING" : "STOP"}
             </button>
           ) : null}
           <button
@@ -460,7 +445,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
             type="submit"
             disabled={!canSendPrompt}
           >
-            {isResolvingFileReferences ? "READING" : isRunningTurn ? "RUNNING" : "SEND"}
+            {isResolvingFileReferences ? "READING" : turnStatus !== "idle" ? "RUNNING" : "SEND"}
           </button>
         </div>
       </div>

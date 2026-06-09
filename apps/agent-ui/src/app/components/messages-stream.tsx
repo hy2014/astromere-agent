@@ -1,10 +1,24 @@
-import {useRef, useEffect} from "react";
+import {useRef, useEffect, useState} from "react";
 import type {StreamItem, StreamLink} from "../../types";
 import type {AssistantMessageDebugBundle} from "../types";
 import type {BundleUsageSnapshot} from "../../tauri";
 import {UserMessageCard} from "./UserMessageCard";
 import {AssistantMessageCard} from "./AssistantMessageCard";
 import {MarkdownTablePreview} from "./preview-components";
+import {addCallback} from "../../hooks/stream-event-bus";
+import {
+  loadTypedRuntimeSession,
+} from "../../runtime";
+import {
+  runtimeSessionToArtifacts,
+} from "../debug-utils";
+import {welcomeStream} from "../session";
+
+// ─── WriteState（模块级单例）─────────────────────────────────────────
+// SessionDialog 的 onSubmitPrompt 和离线加载通过 WriteState 写入用户输入 / 历史数据
+const WriteState: {
+  setSessionStreamItems: (updater: StreamItem[] | ((prev: StreamItem[]) => StreamItem[])) => void;
+} = {} as any;
 
 // ─── Exported utilities ─────────────────────────────────────────────
 
@@ -62,6 +76,49 @@ export function assistantDebugPayload(
   };
 }
 
+// ─── Merge helper ──────────────────────────────────────────────────────
+// handler 产出的 items（全是真实 ID）与 state 中的 items（可能含 pending 占位）合并。
+// 合并规则：handler 的数据优先（真实 ID 覆盖 pending ID），新追加的项按顺序 append。
+
+function mergeSessionItems(
+  prev: StreamItem[],
+  incoming: StreamItem[],
+): StreamItem[] {
+  const incomingMap = new Map(incoming.map((i) => [i.id, i]));
+  const merged: StreamItem[] = [];
+
+  for (const item of prev) {
+    // pending 占位：找 incoming 里第一个不在 prevMap 中的 assistant 消息替换
+    if (item.id.startsWith("assistant-pending-")) {
+      const realItem = incoming.find(
+        (i) =>
+          i.kind === "message" &&
+          i.role === "assistant" &&
+          !incomingMap.has(i.id),
+      );
+      if (realItem) {
+        merged.push(realItem);
+        incomingMap.delete(realItem.id);
+        continue;
+      }
+    }
+    // 已有 ID 在 incoming 中 → 用 incoming 覆盖（更新）
+    if (incomingMap.has(item.id)) {
+      merged.push(incomingMap.get(item.id)!);
+      incomingMap.delete(item.id);
+    } else {
+      merged.push(item);
+    }
+  }
+
+  // 剩余的 incoming 项追加到末尾
+  for (const item of incomingMap.values()) {
+    merged.push(item);
+  }
+
+  return merged;
+}
+
 // ─── Props ──────────────────────────────────────────────────────────
 
 export interface MessagesStreamProps {
@@ -72,18 +129,43 @@ export interface MessagesStreamProps {
     sessions: Array<{ id: string; title: string }>;
   } | null;
   error: string | null;
-  isRunningTurn: boolean;
+  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block";
   forkingMessageId: string | null;
   pendingPermission: { sessionId?: string } | null;
   isResolvingFileReferences: boolean;
-  getStreamItems: (sessionId: string) => StreamItem[];
   onToggleProcess: (messageId: string) => void;
   assistantDebugBundles: Record<string, AssistantMessageDebugBundle>;
-  getUsageSnapshotByBundleId: (bundleId: string) => BundleUsageSnapshot | null;
-  currentBundleUsageVersion: number;
+  getUsageSnapshotByBundleId?: (bundleId: string) => BundleUsageSnapshot | null;
+  currentBundleUsageVersion?: number;
 
   onOpenPreviewLink: (link: StreamLink) => void;
   onForkFromMessage: (item: Extract<StreamItem, { kind: "message" }>) => void;
+}
+
+// ─── File-level function: 从 Rust 后端加载历史消息 ─────────────────────
+
+function loadHistoryStreamItems(
+  root: string,
+  sessionId: string,
+  projectName: string,
+  sessionTitle: string,
+  onItems: (items: StreamItem[]) => void,
+  onError: (err: string) => void,
+): () => void {
+  let cancelled = false;
+  loadTypedRuntimeSession(root, sessionId)
+    .then((detail) => {
+      if (cancelled) return;
+      const artifacts = runtimeSessionToArtifacts(detail, root);
+      const items = detail.messages.length > 0
+        ? artifacts.items
+        : welcomeStream(projectName, sessionTitle);
+      onItems(items);
+    })
+    .catch((reason) => {
+      if (!cancelled) onError(String(reason));
+    });
+  return () => { cancelled = true; };
 }
 
 // ─── Component ──────────────────────────────────────────────────────
@@ -92,31 +174,59 @@ export function MessagesStreamView({
   activeSessionId,
   activeProject,
   error,
-  isRunningTurn,
+  turnStatus,
   forkingMessageId,
   pendingPermission,
   isResolvingFileReferences,
   onOpenPreviewLink,
   onForkFromMessage,
-  getStreamItems,
   onToggleProcess,
   assistantDebugBundles,
-  getUsageSnapshotByBundleId,
-  currentBundleUsageVersion,
+  getUsageSnapshotByBundleId = () => null,
+  currentBundleUsageVersion = 0,
 }: MessagesStreamProps) {
   const streamRef = useRef<HTMLDivElement | null>(null);
+
+  // ── 新：内部 state（event bus callback + onSubmitPrompt + 离线加载共用） ──
+  const [sessionStreamItems, setSessionStreamItems] = useState<StreamItem[]>(() => []);
+  // 注册 setter 供 SessionDialog 的 onSubmitPrompt / 离线加载写入
+  WriteState.setSessionStreamItems = setSessionStreamItems;
+
+  // ── 事件 bus callback ──
+  useEffect(() => {
+    const unsub = addCallback("session-items", (data, sessionId) => {
+      if (sessionId !== activeSessionId) return;
+      const incoming = (data as { items: StreamItem[] }).items;
+      setSessionStreamItems((prev) => mergeSessionItems(prev, incoming));
+    });
+    return unsub;
+  }, [activeSessionId]);
+
+  // ── 从 Rust 后端加载历史消息 ──
+  useEffect(() => {
+    if (!activeSessionId || !activeProject?.root) return;
+    const session = activeProject.sessions.find((s) => s.id === activeSessionId);
+    const sessionTitle = session?.title ?? "会话";
+    return loadHistoryStreamItems(
+      activeProject.root,
+      activeSessionId,
+      activeProject.name,
+      sessionTitle,
+      (items) => setSessionStreamItems(items),
+      (err) => console.error("[messages-stream] load history failed:", err),
+    );
+  }, [activeSessionId, activeProject?.root]);
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   void currentBundleUsageVersion;
 
   // ── Auto-scroll ──
-  const activeStreamItems = getStreamItems(activeSessionId ?? "");
-
+  // 使用 sessionStreamItems 确保 callback 更新的数据也能触发滚动
   useEffect(() => {
-    if (!isRunningTurn && streamRef.current) {
+    if (turnStatus === "idle" && streamRef.current) {
       streamRef.current.scrollTop = streamRef.current.scrollHeight;
     }
-  }, [activeSessionId, activeStreamItems.length, isRunningTurn]);
+  }, [activeSessionId, sessionStreamItems.length, turnStatus]);
 
   // ── Render ──
   const projectRoot = activeProject?.root ?? "";
@@ -134,7 +244,7 @@ export function MessagesStreamView({
         ) : null}
 
         {activeSessionId
-          ? activeStreamItems.map((item) => {
+          ? sessionStreamItems.map((item) => {
               if (item.kind === "message") {
                 if (item.role === "user") {
                   return (
@@ -155,7 +265,7 @@ export function MessagesStreamView({
                       assistantLiveUsage={getUsageSnapshotByBundleId(item.id)}
                       streamUsageByBundleKey={null}
                       projectRoot={projectRoot}
-                      isRunningTurn={isRunningTurn}
+                      turnStatus={turnStatus}
                       forkingMessageId={forkingMessageId}
                       pendingPermission={pendingPermission}
                       isResolvingFileReferences={isResolvingFileReferences}
