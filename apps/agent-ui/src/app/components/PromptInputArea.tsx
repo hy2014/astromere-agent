@@ -1,16 +1,15 @@
-import {useState, useRef, useEffect, useCallback, useMemo} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import type {AgentContextUsage, StreamLink, WorkspaceFileReference} from "../../types";
 import {PermissionRequestView} from "./PermissionRequest";
 import {AskQuestionCardView} from "./AskQuestionCard";
 import {FileReferenceTrayView} from "./FileReferenceTray";
 import {formatFileSize} from "../stream-processor";
-import type {FileMentionState, LocalFileReference, SlashCommandMenuState, SlashRootItem,} from "../types";
-import type {AgentReplCapabilityItem} from "../../runtime";
+import type {FileMentionState, LocalFileReference, SlashCommandMenuState,} from "../types";
+import {getAgentContextUsage, respondAgentPermission} from "../../runtime";
 import {usePromptInput} from "../../hooks/usePromptInput";
 import {addCallback} from "../../hooks/stream-event-bus";
-import {getAgentContextUsage, respondAgentPermission} from "../../runtime";
 import {isNewSessionId} from "../file-utils";
-import type {PendingPermission, ControlRequestData} from "../stream-handlers/control-request";
+import type {ControlRequestData, PendingPermission} from "../stream-handlers/control-request";
 import type {ContextUsageSignal} from "../stream-handlers/context-usage";
 import {WriteState} from "./SessionDialog";
 

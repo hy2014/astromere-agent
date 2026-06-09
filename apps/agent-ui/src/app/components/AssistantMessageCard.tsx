@@ -1,6 +1,7 @@
-import {useState, useCallback} from "react";
+import {useCallback, useState} from "react";
 import type {StreamItem, StreamLink} from "../../types";
 import type {AggregatedUsage} from "../usage-cost";
+import {aggregateModelCallUsages} from "../usage-cost";
 import {AssistantUsageMiniOverlayView} from "./assistant-usage-mini-overlay";
 import {RichMarkdownMessage} from "./preview-components";
 import {MessageImagePreviews} from "./image-reference-view";
@@ -9,7 +10,6 @@ import {getSessionData} from "../../hooks/stream-event-bus";
 import {loadModelCallUsages} from "../../tauri";
 import {loadTypedRuntimeSession} from "../../runtime";
 import {runtimeSessionToArtifacts} from "../debug-utils";
-import {aggregateModelCallUsages} from "../usage-cost";
 
 
 export interface AssistantMessageCardProps {

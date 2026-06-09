@@ -1,4 +1,4 @@
-import type { AgentReplStreamEvent } from "../../types";
+import type {AgentReplStreamEvent} from "../../types";
 
 export type ContextUsageSignal = {
   refresh: boolean;

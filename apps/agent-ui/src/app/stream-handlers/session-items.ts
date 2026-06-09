@@ -1,9 +1,5 @@
-import type { AgentReplStreamEvent, StreamItem } from "../../types";
-import {
-  collapseAssistantTurns,
-  resolveRuntimeBundleEvent,
-  streamEventToItems,
-} from "../stream-processor";
+import type {AgentReplStreamEvent, StreamItem} from "../../types";
+import {collapseAssistantTurns, resolveRuntimeBundleEvent, streamEventToItems,} from "../stream-processor";
 
 // ── Types ──────────────────────────────────────────────────────────────
 

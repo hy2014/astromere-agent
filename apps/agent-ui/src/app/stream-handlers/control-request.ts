@@ -1,9 +1,5 @@
-import type { AgentReplStreamEvent } from "../../types";
-import {
-  permissionToolNameFromEvent,
-  permissionRequestIdFromEvent,
-  permissionInputFromEvent,
-} from "../file-utils";
+import type {AgentReplStreamEvent} from "../../types";
+import {permissionInputFromEvent, permissionRequestIdFromEvent, permissionToolNameFromEvent,} from "../file-utils";
 
 export type PendingPermission = {
   root: string;

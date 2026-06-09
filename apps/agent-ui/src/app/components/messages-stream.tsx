@@ -1,59 +1,17 @@
-import {useRef, useEffect, useState} from "react";
+import {useEffect, useRef, useState} from "react";
 import type {StreamItem, StreamLink} from "../../types";
 import {UserMessageCard} from "./UserMessageCard";
 import {AssistantMessageCard} from "./AssistantMessageCard";
 import {MarkdownTablePreview} from "./preview-components";
 import {addCallback} from "../../hooks/stream-event-bus";
-import {
-  loadTypedRuntimeSession,
-} from "../../runtime";
-import {
-  runtimeSessionToArtifacts,
-} from "../debug-utils";
+import {loadTypedRuntimeSession,} from "../../runtime";
+import {runtimeSessionToArtifacts,} from "../debug-utils";
 import {welcomeStream} from "../session";
 
 // ─── WriteState（模块级单例）─────────────────────────────────────────
 const WriteState: {
   setSessionStreamItems: (updater: StreamItem[] | ((prev: StreamItem[]) => StreamItem[])) => void;
 } = {} as any;
-
-// ─── Exported utilities ─────────────────────────────────────────────
-
-export function renderPromptHighlightedText(value: string) {
-  const parts: Array<string | JSX.Element> = [];
-  const tokenRegex = /(^|\s)(\/[A-Za-z0-9:_-]+|@(?:"[^"]+"|[^\s]+))/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = tokenRegex.exec(value)) !== null) {
-    const prefix = match[1] ?? "";
-    const token = match[2] ?? "";
-    const tokenStart = match.index + prefix.length;
-    const tokenEnd = tokenStart + token.length;
-
-    if (tokenStart > lastIndex) {
-      parts.push(value.slice(lastIndex, tokenStart));
-    }
-
-    const isSkill = token.startsWith("/");
-    parts.push(
-      <span
-        key={`${tokenStart}-${token}`}
-        className={isSkill ? "prompt-inline-skill-token" : "prompt-inline-file-token"}
-      >
-        {token}
-      </span>,
-    );
-
-    lastIndex = tokenEnd;
-  }
-
-  if (lastIndex < value.length) {
-    parts.push(value.slice(lastIndex));
-  }
-
-  return parts.length > 0 ? parts : "";
-}
 
 // ─── Merge helper ──────────────────────────────────────────────────────
 // handler 产出的 items（全是真实 ID）与 state 中的 items（可能含 pending 占位）合并。

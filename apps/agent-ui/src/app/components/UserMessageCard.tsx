@@ -2,11 +2,11 @@ import type {StreamItem, StreamLink} from "../../types";
 import {RichMarkdownMessage} from "./preview-components";
 import {MessageImagePreviews} from "./image-reference-view";
 import {
-  displayPromptText,
-  localFileReferenceName,
-  formatFileSize,
-  localFileReferencesFromPromptText,
-  localFileReferenceSummaryToStreamLink,
+    displayPromptText,
+    formatFileSize,
+    localFileReferenceName,
+    localFileReferencesFromPromptText,
+    localFileReferenceSummaryToStreamLink,
 } from "../file-utils";
 
 export interface UserMessageCardProps {
