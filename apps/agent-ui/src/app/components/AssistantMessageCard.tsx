@@ -1,26 +1,23 @@
-import {useState, useMemo, useCallback} from "react";
+import {useState, useCallback} from "react";
 import type {StreamItem, StreamLink} from "../../types";
-import type {AssistantMessageDebugBundle} from "../types";
-import type {BundleUsageSnapshot} from "../../tauri";
+import type {AggregatedUsage} from "../usage-cost";
 import {AssistantUsageMiniOverlayView} from "./assistant-usage-mini-overlay";
 import {RichMarkdownMessage} from "./preview-components";
 import {MessageImagePreviews} from "./image-reference-view";
-import {debugStorageSource, debugStorageSourceCounts} from "../file-utils";
-import {assistantTurnDetails, compactCountLabel, toolName, commandFromToolUse, summarizeToolUse} from "../debug-utils";
-import {bundleUsageButtonLabel, bundleUsageStorageKey} from "../usage-cost";
 import {pendingAssistantText} from "../stream-processor";
+import {getSessionData} from "../../hooks/stream-event-bus";
+import {loadModelCallUsages} from "../../tauri";
+import {loadTypedRuntimeSession} from "../../runtime";
+import {runtimeSessionToArtifacts} from "../debug-utils";
+import {aggregateModelCallUsages} from "../usage-cost";
 
 
 export interface AssistantMessageCardProps {
   item: Extract<StreamItem, { kind: "message" }>;
-  assistantDebugBundle: AssistantMessageDebugBundle | null;
-  assistantLiveUsage: BundleUsageSnapshot | null;
-  streamUsageByBundleKey: Record<string, BundleUsageSnapshot> | null;
+  sessionId: string;
   projectRoot: string;
-  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block";
-  forkingMessageId: string | null;
+  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block" | "forking";
   pendingPermission: { sessionId?: string } | null;
-  isResolvingFileReferences: boolean;
 
   onToggleProcess: (messageId: string) => void;
   onForkFromMessage: (item: Extract<StreamItem, { kind: "message" }>) => void;
@@ -29,14 +26,10 @@ export interface AssistantMessageCardProps {
 
 export function AssistantMessageCard({
   item,
-  assistantDebugBundle,
-  assistantLiveUsage,
-  streamUsageByBundleKey = {} as Record<string, BundleUsageSnapshot>,
+  sessionId,
   projectRoot,
   turnStatus,
-  forkingMessageId,
   pendingPermission,
-  isResolvingFileReferences,
   onToggleProcess,
   onForkFromMessage,
   onOpenPreviewLink,
@@ -44,12 +37,29 @@ export function AssistantMessageCard({
   // ── Local debug state (每个卡片自己管) ──
   const [isCopied, setIsCopied] = useState(false);
   // ── Local usage popover state ──
-  const [isUsageOpen, setIsUsageOpen] = useState(false);
+  const [usagePopup, setUsagePopup] = useState<AggregatedUsage | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+
+  const handleUsageClick = useCallback(async () => {
+    if (usageLoading || !sessionId) return;
+    setUsageLoading(true);
+    try {
+      const si = getSessionData<{ bundles: Record<string, string[]> }>(sessionId, "session-info");
+      const messageIds = si?.bundles?.[item.id] ?? [];
+      const usages = await loadModelCallUsages(messageIds, sessionId);
+      setUsagePopup(aggregateModelCallUsages(usages));
+    } catch {
+      // silent
+    } finally {
+      setUsageLoading(false);
+    }
+  }, [sessionId, item.id, usageLoading]);
 
   const handleCopyDebug = useCallback(async () => {
     try {
-      const bundle = assistantDebugBundle;
-      const details = assistantTurnDetails(item, bundle ?? null);
+      const detail = await loadTypedRuntimeSession(projectRoot, sessionId);
+      const artifacts = runtimeSessionToArtifacts(detail, projectRoot);
+      const bundle = artifacts.bundles[item.id];
       const payload = {
         kind: "agent-ui.assistant-message-debug",
         action: "copy",
@@ -63,23 +73,12 @@ export function AssistantMessageCard({
         displayedMessage: item.text,
         displayedProgressText: item.progressText ?? null,
         displayStatus: item.status ?? null,
-        summary: {
-          progressLineCount: details.progressLines.length,
-          commandCount: details.commandUses.length,
-          toolUseCount: details.toolUses.length,
-          toolResultCount: details.toolResults.length,
-          eventCount: details.eventCount,
-        },
-        debugSourceSummary: debugStorageSourceCounts(bundle?.events ?? []),
-        commands: details.commandUses.map((t) => ({ name: toolName(t), command: commandFromToolUse(t), raw: t })),
-        toolUses: details.toolUses.map((t) => ({ name: toolName(t), summary: summarizeToolUse(t), raw: t })),
         bundleDisplayText: bundle?.displayText ?? null,
         completed: bundle?.completed ?? null,
         eventCount: bundle?.events.length ?? 0,
-        events: (bundle?.events ?? []).map((e) => ({
+        events: (bundle?.events ?? []).map((e: any) => ({
           eventType: e.eventType,
           receivedAt: new Date(e.receivedAt).toISOString(),
-          debugStorageSource: debugStorageSource(e),
           payload: e.payload,
         })),
       };
@@ -87,21 +86,7 @@ export function AssistantMessageCard({
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 1600);
     } catch { /* silent */ }
-  }, [item, assistantDebugBundle]);
-
-  // ── Computed data ──
-  const assistantDetails = useMemo(
-    () => assistantTurnDetails(item, assistantDebugBundle ?? null),
-    [item, assistantDebugBundle],
-  );
-
-  const hasProcessDetails =
-    assistantDetails !== null &&
-    (assistantDetails.progressLines.length > 0 ||
-      assistantDetails.toolUses.length > 0 ||
-      assistantDetails.toolResults.length > 0 ||
-      assistantDetails.eventCount > 0 ||
-      item.status === "streaming");
+  }, [item, projectRoot, sessionId]);
 
   const displayText =
     item.status === "streaming" && item.text === pendingAssistantText
@@ -116,38 +101,36 @@ export function AssistantMessageCard({
         {/* ═══ Header ═══ 操作栏，只触发不管理 */}
         <Header
           isCopied={isCopied}
-          debugEventCount={assistantDebugBundle?.events.length ?? 0}
-          usageLabel={bundleUsageButtonLabel(assistantLiveUsage)}
+          usageLabel={usageLoading ? "Loading…" : "Usage"}
           isForkDisabled={Boolean(
             !item.checkpointUuid || turnStatus !== "idle" ||
-            Boolean(forkingMessageId) || pendingPermission || isResolvingFileReferences,
+            pendingPermission,
           )}
-          forkLabel={forkingMessageId === item.id ? "Forking…" : "Fork"}
+          forkLabel={turnStatus === "forking" ? "Forking…" : "Fork"}
           onDebugCopy={handleCopyDebug}
-          onUsageClick={() => setIsUsageOpen((v) => !v)}
+          onUsageClick={handleUsageClick}
           onForkClick={() => onForkFromMessage(item)}
         />
 
         {/* ═══ Usage overlay (本地管理) ═══ */}
-        {isUsageOpen && (
+        {usagePopup && (
           <AssistantUsageMiniOverlayView
             bundleId={item.id}
-            snapshot={
-              (streamUsageByBundleKey ?? {})[
-                bundleUsageStorageKey("", item.id)
-              ] ?? assistantLiveUsage ?? null
-            }
-            onClose={() => setIsUsageOpen(false)}
+            aggregated={usagePopup}
+            onClose={() => setUsagePopup(null)}
           />
         )}
 
-        {/* ═══ ProcessView ═══ 过程折叠触发器 */}
-        {hasProcessDetails && assistantDetails && (
-          <ProcessView
-            detail={assistantDetails}
-            onToggle={() => onToggleProcess(item.id)}
-          />
-        )}
+        {/* ═══ Process button ═══ 始终显示 */}
+        <div className="message-process-section">
+          <button
+            className="message-process-toggle"
+            type="button"
+            onClick={() => onToggleProcess(item.id)}
+          >
+            <span>过程 &gt;&gt;</span>
+          </button>
+        </div>
 
         {/* ═══ Response ═══ 回复正文 */}
         <Response
@@ -167,7 +150,6 @@ export function AssistantMessageCard({
 
 interface HeaderProps {
   isCopied: boolean;
-  debugEventCount: number;
   usageLabel: string;
   isForkDisabled: boolean;
   forkLabel: string;
@@ -177,7 +159,7 @@ interface HeaderProps {
 }
 
 function Header({
-  isCopied, debugEventCount, usageLabel,
+  isCopied, usageLabel,
   isForkDisabled, forkLabel,
   onDebugCopy, onUsageClick, onForkClick,
 }: HeaderProps) {
@@ -190,7 +172,7 @@ function Header({
         onDoubleClick={onDebugCopy}
         title="双击复制 Debug JSON"
       >
-        {isCopied ? "已复制" : `Debug${debugEventCount ? ` ${debugEventCount}` : ""}`}
+        {isCopied ? "已复制" : "Debug"}
       </button>
       <button
         className="message-debug-button"
@@ -214,35 +196,6 @@ function Header({
         ) : (
           "Fork"
         )}
-      </button>
-    </div>
-  );
-}
-
-// ═══ ProcessView sub-component ═══════════════════════════════════════
-
-interface ProcessViewProps {
-  detail: ReturnType<typeof assistantTurnDetails>;
-  onToggle: () => void;
-}
-
-function ProcessView({ detail, onToggle }: ProcessViewProps) {
-  if (!detail) return null;
-  return (
-    <div className="message-process-section">
-      <button className="message-process-toggle" type="button" onClick={onToggle}>
-        <span>过程 &gt;&gt;</span>
-        <small>
-          {compactCountLabel(detail.progressLines.length, "行过程", "行过程")}
-          {" · "}
-          {compactCountLabel(detail.commandUses.length, "command")}
-          {" · "}
-          {compactCountLabel(detail.toolUses.length, "tool call")}
-          {" · "}
-          {compactCountLabel(detail.toolResults.length, "tool result")}
-          {" · "}
-          {compactCountLabel(detail.eventCount, "debug event")}
-        </small>
       </button>
     </div>
   );

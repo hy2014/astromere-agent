@@ -1,7 +1,5 @@
 import {useRef, useEffect, useState} from "react";
 import type {StreamItem, StreamLink} from "../../types";
-import type {AssistantMessageDebugBundle} from "../types";
-import type {BundleUsageSnapshot} from "../../tauri";
 import {UserMessageCard} from "./UserMessageCard";
 import {AssistantMessageCard} from "./AssistantMessageCard";
 import {MarkdownTablePreview} from "./preview-components";
@@ -15,7 +13,6 @@ import {
 import {welcomeStream} from "../session";
 
 // ─── WriteState（模块级单例）─────────────────────────────────────────
-// SessionDialog 的 onSubmitPrompt 和离线加载通过 WriteState 写入用户输入 / 历史数据
 const WriteState: {
   setSessionStreamItems: (updater: StreamItem[] | ((prev: StreamItem[]) => StreamItem[])) => void;
 } = {} as any;
@@ -56,24 +53,6 @@ export function renderPromptHighlightedText(value: string) {
   }
 
   return parts.length > 0 ? parts : "";
-}
-
-export function assistantDebugPayload(
-  item: Extract<StreamItem, { kind: "message" }>,
-  bundles: Record<string, AssistantMessageDebugBundle>,
-  action: "view" | "copy",
-): Record<string, unknown> {
-  const bundle = bundles[item.id];
-  return {
-    kind: "agent-ui.assistant-message-debug" as const,
-    action,
-    generatedAt: new Date().toISOString(),
-    sessionId: bundle?.sessionId ?? null,
-    messageId: item.id,
-    displayedMessage: item.text,
-    completed: bundle?.completed ?? null,
-    eventCount: bundle?.events.length ?? 0,
-  };
 }
 
 // ─── Merge helper ──────────────────────────────────────────────────────
@@ -129,14 +108,9 @@ export interface MessagesStreamProps {
     sessions: Array<{ id: string; title: string }>;
   } | null;
   error: string | null;
-  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block";
-  forkingMessageId: string | null;
-  pendingPermission: { sessionId?: string } | null;
-  isResolvingFileReferences: boolean;
+  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block" | "forking";
+  currentInput: { key: number; displayPrompt: string } | null;
   onToggleProcess: (messageId: string) => void;
-  assistantDebugBundles: Record<string, AssistantMessageDebugBundle>;
-  getUsageSnapshotByBundleId?: (bundleId: string) => BundleUsageSnapshot | null;
-  currentBundleUsageVersion?: number;
 
   onOpenPreviewLink: (link: StreamLink) => void;
   onForkFromMessage: (item: Extract<StreamItem, { kind: "message" }>) => void;
@@ -175,22 +149,41 @@ export function MessagesStreamView({
   activeProject,
   error,
   turnStatus,
-  forkingMessageId,
-  pendingPermission,
-  isResolvingFileReferences,
+  currentInput,
   onOpenPreviewLink,
   onForkFromMessage,
   onToggleProcess,
-  assistantDebugBundles,
-  getUsageSnapshotByBundleId = () => null,
-  currentBundleUsageVersion = 0,
 }: MessagesStreamProps) {
   const streamRef = useRef<HTMLDivElement | null>(null);
 
-  // ── 新：内部 state（event bus callback + onSubmitPrompt + 离线加载共用） ──
+  // ── 内部 state（event bus callback + 离线加载共用） ──
   const [sessionStreamItems, setSessionStreamItems] = useState<StreamItem[]>(() => []);
-  // 注册 setter 供 SessionDialog 的 onSubmitPrompt / 离线加载写入
+  // 注册 setter 供 WriteState 写入
   WriteState.setSessionStreamItems = setSessionStreamItems;
+
+  // ── 消费 currentInput：SessionDialog 提交后通知我们追加 user + pending items ──
+  useEffect(() => {
+    if (!currentInput) return;
+    const pendingId = `assistant-pending-${Date.now()}`;
+    setSessionStreamItems((prev) => [
+      ...prev,
+      {
+        id: `user-${Date.now()}`,
+        kind: "message",
+        role: "user",
+        text: currentInput.displayPrompt,
+        links: [],
+        fileReferences: undefined,
+      },
+      {
+        id: pendingId,
+        kind: "message",
+        role: "assistant",
+        text: "Assistant is thinking…",
+        status: "streaming",
+      },
+    ]);
+  }, [currentInput]);
 
   // ── 事件 bus callback ──
   useEffect(() => {
@@ -216,9 +209,6 @@ export function MessagesStreamView({
       (err) => console.error("[messages-stream] load history failed:", err),
     );
   }, [activeSessionId, activeProject?.root]);
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  void currentBundleUsageVersion;
 
   // ── Auto-scroll ──
   // 使用 sessionStreamItems 确保 callback 更新的数据也能触发滚动
@@ -261,14 +251,9 @@ export function MessagesStreamView({
                     <AssistantMessageCard
                       key={item.id}
                       item={item}
-                      assistantDebugBundle={assistantDebugBundles[item.id] ?? null}
-                      assistantLiveUsage={getUsageSnapshotByBundleId(item.id)}
-                      streamUsageByBundleKey={null}
+                      sessionId={activeSessionId ?? ""}
                       projectRoot={projectRoot}
                       turnStatus={turnStatus}
-                      forkingMessageId={forkingMessageId}
-                      pendingPermission={pendingPermission}
-                      isResolvingFileReferences={isResolvingFileReferences}
                       onToggleProcess={onToggleProcess}
                       onForkFromMessage={onForkFromMessage}
                       onOpenPreviewLink={onOpenPreviewLink}

@@ -1,6 +1,8 @@
 import type { AgentReplStreamEvent } from "../../types";
 import type { ModelCallUsage } from "../../tauri";
 import { saveModelCallUsage } from "../../tauri";
+import { loadModelSettings } from "../../runtime";
+import { calculateBundleUsageCostFromDeepSeekPricing } from "../usage-cost";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -8,6 +10,13 @@ export type UsageData = {
   latestMessageId: string;
   records: Record<string, ModelCallUsage>;
 };
+
+// ── Pricing cache（跟原来一样，fire-and-forget 加载一次）────────────
+
+let pricingSettings: any = null;
+loadModelSettings()
+  .then((settings) => { pricingSettings = settings; })
+  .catch(() => { pricingSettings = null; });
 
 // ── Handler ────────────────────────────────────────────────────────────
 
@@ -28,6 +37,22 @@ export function handleUsageEvent(
   const usage = message.usage as Record<string, unknown> | undefined;
   if (!usage) return null;
 
+  // 计算 cost
+  let costAmount: number | null = null;
+  if (pricingSettings) {
+    const cost = calculateBundleUsageCostFromDeepSeekPricing(
+      [{
+        modelCallId: messageId,
+        model: (message.model as string) ?? null,
+        stopReason: (message.stop_reason as string) ?? null,
+        selectedReason: "raw_json",
+        usage,
+      }],
+      pricingSettings as any,
+    );
+    costAmount = cost?.costAmount ?? null;
+  }
+
   // 构建新的 record
   const newRecord: ModelCallUsage = {
     modelCallId: messageId,
@@ -41,6 +66,7 @@ export function handleUsageEvent(
     cacheCreationInputTokens: (usage.cache_creation_input_tokens as number) ?? 0,
     updatedAtMs: Date.now(),
     source: "stream",
+    costAmount,
   };
 
   // diff：token 没变化就不写 DB、不更新 store

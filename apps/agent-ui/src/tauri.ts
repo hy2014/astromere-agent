@@ -347,6 +347,7 @@ export type ModelCallUsage = {
   completedAtMs?: number | null;
   updatedAtMs: number;
   source: string;
+  costAmount?: number | null;
 };
 
 export function saveModelCallUsage(usage: ModelCallUsage): Promise<void> {
@@ -364,5 +365,12 @@ export function loadModelCallUsagesForSession(
   sessionId: string,
 ): Promise<ModelCallUsage[]> {
   return invoke("load_model_call_usages_for_session", { sessionId });
+}
+
+export function loadModelCallUsages(
+  modelCallIds: string[],
+  sessionId: string,
+): Promise<ModelCallUsage[]> {
+  return invoke("load_model_call_usages", { modelCallIds, sessionId });
 }
 

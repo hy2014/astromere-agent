@@ -78,8 +78,6 @@ interface UsePromptInputOptions {
   setPrompt: (value: string) => void;
   fileReferences: LocalFileReference[];
   setFileReferences: (value: LocalFileReference[] | ((prev: LocalFileReference[]) => LocalFileReference[])) => void;
-  isResolvingFileReferences: boolean;
-  setIsResolvingFileReferences: (value: boolean) => void;
   fileMention: FileMentionState;
   setFileMention: (updater: FileMentionState | ((prev: FileMentionState) => FileMentionState)) => void;
   fileSuggestions: WorkspaceFileReference[];
@@ -100,8 +98,6 @@ interface UsePromptInputReturn {
   setFileReferences: (
     value: LocalFileReference[] | ((prev: LocalFileReference[]) => LocalFileReference[]),
   ) => void;
-  isResolvingFileReferences: boolean;
-  setIsResolvingFileReferences: (value: boolean) => void;
   canSendPrompt: boolean;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   promptImeStateRef: React.MutableRefObject<{
@@ -156,8 +152,6 @@ export function usePromptInput({
   setPrompt,
   fileReferences,
   setFileReferences,
-  isResolvingFileReferences,
-  setIsResolvingFileReferences,
   fileMention,
   setFileMention,
   fileSuggestions,
@@ -633,8 +627,6 @@ export function usePromptInput({
     setPrompt,
     fileReferences,
     setFileReferences,
-    isResolvingFileReferences,
-    setIsResolvingFileReferences,
     canSendPrompt,
     textareaRef,
     promptImeStateRef,

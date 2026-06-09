@@ -1,5 +1,6 @@
 import type { AgentReplStreamEvent, StreamItem } from "../../types";
 import {
+  collapseAssistantTurns,
   resolveRuntimeBundleEvent,
   streamEventToItems,
 } from "../stream-processor";
@@ -57,7 +58,9 @@ export function handleSessionItemsEvent(
   //   3. turn_complete → 设置最终 text + status = "complete"
   //   4. error/stderr → 创建 system 类型的错误消息
   //   5. 不关心的事件 → 原样返回 items
-  const newItems = streamEventToItems(prevItems, resolved);
+  const newItems = collapseAssistantTurns(
+    streamEventToItems(prevItems, resolved),
+  );
 
   // 如果 items 没变化，返回 null 避免触发不必要的 callback
   if (newItems === prevItems) return null;
