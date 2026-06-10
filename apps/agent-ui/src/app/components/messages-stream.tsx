@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import type {StreamItem, StreamLink} from "../../types";
 import type {BundleUsageSnapshot, BundleUsageTotals, ModelCallUsage, ModelCallUsageSnapshot} from "../../tauri";
-import {UserMessageCard} from "./UserMessageCard";
+import {UserMessageCardView} from "./UserMessageCard";
 import {AssistantMessageCard} from "./AssistantMessageCard";
 import {MarkdownTablePreview} from "./preview-components";
 import {SessionUsageDashboardView} from "./usage-dashboard";
@@ -319,7 +319,7 @@ export function MessagesStreamView({
               if (item.kind === "message") {
                 if (item.role === "user") {
                   return (
-                    <UserMessageCard
+                    <UserMessageCardView
                       key={item.id}
                       item={item}
                       projectRoot={projectRoot}
