@@ -1,5 +1,5 @@
 import {open as openDialog} from "@tauri-apps/plugin-dialog";
-import {useEffect, useMemo, useRef, useState} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import type {RemoteProfile} from "../runtime";
 import {
     addWorkspaceRegistryEntry,
@@ -21,10 +21,11 @@ import "../styles/mcp.css";
 import "./App.css";
 import {addCallback, setEventHandle} from "../hooks/stream-event-bus";
 import type {SessionMetadataEvent} from "./stream-handlers/session-metadata";
-import {handleSessionMetadataEvent} from "./stream-handlers/session-metadata";
 import {handleControlRequestEvent} from "./stream-handlers/control-request";
 import {handleCompactingEvent} from "./stream-handlers/compacting";
 import {handleContextUsageEvent} from "./stream-handlers/context-usage";
+import {handleSessionMetadataEvent} from "./stream-handlers/session-metadata";
+import {handleDetailEvent} from "./stream-handlers/message-detail";
 import {handleSessionStatusEvent} from "./stream-handlers/turn-status";
 import {TerminalView} from "./Terminal";
 import {RemoteTerminalPlaceholder} from "./RemoteTerminalPlaceholder";
@@ -63,6 +64,8 @@ import type {
     SessionUsageIndicatorKey,
     SlashRootItem,
 } from "./types";
+import {handleSessionItemsEvent} from "./stream-handlers/session-items";
+import {handleUsageEvent} from "./stream-handlers/usage-cost";
 
 // Types moved to ./types
 
@@ -129,6 +132,9 @@ export function App() {
     setEventHandle("context-usage", handleContextUsageEvent);
     setEventHandle("session-status", handleSessionStatusEvent);
     setEventHandle("session-metadata", handleSessionMetadataEvent);
+    setEventHandle("session-items", handleSessionItemsEvent as any);
+    setEventHandle("session-usage", handleUsageEvent as any);
+    setEventHandle("detail", handleDetailEvent as any);
   }, []);
 
   // 订阅 session-metadata：更新 session 进程状态（会话列表显示用）
@@ -173,6 +179,26 @@ export function App() {
   ]);
   const [selectedChatModel, setSelectedChatModel] =
     useState<string>("deepseek-v4-flash");
+
+  const [turnInfo, _setTurnInfo] = useState({
+    current: "idle" as "idle" | "running" | "interrupt" | "ctrl_block" | "forking",
+    prev: "idle" as "idle" | "running" | "interrupt" | "ctrl_block" | "forking",
+  });
+  const setTurnInfo = useCallback(
+    (status: "idle" | "running" | "interrupt" | "ctrl_block" | "forking") =>
+      _setTurnInfo((prev) => ({ current: status, prev: prev.current })),
+    [],
+  );
+
+  // 订阅 session-status：更新 turn 状态
+  useEffect(() => {
+    return addCallback("session-status", (data, sessionId) => {
+      if (sessionId !== activeSessionId) return;
+      if (!data) return;
+      const s = data as { turnStatus: "idle" | "running" | "interrupt" | "ctrl_block" | "forking" };
+      _setTurnInfo((prev) => ({ current: s.turnStatus, prev: prev.current }));
+    });
+  }, [activeSessionId]);
 
   const [activeRemoteProfile] = useState<RemoteProfile | null>(
     () => loadActiveRemoteProfileSnapshot(),
@@ -354,12 +380,6 @@ export function App() {
 
 
   function selectSession(project: ProjectFolder, sessionId: string) {
-    // 如果当前 session 还有进程在运行，禁止切换
-    const currentSession = activeProject?.sessions.find((s) => s.id === activeSessionId);
-    if (currentSession?.processStatus === "active") {
-      setError("当前会话正在运行中，请等待完成后再切换会话");
-      return;
-    }
     const sessionTitle =
       project.sessions.find((session) => session.id === sessionId)?.title ??
       "会话";
@@ -920,6 +940,8 @@ export function App() {
           selectedChatModel={selectedChatModel}
           onChatModelChange={setSelectedChatModel}
           onForkFromMessage={handleForkFromMessage}
+          turnInfo={turnInfo}
+          setTurnInfo={setTurnInfo}
         />
       )}
 

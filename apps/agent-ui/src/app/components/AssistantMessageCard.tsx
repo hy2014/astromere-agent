@@ -5,8 +5,6 @@ import {aggregateModelCallUsages} from "../usage-cost";
 import {AssistantUsageMiniOverlayView} from "./assistant-usage-mini-overlay";
 import {RichMarkdownMessage} from "./preview-components";
 import {MessageImagePreviews} from "./image-reference-view";
-import {pendingAssistantText} from "../stream-processor";
-import {getSessionData} from "../../hooks/stream-event-bus";
 import {loadModelCallUsages} from "../../tauri";
 import {loadTypedRuntimeSession} from "../../runtime";
 import {runtimeSessionToArtifacts} from "../debug-utils";
@@ -16,8 +14,8 @@ export interface AssistantMessageCardProps {
   item: Extract<StreamItem, { kind: "message" }>;
   sessionId: string;
   projectRoot: string;
-  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block" | "forking";
-  pendingPermission: { sessionId?: string } | null;
+  turnInfo: { current: "idle" | "running" | "interrupt" | "ctrl_block" | "forking"; prev: "idle" | "running" | "interrupt" | "ctrl_block" | "forking" };
+  runningResponse: string;
 
   onToggleProcess: (messageId: string) => void;
   onForkFromMessage: (item: Extract<StreamItem, { kind: "message" }>) => void;
@@ -28,14 +26,12 @@ export function AssistantMessageCard({
   item,
   sessionId,
   projectRoot,
-  turnStatus,
-  pendingPermission,
+  turnInfo,
+  runningResponse,
   onToggleProcess,
   onForkFromMessage,
   onOpenPreviewLink,
 }: AssistantMessageCardProps) {
-  // ── Local debug state (每个卡片自己管) ──
-  const [isCopied, setIsCopied] = useState(false);
   // ── Local usage popover state ──
   const [usagePopup, setUsagePopup] = useState<AggregatedUsage | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
@@ -44,8 +40,10 @@ export function AssistantMessageCard({
     if (usageLoading || !sessionId) return;
     setUsageLoading(true);
     try {
-      const si = getSessionData<{ bundles: Record<string, string[]> }>(sessionId, "session-info");
-      const messageIds = si?.bundles?.[item.id] ?? [];
+      const detail = await loadTypedRuntimeSession(projectRoot, sessionId);
+      const artifacts = runtimeSessionToArtifacts(detail, projectRoot);
+      const bundle = artifacts.bundles[item.id];
+      const messageIds = bundle?.modelCallIds ?? [];
       const usages = await loadModelCallUsages(messageIds, sessionId);
       setUsagePopup(aggregateModelCallUsages(usages));
     } catch {
@@ -53,44 +51,11 @@ export function AssistantMessageCard({
     } finally {
       setUsageLoading(false);
     }
-  }, [sessionId, item.id, usageLoading]);
-
-  const handleCopyDebug = useCallback(async () => {
-    try {
-      const detail = await loadTypedRuntimeSession(projectRoot, sessionId);
-      const artifacts = runtimeSessionToArtifacts(detail, projectRoot);
-      const bundle = artifacts.bundles[item.id];
-      const payload = {
-        kind: "agent-ui.assistant-message-debug",
-        action: "copy",
-        generatedAt: new Date().toISOString(),
-        sessionId: bundle?.sessionId ?? null,
-        root: bundle?.root ?? null,
-        messageId: item.id,
-        userMessage: bundle?.userMessage ?? null,
-        transportMessage: bundle?.transportMessage ?? null,
-        referencedFiles: bundle?.fileReferences ?? item.fileReferences ?? null,
-        displayedMessage: item.text,
-        displayedProgressText: item.progressText ?? null,
-        displayStatus: item.status ?? null,
-        bundleDisplayText: bundle?.displayText ?? null,
-        completed: bundle?.completed ?? null,
-        eventCount: bundle?.events.length ?? 0,
-        events: (bundle?.events ?? []).map((e: any) => ({
-          eventType: e.eventType,
-          receivedAt: new Date(e.receivedAt).toISOString(),
-          payload: e.payload,
-        })),
-      };
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 1600);
-    } catch { /* silent */ }
-  }, [item, projectRoot, sessionId]);
+  }, [sessionId, item.id, projectRoot, usageLoading]);
 
   const displayText =
-    item.status === "streaming" && item.text === pendingAssistantText
-      ? "正在等待最终回答…"
+    item.status === "streaming"
+      ? `Assistant is thinking…${runningResponse}`
       : item.text;
 
   return (
@@ -100,14 +65,11 @@ export function AssistantMessageCard({
 
         {/* ═══ Header ═══ 操作栏，只触发不管理 */}
         <Header
-          isCopied={isCopied}
           usageLabel={usageLoading ? "Loading…" : "Usage"}
           isForkDisabled={Boolean(
-            !item.checkpointUuid || turnStatus !== "idle" ||
-            pendingPermission,
+            !item.checkpointUuid || turnInfo.current !== "idle",
           )}
-          forkLabel={turnStatus === "forking" ? "Forking…" : "Fork"}
-          onDebugCopy={handleCopyDebug}
+          forkLabel={turnInfo.current === "forking" ? "Forking…" : "Fork"}
           onUsageClick={handleUsageClick}
           onForkClick={() => onForkFromMessage(item)}
         />
@@ -149,31 +111,21 @@ export function AssistantMessageCard({
 // ═══ Header sub-component ═════════════════════════════════════════════
 
 interface HeaderProps {
-  isCopied: boolean;
   usageLabel: string;
   isForkDisabled: boolean;
   forkLabel: string;
-  onDebugCopy: () => void;
   onUsageClick: () => void;
   onForkClick: () => void;
 }
 
 function Header({
-  isCopied, usageLabel,
+  usageLabel,
   isForkDisabled, forkLabel,
-  onDebugCopy, onUsageClick, onForkClick,
+  onUsageClick, onForkClick,
 }: HeaderProps) {
   return (
     <div className="stream-label-row">
       <div className="stream-label">Assistant</div>
-      <button
-        className={`message-debug-button ${isCopied ? "copied" : ""}`}
-        type="button"
-        onDoubleClick={onDebugCopy}
-        title="双击复制 Debug JSON"
-      >
-        {isCopied ? "已复制" : "Debug"}
-      </button>
       <button
         className="message-debug-button"
         type="button"

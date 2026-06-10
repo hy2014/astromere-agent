@@ -33,6 +33,7 @@ const eventHandles: Record<string, EventHandle> = {};
 
 /** 全局 store: data[name][sessionId] = handlerData */
 const data: Record<string, Record<string, unknown>> = {};
+if (typeof window !== "undefined") (window as any).__eventBusData = data;
 
 /** 1 name → n callbacks */
 const eventCallbacks: Record<string, Set<EventCallback>> = {};
@@ -44,10 +45,10 @@ const eventCallbacks: Record<string, Set<EventCallback>> = {};
  */
 export function setEventHandle(name: string, handle: EventHandle): void {
   if (eventHandles[name]) {
-    throw new Error(`Event handle "${name}" already registered`);
+    console.warn(`Event handle "${name}" already registered — overwriting`);
   }
   eventHandles[name] = handle;
-  data[name] = {};
+  data[name] ??= {};
 }
 
 /**

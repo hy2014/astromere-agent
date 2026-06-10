@@ -249,7 +249,7 @@ function renderSessionUsageDashboard(
             <table className="usage-table">
               <thead>
                 <tr>
-                  <th>Model call</th><th>Model</th><th>Stop</th><th>Selected</th><th>Input</th>
+                  <th>Model call</th><th>Model</th><th>Stop</th><th>Time</th><th>Input</th>
                   <th>Output</th><th>Cache hit</th><th>Cache create</th><th>Total input</th><th>Hit rate</th><th>Cost</th>
                 </tr>
               </thead>
@@ -264,7 +264,7 @@ function renderSessionUsageDashboard(
                       <td title={call.modelCallId}>{usageShortId(call.modelCallId)}</td>
                       <td>{call.model ?? "unknown"}</td>
                       <td>{call.stopReason ?? "—"}</td>
-                      <td>{call.selectedReason}</td>
+                      <td>{call.startedAtMs ? new Date(call.startedAtMs).toLocaleTimeString() : "—"}</td>
                       <td>{usageFormatValue(callUsage.inputTokens, "input_tokens")}</td>
                       <td>{usageFormatValue(callUsage.outputTokens, "output_tokens")}</td>
                       <td>{usageFormatValue(callUsage.cacheReadInputTokens, "cache_read_input_tokens")}</td>

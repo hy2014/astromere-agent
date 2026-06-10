@@ -284,7 +284,8 @@ export type ModelCallUsageSnapshot = {
   modelCallId: string;
   model?: string | null;
   stopReason?: string | null;
-  selectedReason: string;
+  selectedReason?: string;
+  startedAtMs?: number | null;
   usage: Record<string, unknown>;
 };
 
