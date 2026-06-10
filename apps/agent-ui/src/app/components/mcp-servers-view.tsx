@@ -291,12 +291,14 @@ function computeValidationMessage(rows: McpServerDraftRow[]): string {
 // ─── renderFn functions ────────────────────────────────────────────────
 
 function renderMcpEnvList(
-  {}: Record<string, never>,
+  { rows, editingId }: { rows: McpServerDraftRow[]; editingId: string | null },
   {}: Record<string, never>,
   { updateEnvRow, removeEnvRow }: { updateEnvRow: (serverId: string, envId: string, patch: Partial<McpEnvDraftRow>) => void; removeEnvRow: (serverId: string, envId: string) => void },
-  ext: { envRows: McpEnvDraftRow[]; rowId: string } = { envRows: [], rowId: "" },
 ) {
-  const { envRows, rowId } = ext;
+  const row = rows.find((r) => r.id === editingId);
+  if (!row) return null;
+  const envRows = row.envRows;
+  const rowId = row.id;
   return (
     <div className="mcp-clean-env-list">
       {envRows.map((env) => (
@@ -384,8 +386,7 @@ function renderMcpServersViewSavedIndicator(
   {}: Record<string, never>,
   {}: Record<string, never>,
   {}: Record<string, never>,
-  _ext?: any,
-  { hasUnsavedChanges } = { hasUnsavedChanges: false },
+  { hasUnsavedChanges }: { hasUnsavedChanges: boolean },
 ) {
   return <span>{hasUnsavedChanges ? "Unsaved changes" : "Saved"}</span>;
 }
@@ -416,8 +417,7 @@ function renderMcpServersViewStats(
   {}: Record<string, never>,
   {}: Record<string, never>,
   {}: Record<string, never>,
-  _ext?: any,
-  { summary } = { summary: { servers: 0, args: 0, env: 0 } },
+  { summary }: { summary: { servers: number; args: number; env: number } },
 ) {
   return (
     <section className="mcp-clean-stats" aria-label="MCP summary">
@@ -550,7 +550,7 @@ function renderMcpServersViewEditCard(
 
           {row.envRows.length === 0 ? <p>No environment variables.</p> : null}
 
-          {render({state: {}, props: {}, fn: renderMcpEnvList, events: { updateEnvRow, removeEnvRow }, memo: { envRows: row.envRows, rowId: row.id }})}
+          {render({state: { rows, editingId }, props: {}, fn: renderMcpEnvList, events: { updateEnvRow, removeEnvRow }, memo: {}})}
         </section>
       </div>
     </article>
@@ -561,8 +561,7 @@ function renderMcpServersViewFooter(
   { status, isLoading, isSaving, configPath }: { status: string; isLoading: boolean; isSaving: boolean; configPath: string },
   {}: Record<string, never>,
   { reloadMcpSettings, handleSaveMcpSettings }: { reloadMcpSettings: () => Promise<void>; handleSaveMcpSettings: (validationMessage: string, draftSettings: McpSettings, configPath: string) => Promise<void> },
-  _ext?: any,
-  { validationMessage, hasUnsavedChanges, draftSettings } = { validationMessage: "", hasUnsavedChanges: false, draftSettings: {} as McpSettings },
+  { validationMessage, hasUnsavedChanges, draftSettings }: { validationMessage: string; hasUnsavedChanges: boolean; draftSettings: McpSettings },
 ) {
   return (
     <>
@@ -619,7 +618,7 @@ export function McpServersView() {
   const draftText = useMemo(() => stringifyStableMcpSettings(draftSettings), [draftSettings]);
   const summary = useMemo(() => summarizeMcpRows(rows), [rows]);
   const validationMessage = useMemo(() => computeValidationMessage(rows), [rows]);
-  const hasUnsavedChanges = draftText !== savedText;
+  const hasUnsavedChanges = useMemo(() => draftText !== savedText, [draftText, savedText]);
 
   useEffect(() => { void reloadMcpSettings(); }, []);
 
