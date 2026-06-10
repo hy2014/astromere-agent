@@ -1,6 +1,19 @@
 import {useEffect, useState} from "react"
-import {listWorktrees} from "../runtime"
-import type {WorktreeItem} from "../types"
+
+// Worktree 功能暂未接入后端 API，此处使用本地类型定义以避免编译阻断
+// TODO: 接入后端后替换为正式导入：
+//   import {listWorktrees} from "../runtime"
+//   import type {WorktreeItem} from "../types"
+type WorktreeItem = {
+  path: string
+  sessions: Array<{ id: string; title: string }>
+};
+
+async function listWorktrees(_root: string): Promise<WorktreeItem[]> {
+  // 后端 API 尚未实现，返回空列表
+  console.warn("[WorktreePanel] listWorktrees not yet implemented via Tauri backend");
+  return [];
+}
 
 type Props = {
   root: string

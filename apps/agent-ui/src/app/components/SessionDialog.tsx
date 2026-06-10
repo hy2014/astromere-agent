@@ -1,16 +1,18 @@
 /* @checkFns detail-panel */
 import {useCallback, useEffect, useMemo, useState} from "react";
 import type {AgentPermissionState, StreamItem, StreamLink,} from "../../types";
+import type {DebugStreamEvent} from "../types";
 import type {LocalFileReference, PreviewTab, ProjectFolder} from "../types";
 import {render, renderView} from "../../core/dep";
+import {loadTypedRuntimeSession} from "../../runtime";
+import {runtimeSessionToArtifacts} from "../debug-utils";
 import {PreviewPanelView} from "./PreviewPanel";
 import {PromptInputAreaView} from "./PromptInputArea";
 import {MessagesStreamView} from "./messages-stream";
 import {assistantTurnTimeline, compactCountLabel} from "../debug-utils";
 import {formatDebugTime} from "../file-utils";
 import {ensureAgentReplProcess, interruptAgentTurn, sendAgentReplInput,} from "../../runtime";
-import {addCallback, getSessionData, startStreamEventListener,} from "../../hooks/stream-event-bus";
-import {queryItemList} from "../stream-handlers/message-detail";
+import {addCallback, startStreamEventListener,} from "../../hooks/stream-event-bus";
 
 // ─── Props interface ─────────────────────────────────────────────────────
 
@@ -23,6 +25,8 @@ export interface SessionDialogProps {
   error: string | null;
   setError: (error: string | null) => void;
   activeSessionTitle: string;
+  turnInfo: { current: "idle" | "running" | "interrupt" | "ctrl_block" | "forking"; prev: "idle" | "running" | "interrupt" | "ctrl_block" | "forking" };
+  setTurnInfo: (status: "idle" | "running" | "interrupt" | "ctrl_block" | "forking") => void;
   permissionState: AgentPermissionState | null;
   onPermissionModeChange: (mode: string) => void;
   previewTabs: PreviewTab[];
@@ -58,8 +62,10 @@ export type PendingPermission = {
 // ─── WriteState (被 PromptInputArea 导入用于权限响应) ─────────────────
 
 export const WriteState: {
-  setTurnStatus: (updater: "idle" | "running" | "interrupt" | "ctrl_block" | "forking" | ((prev: "idle" | "running" | "interrupt" | "ctrl_block" | "forking") => "idle" | "running" | "interrupt" | "ctrl_block" | "forking")) => void;
+  setTurnInfo: (status: "idle" | "running" | "interrupt" | "ctrl_block" | "forking") => void;
   setDisplayDetailBundleId: (updater: string | null | ((current: string | null) => string | null)) => void;
+  runningProcess: DebugStreamEvent[];
+  setRunningProcess: (updater: DebugStreamEvent[] | ((prev: DebugStreamEvent[]) => DebugStreamEvent[])) => void;
 } = {} as any;
 
 // ─── PendingSubmit — 信号：通知 MessagesStreamView 添加 user + assistant pending items ──
@@ -115,7 +121,7 @@ async function handleSubmitPromptAction(
   setProjectsFn: (updater: (folders: ProjectFolder[]) => ProjectFolder[]) => void,
   setErrorFn: (error: string | null) => void,
   setCurrentInputFn: (input: { key: number; displayPrompt: string }) => void,
-  onSetTurnStatus: (status: "idle" | "running" | "interrupt" | "ctrl_block" | "forking") => void,
+  onSetTurnInfo: (status: "idle" | "running" | "interrupt" | "ctrl_block" | "forking") => void,
 ): Promise<void> {
   const trimmed = input.text.trim();
   if (
@@ -139,9 +145,9 @@ async function handleSubmitPromptAction(
 
   // 通过 currentInput 信号通知 MessagesStreamView 追加 user + pending assistant items
   setCurrentInputFn({ key: Date.now(), displayPrompt });
-  onSetTurnStatus("running");
+  onSetTurnInfo("running");
   setErrorFn(null);
-  console.timeEnd('[submit] sync: setCurrentInput + setTurnStatus');
+  console.timeEnd('[submit] sync: setCurrentInput + setTurnInfo');
   console.timeEnd('[submit] enter-to-sync');
 
   // Pending session 标题更新
@@ -184,7 +190,7 @@ async function handleSubmitPromptAction(
     })
     .catch((reason: any) => {
       setErrorFn(String(reason));
-      onSetTurnStatus("idle");
+      onSetTurnInfo("idle");
     });
 }
 
@@ -192,12 +198,12 @@ function handleForkFromMessageAction(
   item: Extract<StreamItem, { kind: "message" }>,
   onFork: (item: Extract<StreamItem, { kind: "message" }>) => void,
 ): void {
-  WriteState.setTurnStatus("forking");
+  WriteState.setTurnInfo("forking");
   // Fire-and-forget: onFork 是 async function（App.tsx 的 handleForkFromMessage），
   // 等异步操作完成后自动清除 "forking" 状态
   Promise.resolve(onFork(item))
     .catch(() => {})
-    .finally(() => WriteState.setTurnStatus("idle"));
+    .finally(() => WriteState.setTurnInfo("idle"));
 }
 
 function handleInterruptTurnAction(
@@ -207,12 +213,12 @@ function handleInterruptTurnAction(
   setErrorFn: (error: string | null) => void,
 ): void {
   if (turnStatusVal === "idle" || turnStatusVal === "interrupt") return;
-  WriteState.setTurnStatus("interrupt");
+  WriteState.setTurnInfo("interrupt");
   interruptAgentTurn(activeProject?.root ?? "", activeSessionIdVal ?? "")
     .catch((reason) => setErrorFn(String(reason)))
     .finally(() => {
       // turn 被中断后，bus 收到 interrupt 事件时会自动清空 pending permission
-      WriteState.setTurnStatus("idle");
+      WriteState.setTurnInfo("idle");
     });
 }
 
@@ -221,13 +227,11 @@ function handleInterruptTurnAction(
 function renderProcessTimeline(
   { displayDetailBundleId }:
     { displayDetailBundleId: string | null },
-  { activeSessionId }: { activeSessionId: string | null },
+  { activeSessionId, runningProcess }: { activeSessionId: string | null; runningProcess: DebugStreamEvent[] },
   { onToggleAssistantProcess }: { onToggleAssistantProcess: (id: string) => void },
 ) {
   if (!displayDetailBundleId) return <></>;
-  const sessionInfo = getSessionData<{ bundles: Record<string, string[]> }>(activeSessionId ?? "", "session-info");
-  const messageIds = sessionInfo?.bundles?.[displayDetailBundleId] ?? [];
-  const events = queryItemList(activeSessionId ?? "", messageIds);
+  const events = runningProcess;
   const pd = assistantTurnTimeline(events);
   return (
     <div className="detail-content-overlay">
@@ -275,8 +279,8 @@ function renderProcessTimeline(
 function renderDetailPanel(
   { displayDetailBundleId }:
     { displayDetailBundleId: string | null },
-  { activeSessionId, activeProject, activePreview, previewTabs }:
-    { activeSessionId: string | null; activeProject: ProjectFolder | null; activePreview: PreviewTab | null; previewTabs: PreviewTab[] },
+  { activeSessionId, activeProject, activePreview, previewTabs, runningProcess }:
+    { activeSessionId: string | null; activeProject: ProjectFolder | null; activePreview: PreviewTab | null; previewTabs: PreviewTab[]; runningProcess: DebugStreamEvent[] },
   { onToggleAssistantProcess, onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews, onOpenPreviewLink }:
     { onToggleAssistantProcess: (messageId: string) => void; onSetActivePreviewId: (id: string | null) => void; onClosePreviewTab: (id: string) => void; onCloseAllPreviews: () => void; onOpenPreviewLink: (link: StreamLink) => void },
 ) {
@@ -296,7 +300,7 @@ function renderDetailPanel(
       </div>
       {hasDetailContent && render({
         state: { displayDetailBundleId },
-        props: { activeSessionId },
+        props: { activeSessionId, runningProcess },
         fn: renderProcessTimeline,
         events: { onToggleAssistantProcess },
         memo: {},
@@ -306,14 +310,14 @@ function renderDetailPanel(
 }
 
 function renderSessionDialog(
-  { displayDetailBundleId, turnStatus, currentInput }:    { displayDetailBundleId: string | null; turnStatus: "idle" | "running" | "interrupt" | "ctrl_block" | "forking"; currentInput: { key: number; displayPrompt: string } | null },
-  { activeSessionId, activeProject, error, previewTabs, activePreview, permissionState, selectedChatModel, chatModelOptions }:
-    { activeSessionId: string | null; activeProject: ProjectFolder | null; error: string | null; previewTabs: PreviewTab[]; activePreview: PreviewTab | null; permissionState: AgentPermissionState | null; selectedChatModel: string; chatModelOptions: string[] },
+  { displayDetailBundleId, turnInfo, currentInput, runningProcess }:    { displayDetailBundleId: string | null; turnInfo: { current: "idle" | "running" | "interrupt" | "ctrl_block" | "forking"; prev: "idle" | "running" | "interrupt" | "ctrl_block" | "forking" }; currentInput: { key: number; displayPrompt: string } | null; runningProcess: DebugStreamEvent[] },
+  { activeSessionId, activeProject, error, previewTabs, activePreview, permissionState, selectedChatModel, chatModelOptions, setTurnInfo }:
+    { activeSessionId: string | null; activeProject: ProjectFolder | null; error: string | null; previewTabs: PreviewTab[]; activePreview: PreviewTab | null; permissionState: AgentPermissionState | null; selectedChatModel: string; chatModelOptions: string[]; setTurnInfo: (status: "idle" | "running" | "interrupt" | "ctrl_block" | "forking") => void },
   { onToggleAssistantProcess, onOpenPreviewLink, onForkFromMessage, onSubmitPrompt, onInterruptTurn, onPermissionModeChange, onChatModelChange, onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews }:
     { onToggleAssistantProcess: (messageId: string) => void; onOpenPreviewLink: (link: StreamLink) => void; onForkFromMessage: any; onSubmitPrompt: (input: { text: string; fileReferences: any[] }) => void; onInterruptTurn: () => void; onPermissionModeChange: (mode: string) => void; onChatModelChange: (model: string) => void; onSetActivePreviewId: (id: string | null) => void; onClosePreviewTab: (id: string) => void; onCloseAllPreviews: () => void },
 ) {
   const messageStreamProps = {
-    activeSessionId, activeProject, error, turnStatus,
+    activeSessionId, activeProject, error, turnInfo,
     currentInput,
     pendingPermission: null,
     onOpenPreviewLink, onForkFromMessage,
@@ -327,7 +331,8 @@ function renderSessionDialog(
         {renderView({ fn: PromptInputAreaView, props: {
           activeProject: activeProject?.root ?? null,
           activeSessionId,
-          turnStatus,
+          turnInfo,
+          setTurnInfo,
           permissionState,
           onPermissionModeChange,
           selectedChatModel,
@@ -341,7 +346,7 @@ function renderSessionDialog(
 
       {render({
         state: { displayDetailBundleId },
-        props: { activeSessionId, activeProject, activePreview, previewTabs },
+        props: { activeSessionId, activeProject, activePreview, previewTabs, runningProcess },
         fn: renderDetailPanel,
         events: { onToggleAssistantProcess, onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews, onOpenPreviewLink },
         memo: {},
@@ -358,30 +363,60 @@ export function SessionDialogView({
   previewTabs, activePreview, onSetActivePreviewId, onClosePreviewTab, onCloseAllPreviews,
   onOpenPreviewLink, chatModelOptions, selectedChatModel, onChatModelChange,
   onForkFromMessage,
+  turnInfo, setTurnInfo,
 }: SessionDialogProps) {
   // ── 共享 state ──
-  const [turnStatus, setTurnStatus] = useState<"idle" | "running" | "interrupt" | "ctrl_block" | "forking">("idle");
   const [currentInput, setCurrentInput] = useState<{ key: number; displayPrompt: string } | null>(null);
 
   // Process 右侧面板
   const [displayDetailBundleId, setDisplayDetailBundleId] = useState<string | null>(null);
+  const [runningProcess, setRunningProcess] = useState<DebugStreamEvent[]>([]);
 
   // ── WriteState registrations ──
-  WriteState.setTurnStatus = setTurnStatus;
+  WriteState.setTurnInfo = setTurnInfo;
   WriteState.setDisplayDetailBundleId = setDisplayDetailBundleId;
+  WriteState.runningProcess = runningProcess;
+  WriteState.setRunningProcess = setRunningProcess;
 
   // ── Effects ──
 
   // 启动底层事件监听（新版 event handles 由 App.tsx 注册，这里只负责 start）
   useEffect(() => { startStreamEventListener(); }, []);
 
-  // ── Event bus callback: turn-status ──
+  // ── 事件 bus callback：流式过程事件 ──
   useEffect(() => {
-    return addCallback("session-status", (data, sessionId) => {
+    const unsub = addCallback("detail", (data, sessionId) => {
       if (sessionId !== activeSessionId) return;
-      setTurnStatus(data as "idle" | "running" | "interrupt" | "ctrl_block" | "forking");
+      if (!data) return;
+      const d = data as { lastEvent?: DebugStreamEvent };
+      if (!d.lastEvent) return;
+      setRunningProcess((prev) => [...prev, d.lastEvent!]);
     });
+    return unsub;
   }, [activeSessionId]);
+
+  // 切换 session 时清空残留的过程事件
+  useEffect(() => { setRunningProcess([]); }, [activeSessionId]);
+
+  // 新 turn 开始时清空过程事件（从 idle→running 时才清，权限阻塞后回 running 不清）
+  useEffect(() => {
+    if (turnInfo.prev === "idle" && turnInfo.current === "running") {
+      setRunningProcess([]);
+    }
+  }, [turnInfo]);
+
+  // 打开历史消息的过程面板时从 JSONL 加载事件
+  useEffect(() => {
+    if (!displayDetailBundleId || !activeProject?.root || !activeSessionId) return;
+    if (runningProcess.length > 0) return; // 已有流式数据，不需要加载
+    loadTypedRuntimeSession(activeProject.root, activeSessionId)
+      .then((detail) => {
+        const artifacts = runtimeSessionToArtifacts(detail, activeProject.root);
+        const bundle = artifacts.bundles[displayDetailBundleId];
+        if (bundle?.events?.length) setRunningProcess(bundle.events);
+      })
+      .catch(() => {}); // silent
+  }, [displayDetailBundleId, activeProject?.root, activeSessionId, runningProcess.length]);
 
   // ── Computed values & thin event callbacks ──
 
@@ -389,19 +424,19 @@ export function SessionDialogView({
     (input: { text: string; fileReferences: LocalFileReference[] }) =>
       handleSubmitPromptAction(
         input, activeProject, activeSessionId, selectedChatModel, permissionState,
-        false, turnStatus,
+        false, turnInfo.current,
         setProjects, setError,
-        setCurrentInput, setTurnStatus,
+        setCurrentInput, setTurnInfo,
       ),
     [activeProject, activeSessionId, selectedChatModel, permissionState,
-      turnStatus, setProjects, setError],
+      turnInfo, setProjects, setError],
   );
   const onEventInterruptTurn = useCallback(
     () => handleInterruptTurnAction(
-      turnStatus, activeSessionId,
+      turnInfo.current, activeSessionId,
       activeProject, setError,
     ),
-    [turnStatus, activeSessionId, activeProject, setError],
+    [turnInfo, activeSessionId, activeProject, setError],
   );
 
   // Fork 操作：file-level handleForkFromMessageAction 负责设置/清除 "forking" turnStatus
@@ -424,11 +459,11 @@ export function SessionDialogView({
 
   return render({
     state: {
-      displayDetailBundleId, turnStatus, currentInput,
+      displayDetailBundleId, turnInfo, currentInput, runningProcess,
     },
     props: {
       activeSessionId, activeProject, error, previewTabs, activePreview,
-      permissionState, selectedChatModel, chatModelOptions,
+      permissionState, selectedChatModel, chatModelOptions, setTurnInfo,
     },
     fn: renderSessionDialog,
     events: {

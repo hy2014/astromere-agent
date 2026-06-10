@@ -11,7 +11,6 @@ import {addCallback} from "../../hooks/stream-event-bus";
 import {isNewSessionId} from "../file-utils";
 import type {ControlRequestData, PendingPermission} from "../stream-handlers/control-request";
 import type {ContextUsageSignal} from "../stream-handlers/context-usage";
-import {WriteState} from "./SessionDialog";
 
 interface AgentPermissionState {
   currentMode: string;
@@ -22,7 +21,8 @@ interface PromptInputAreaProps {
   // Session state
   activeProject: string | null;
   activeSessionId: string | null;
-  turnStatus: "idle" | "running" | "interrupt" | "ctrl_block" | "forking";
+  turnInfo: { current: "idle" | "running" | "interrupt" | "ctrl_block" | "forking"; prev: "idle" | "running" | "interrupt" | "ctrl_block" | "forking" };
+  setTurnInfo: (status: "idle" | "running" | "interrupt" | "ctrl_block" | "forking") => void;
 
   // Permission state
   permissionState: AgentPermissionState | null;
@@ -43,7 +43,8 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
   const {
     activeProject,
     activeSessionId,
-    turnStatus,
+    turnInfo,
+    setTurnInfo,
     permissionState,
     onPermissionModeChange,
     selectedChatModel,
@@ -58,6 +59,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
   const [controlCard, setControlCard] = useState<PendingPermission | null>(null);
   useEffect(() => {
     return addCallback("control-request", (data, _sessionId) => {
+      if (!data) return;
       const cr = data as ControlRequestData;
       setControlCard(cr.permission);
     });
@@ -71,7 +73,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
   const handlePermissionDecision = useCallback(
     (approved: boolean, answers: Record<string, string> | undefined, permission: PendingPermission) => {
       setControlCard(null);
-      WriteState.setTurnStatus("running");
+      setTurnInfo("running");
       const updatedInput =
         permission.isQuestion && approved && answers && permission.input
           ? { ...(permission.input as Record<string, unknown>), answers }
@@ -84,7 +86,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
         updatedInput,
       ).catch((reason) => {
         console.error("[controlCard] respondAgentPermission failed:", reason);
-        WriteState.setTurnStatus("idle");
+        setTurnInfo("idle");
         // bus still holds the permission data; next event re-pushes the card
       });
     },
@@ -298,7 +300,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                 ? "Type a message, use @ to reference workspace files..."
                 : "Add a project folder before starting a conversation..."
             }
-            disabled={!activeProject || !activeSessionId || turnStatus !== "idle"}
+            disabled={!activeProject || !activeSessionId || turnInfo.current !== "idle"}
           />
           {fileMention.active ? (
             <div className="file-mention-menu" role="listbox">
@@ -434,7 +436,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
                 onChatModelChange(event.target.value)
               }
               disabled={
-                !activeProject || !activeSessionId || turnStatus !== "idle"
+                !activeProject || !activeSessionId || turnInfo.current !== "idle"
               }
             >
               {chatModelOptions.map((model) => (
@@ -456,14 +458,14 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
               upload(todo)
             </button>
           </div>
-          {turnStatus !== "idle" || controlCard ? (
+          {turnInfo.current !== "idle" || controlCard ? (
             <button
               className="send-button stop"
               type="button"
               onClick={onInterruptTurn}
-              disabled={turnStatus === "interrupt"}
+              disabled={turnInfo.current === "interrupt"}
             >
-              {turnStatus === "interrupt" ? "STOPPING" : "STOP"}
+              {turnInfo.current === "interrupt" ? "STOPPING" : "STOP"}
             </button>
           ) : null}
           <button
@@ -471,7 +473,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
             type="submit"
             disabled={!canSendPrompt}
           >
-            {turnStatus !== "idle" ? "RUNNING" : "SEND"}
+            {turnInfo.current !== "idle" ? "RUNNING" : "SEND"}
           </button>
         </div>
       </div>
