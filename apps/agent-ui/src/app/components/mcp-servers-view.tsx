@@ -291,12 +291,12 @@ function computeValidationMessage(rows: McpServerDraftRow[]): string {
 // ─── renderFn functions ────────────────────────────────────────────────
 
 function renderMcpEnvList(
-  { rows, editingId }: { rows: McpServerDraftRow[]; editingId: string | null },
+  { rows, editingId }: { rows: McpServerDraftRow[]; editingId: string },
   {}: Record<string, never>,
   { updateEnvRow, removeEnvRow }: { updateEnvRow: (serverId: string, envId: string, patch: Partial<McpEnvDraftRow>) => void; removeEnvRow: (serverId: string, envId: string) => void },
 ) {
   const row = rows.find((r) => r.id === editingId);
-  if (!row) return null;
+  if (!row) return <></>;
   const envRows = row.envRows;
   const rowId = row.id;
   return (

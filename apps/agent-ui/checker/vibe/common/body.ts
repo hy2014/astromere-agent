@@ -3,6 +3,9 @@ import { Vibe, VibeStatus, Rule } from "../vibe";
 import { DeclaredVarStatus, DefineAssignVibe, SetVibe } from "../assign";
 import { ReturnVibe } from "./expr";
 import { FunctionCallVibe } from "./fn-call";
+import { ConditionsVibe } from "./conditions";
+import { LoopVibe } from "./loop";
+import { TryVibe } from "./try";
 
 export class BodyVibe extends Vibe {
   static rule(parentVibe: Vibe): Rule {
@@ -16,9 +19,10 @@ export class BodyVibe extends Vibe {
           ReturnVibe.rule(vibe),
           DefineAssignVibe.rule(vibe),
           SetVibe.rule(vibe),
-          // TODO: ConditionsVibe(45)
+          ConditionsVibe.rule(vibe),
+          LoopVibe.rule(vibe),
+          TryVibe.rule(vibe),
           FunctionCallVibe.rule(vibe),
-          // TODO: LoopVibe(10), TryVibe(10)
         ];
         return vibe;
       },
@@ -34,8 +38,6 @@ export class BodyVibe extends Vibe {
   }
 
   computeResults(): VibeStatus[] {
-    return this.ownStatus().filter(
-      (s): s is DeclaredVarStatus => s instanceof DeclaredVarStatus,
-    );
+    return [];
   }
 }

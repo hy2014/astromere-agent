@@ -43,21 +43,69 @@ export class ConstVibe extends PassThroughVibe {
   }
 }
 
+// ─── ImportVarVibeStatus ───────────────────────────────────────────────
+
+export class ImportVarVibeStatus extends VibeStatus {
+  constructor(
+    public varName: string,
+    public fromFileName: string,
+  ) {
+    super("ImportVibe");
+  }
+}
+
 /**
- * import { X } from "./foo"
+ * import { X, Y } from "./foo"
+ * import X from "./foo"
+ *
+ * 不允许 import * 和 side-effect import
  */
-export class ImportVibe extends PassThroughVibe {
+export class ImportVibe extends Vibe {
   static rule(parentVibe: Vibe): Rule {
     return {
       name: "import",
       priority: 10,
-      match: (node) => ts.isImportDeclaration(node),
-      make: (_, node) => new ImportVibe("ImportVibe", parentVibe, node),
+      match: (node) => {
+        if (!ts.isImportDeclaration(node)) return false;
+        if (!node.importClause) return false; // side-effect import
+        if (!node.importClause.namedBindings) {
+          // import X from "./foo" (default import)
+          return true;
+        }
+        // import { X } from "./foo" (named imports)
+        return ts.isNamedImports(node.importClause.namedBindings);
+      },
+      make: (_, node) => new ImportVibe("ImportVibe", parentVibe, node, parentVibe.status),
     };
   }
 
+  resolveSubContents(): any[] {
+    return [];
+  }
+
   allowDescription(): string {
-    return "import 声明";
+    return "import { X } / import X from";
+  }
+
+  computeResults(): VibeStatus[] {
+    const decl = this.content as ts.ImportDeclaration;
+    const modulePath = (decl.moduleSpecifier as ts.StringLiteral).text;
+    const imports: ImportVarVibeStatus[] = [];
+
+    if (decl.importClause?.namedBindings) {
+      // import { X, Y } from "./foo"
+      const bindings = decl.importClause.namedBindings;
+      if (ts.isNamedImports(bindings)) {
+        for (const elem of bindings.elements) {
+          imports.push(new ImportVarVibeStatus(elem.name.text, modulePath));
+        }
+      }
+    } else if (decl.importClause?.name) {
+      // import X from "./foo"
+      imports.push(new ImportVarVibeStatus(decl.importClause.name.text, modulePath));
+    }
+
+    return imports;
   }
 }
 

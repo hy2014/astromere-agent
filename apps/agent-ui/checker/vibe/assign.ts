@@ -5,8 +5,13 @@ import { ExprVibe } from "./common/expr";
 // ─── DeclaredVarStatus ────────────────────────────────────────────────
 
 export class DeclaredVarStatus extends VibeStatus {
-  constructor(public name: string) {
-    super();
+  constructor(
+    public name: string,
+    source: string,
+    public isExported: boolean = false,
+    public kind: string = "var",
+  ) {
+    super(source);
   }
 }
 
@@ -20,10 +25,6 @@ export type AssignChild = {
 // ─── AssignVibe (abstract) ─────────────────────────────────────────────
 
 export abstract class AssignVibe extends Vibe {
-  /**
-   * 返回 [lhsNode, rhsNode]。
-   * 子类负责从自己的 content 中提取左右两边。
-   */
   abstract resolveSubContents(): any[];
 
   abstract allowDescription(): string;
@@ -32,7 +33,6 @@ export abstract class AssignVibe extends Vibe {
 
   constructor(name: string, parent: Vibe, content: any, inheritStatus: VibeStatus[] = []) {
     super(name, parent, content, inheritStatus);
-    // subVibRules 由子类在构造时设置
   }
 }
 
@@ -58,8 +58,8 @@ export class LeftDefineVibe extends Vibe {
   }
 
   computeResults(): VibeStatus[] {
-    const name = this.getVarNames();
-    return name.map((n) => new DeclaredVarStatus(n));
+    const names = this.getVarNames();
+    return names.map((n) => new DeclaredVarStatus(n, "LeftDefineVibe"));
   }
 
   checkStatus(): { rule: string; message: string; node: any } | null {
@@ -83,6 +83,7 @@ export class LeftDefineVibe extends Vibe {
 
   private getVarNames(): string[] {
     const node = this.content;
+    if (!node) return [];
     if (ts.isIdentifier(node)) return [node.text];
     if (ts.isObjectBindingPattern(node)) {
       return node.elements
@@ -109,7 +110,6 @@ export class DefineAssignVibe extends AssignVibe {
         if (!ts.isVariableStatement(node)) return false;
         const decl = node.declarationList.declarations[0];
         if (!decl || !ts.isIdentifier(decl.name)) {
-          // 解构声明也接受: const { a, b } = ...
           return decl !== undefined;
         }
         return true;
@@ -123,6 +123,44 @@ export class DefineAssignVibe extends AssignVibe {
         return vibe;
       },
     };
+  }
+
+  private _declaredResults: VibeStatus[] = [];
+
+  resolve(): { results: VibeStatus[] } | { violations: { rule: string; message: string; node: any }[] } {
+    const children = this.resolveSubContents();
+    this._declaredResults = [];
+
+    for (const child of children) {
+      if (!child) continue;
+
+      const matched = this.subVibeRules
+        .filter((r) => r.match(child))
+        .sort((a, b) => b.priority - a.priority);
+
+      const best = matched[0];
+      if (!best) {
+        return {
+          violations: [{
+            rule: "vibe 操作许可",
+            message: `${String(child).slice(0, 40)} 不在 ${this.name} 的许可操作中\n当前 ${this.name} 允许：${this.allowDescription()}`,
+            node: child,
+          }],
+        };
+      }
+
+      const sub = best.make(this, child);
+      const out = sub.resolve();
+      if ("violations" in out) return out;
+
+      this.status = this.status.concat(out.results);
+      this._declaredResults = this._declaredResults.concat(out.results);
+    }
+
+    const check = this.checkStatus();
+    if (check) return { violations: [check] };
+
+    return { results: this.computeResults() };
   }
 
   resolveSubContents(): AssignChild[] {
@@ -140,7 +178,16 @@ export class DefineAssignVibe extends AssignVibe {
   }
 
   computeResults(): VibeStatus[] {
-    return this.ownStatus().filter((s): s is DeclaredVarStatus => s instanceof DeclaredVarStatus);
+    const stmt = this.content as ts.VariableStatement;
+    const isExported = (ts.getCombinedModifierFlags(stmt) & ts.ModifierFlags.Export) !== 0;
+    return this._declaredResults
+      .filter(
+        (s): s is DeclaredVarStatus => s instanceof DeclaredVarStatus && s.source === "LeftDefineVibe",
+      )
+      .map((s) => {
+        s.isExported = isExported;
+        return s;
+      });
   }
 }
 

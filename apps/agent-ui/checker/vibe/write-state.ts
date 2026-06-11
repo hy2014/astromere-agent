@@ -7,14 +7,18 @@ export class WriteStateVibe extends Vibe {
       name: "writeState",
       priority: 80,
       match: (node) => {
-        if (!ts.isVariableStatement(node)) return false;
-        if ((node.declarationList.flags & ts.NodeFlags.Const) === 0) return false;
-        if (node.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) return false;
-        const firstDecl = node.declarationList.declarations[0];
-        if (!firstDecl || !ts.isIdentifier(firstDecl.name)) return false;
-        const init = firstDecl.initializer;
-        if (init && (ts.isFunctionExpression(init) || ts.isArrowFunction(init))) return false;
-        return firstDecl.name.text === "WriteState";
+        const decl = ts.isVariableStatement(node) &&
+          (node.declarationList.flags & ts.NodeFlags.Const) !== 0 &&
+          !(node.modifiers && node.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword))
+            ? node.declarationList.declarations[0]
+            : null;
+        const init = decl &&
+          ts.isIdentifier(decl.name) &&
+          decl.name.text === "WriteState" &&
+          decl.initializer
+            ? decl.initializer
+            : null;
+        return init !== null && ts.isObjectLiteralExpression(init) && init.properties.length === 0;
       },
       make: (_, node) => new WriteStateVibe("WriteStateVibe", parentVibe, node),
     };

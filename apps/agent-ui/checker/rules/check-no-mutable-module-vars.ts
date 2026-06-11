@@ -349,7 +349,7 @@ function collectConstLiteralNames(ctx: RuleContext): Set<string> {
  *   - 简单数组/[字面量]: [1, 2, 3]、["a"]
  *   - 简单对象/{字面量}: { a: 1 }
  */
-function isConstantLiteral(node: ts.Node | undefined): boolean {
+export function isConstantLiteral(node: ts.Node | undefined): boolean {
     if (!node) return false;
 
     // 基本字面量

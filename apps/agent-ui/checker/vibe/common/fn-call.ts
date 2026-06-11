@@ -9,7 +9,7 @@ export class CallFuncVibeStatus extends VibeStatus {
     public callee: string,
     public args: string[],
   ) {
-    super();
+    super("FunctionCallVibe");
   }
 }
 

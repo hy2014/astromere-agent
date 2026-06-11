@@ -9,14 +9,17 @@ export class ParamVarStatus extends DeclaredVarStatus {
     name: string,
     public type?: string,
     public defaultValue?: string,
+    kind: string = "var",
   ) {
-    super(name);
+    super(name, "ParamVibe", false, kind);
   }
 }
 
 // ─── FnArgsVibe ────────────────────────────────────────────────────────
 
 export class FnArgsVibe extends Vibe {
+  private _declaredResults: VibeStatus[] = [];
+
   static rule(parentVibe: Vibe): Rule {
     return {
       name: "fnArgs",
@@ -34,6 +37,42 @@ export class FnArgsVibe extends Vibe {
     };
   }
 
+  resolve(): { results: VibeStatus[] } | { violations: { rule: string; message: string; node: any }[] } {
+    const children = this.resolveSubContents();
+    this._declaredResults = [];
+
+    for (const child of children) {
+      if (!child) continue;
+
+      const matched = this.subVibeRules
+        .filter((r) => r.match(child))
+        .sort((a, b) => b.priority - a.priority);
+
+      const best = matched[0];
+      if (!best) {
+        return {
+          violations: [{
+            rule: "vibe 操作许可",
+            message: `${String(child).slice(0, 40)} 不在 ${this.name} 的许可操作中\n当前 ${this.name} 允许：${this.allowDescription()}`,
+            node: child,
+          }],
+        };
+      }
+
+      const sub = best.make(this, child);
+      const out = sub.resolve();
+      if ("violations" in out) return out;
+
+      this.status = this.status.concat(out.results);
+      this._declaredResults = this._declaredResults.concat(out.results);
+    }
+
+    const check = this.checkStatus();
+    if (check) return { violations: [check] };
+
+    return { results: this.computeResults() };
+  }
+
   resolveSubContents(): any[] {
     const fn = this.content as ts.FunctionDeclaration | ts.ArrowFunction;
     return fn.parameters;
@@ -44,7 +83,7 @@ export class FnArgsVibe extends Vibe {
   }
 
   computeResults(): VibeStatus[] {
-    return this.status.filter(
+    return this._declaredResults.filter(
       (s): s is ParamVarStatus => s instanceof ParamVarStatus,
     );
   }
