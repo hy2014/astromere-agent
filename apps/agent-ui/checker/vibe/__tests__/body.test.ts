@@ -48,7 +48,9 @@ test("BodyVibe: resolve const x = 5 → DeclaredVarStatus", () => {
   const vibe = rule.make(DUMMY_PARENT, block);
   const r = vibe.resolve();
   if ("violations" in r) throw new Error(`violation: ${r.violations[0].message}`);
-  const status = r.results.filter((s): s is DeclaredVarStatus => s instanceof DeclaredVarStatus);
+  if (r.results.length !== 0) throw new Error(`expected empty results, got ${r.results.length}`);
+  // DeclaredVarStatus is in vibe.status (lookup), not in results
+  const status = vibe.status.filter((s): s is DeclaredVarStatus => s instanceof DeclaredVarStatus);
   if (status.length !== 1 || status[0].name !== "x") throw new Error(`bad status`);
 });
 
@@ -58,7 +60,8 @@ test("BodyVibe: resolve multiple statements", () => {
   const vibe = rule.make(DUMMY_PARENT, block);
   const r = vibe.resolve();
   if ("violations" in r) throw new Error(`violation: ${r.violations[0].message}`);
-  const names = r.results
+  if (r.results.length !== 0) throw new Error(`expected empty results`);
+  const names = vibe.status
     .filter((s): s is DeclaredVarStatus => s instanceof DeclaredVarStatus)
     .map(s => s.name);
   if (JSON.stringify(names.sort()) !== JSON.stringify(["x", "y"])) throw new Error(`bad names: ${names}`);

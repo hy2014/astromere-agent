@@ -29,12 +29,12 @@ function test(
 
 // ====== should match ======
 test("const WriteState = {}", `const WriteState = {};`, true);
-test("const WriteState = {} as any", `const WriteState = {} as any;`, true);
-test("const WriteState: Typed = {} as any", `const WriteState: { setRows: () => void } = {} as any;`, true);
-test("const WriteState = {}", `const WriteState = { setRows: (v) => v };`, true);
-test("const WriteState: SomeType = val", `const WriteState: SomeType = val;`, true);
 
 // ====== should NOT match ======
+test("const WriteState = {} as any", `const WriteState = {} as any;`, false);
+test("const WriteState: Typed = {} as any", `const WriteState: { setRows: () => void } = {} as any;`, false);
+test("const WriteState = {x:1}", `const WriteState = { setRows: (v) => v };`, false);
+test("const WriteState: SomeType = val", `const WriteState: SomeType = val;`, false);
 test("export const WriteState = {}", `export const WriteState = {};`, false);
 test("let WriteState = {}", `let WriteState = {};`, false);
 test("var WriteState = {}", `var WriteState = {};`, false);
