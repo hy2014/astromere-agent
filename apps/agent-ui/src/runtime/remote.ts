@@ -102,6 +102,20 @@ export async function testRemoteHealth(profile: RemoteProfile): Promise<RemoteHe
   }
 }
 
+export async function sendClientExit(profile: RemoteProfile): Promise<void> {
+  const baseUrl = normalizeBaseUrl(profile.baseUrl);
+
+  await fetch(`${baseUrl}/client/exit`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...(profile.token ? { Authorization: `Bearer ${profile.token}` } : {}),
+    },
+    body: JSON.stringify({ reason: "client-switch" }),
+  });
+}
+
 export function createRemoteRuntime(profile: RemoteProfile): AgentRuntime {
   const runtime: Partial<AgentRuntime> = {};
 

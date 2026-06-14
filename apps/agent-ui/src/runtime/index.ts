@@ -1,5 +1,5 @@
 import * as localRuntime from "./local";
-import { createRemoteRuntime, testRemoteHealth as testRemoteHealthImpl, type RemoteProfile } from "./remote";
+import { createRemoteRuntime, testRemoteHealth as testRemoteHealthImpl, sendClientExit, type RemoteProfile } from "./remote";
 import { getActiveRemoteProfileId as getActiveRemoteProfileIdImpl, loadRemoteProfiles as loadRemoteProfilesImpl } from "./profiles";
 
 export type { AgentReplCapabilityItem, AgentReplCapabilities } from "../tauri";
@@ -26,6 +26,17 @@ function resolveInitialRuntime(): AgentRuntime {
 }
 
 let currentRuntime: AgentRuntime = resolveInitialRuntime();
+let currentRemoteProfileId: string | null = (() => {
+  try {
+    if (typeof window === "undefined") return null;
+    const activeId = getActiveRemoteProfileIdImpl();
+    if (!activeId) return null;
+    const profile = loadRemoteProfilesImpl().find((item) => item.id === activeId);
+    return profile ? profile.id : null;
+  } catch {
+    return null;
+  }
+})();
 
 export function getCurrentRuntime(): AgentRuntime {
   return currentRuntime;
@@ -37,11 +48,25 @@ export function setCurrentRuntimeForDev(runtime: AgentRuntime): void {
 }
 
 export function useLocalRuntime(): void {
+  if (currentRemoteProfileId) {
+    const profile = loadRemoteProfilesImpl().find((item) => item.id === currentRemoteProfileId);
+    if (profile) {
+      sendClientExit(profile).catch(() => {});
+    }
+    currentRemoteProfileId = null;
+  }
   currentRuntime = localRuntime;
 }
 
 export function useRemoteRuntime(profile: RemoteProfile): void {
+  if (currentRemoteProfileId && currentRemoteProfileId !== profile.id) {
+    const oldProfile = loadRemoteProfilesImpl().find((item) => item.id === currentRemoteProfileId);
+    if (oldProfile) {
+      sendClientExit(oldProfile).catch(() => {});
+    }
+  }
   currentRuntime = createRemoteRuntime(profile);
+  currentRemoteProfileId = profile.id;
 }
 
 export function testRemoteHealth(profile: RemoteProfile) {
