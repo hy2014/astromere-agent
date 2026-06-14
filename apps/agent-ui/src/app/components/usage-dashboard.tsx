@@ -1,6 +1,6 @@
 /* @checkFns session-usage-dashboard */
 import {useEffect, useMemo, useState} from "react";
-import type {BundleUsageSnapshot} from "../../tauri";
+import type {BundleUsageSnapshot} from "../../runtime";
 import type {SessionUsageIndicatorKey} from "../types";
 import {
   bundleUsageIndicatorValue,

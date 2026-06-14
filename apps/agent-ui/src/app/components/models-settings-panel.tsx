@@ -1,7 +1,7 @@
 /* @checkFns models-settings-content */
 import {useEffect, useState} from "react";
 import type {ModelEndpointConfig, ModelSettings} from "../../types";
-import {loadDeepseekPricing} from "../../tauri";
+import {loadDeepseekPricing} from "../../runtime";
 import {loadModelSettings, saveModelSettings, testModelConnection} from "../../runtime";
 import {render} from "../../core/dep";
 

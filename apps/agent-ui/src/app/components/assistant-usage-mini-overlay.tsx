@@ -1,5 +1,5 @@
 /* @checkFns assistant-usage-mini-backdrop */
-import type {ModelCallUsage} from "../../tauri";
+import type {ModelCallUsage} from "../../runtime";
 import type {AggregatedUsage} from "../usage-cost";
 import {usageFormatValue, usageShortId} from "../usage-cost";
 import {render} from "../../core/dep";

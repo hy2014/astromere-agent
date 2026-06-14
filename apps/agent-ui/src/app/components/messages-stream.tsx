@@ -1,13 +1,13 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import type {StreamItem, StreamLink} from "../../types";
-import type {BundleUsageSnapshot, BundleUsageTotals, ModelCallUsage, ModelCallUsageSnapshot} from "../../tauri";
+import type {BundleUsageSnapshot, BundleUsageTotals, ModelCallUsage, ModelCallUsageSnapshot} from "../../runtime";
 import {UserMessageCard} from "./UserMessageCard";
 import {AssistantMessageCard} from "./AssistantMessageCard";
 import {MarkdownTablePreview} from "./preview-components";
 import {SessionUsageDashboardView} from "./usage-dashboard";
 import {addCallback} from "../../hooks/stream-event-bus";
 import {bundleUsageStorageKey} from "../usage-cost";
-import {loadModelCallUsages} from "../../tauri";
+import {loadModelCallUsages} from "../../runtime";
 import {loadTypedRuntimeSession,} from "../../runtime";
 import {runtimeSessionToArtifacts,} from "../debug-utils";
 import {welcomeStream} from "../session";

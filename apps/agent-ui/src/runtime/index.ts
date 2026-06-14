@@ -3,6 +3,7 @@ import { createRemoteRuntime, testRemoteHealth as testRemoteHealthImpl, type Rem
 import { getActiveRemoteProfileId as getActiveRemoteProfileIdImpl, loadRemoteProfiles as loadRemoteProfilesImpl } from "./profiles";
 
 export type { AgentReplCapabilityItem, AgentReplCapabilities } from "../tauri";
+export type { BundleUsageTotals, ModelCallUsageSnapshot, BundleUsageCost, BundleUsageSnapshot, ModelCallUsage } from "../tauri";
 
 export type AgentRuntime = typeof localRuntime;
 
@@ -93,6 +94,12 @@ export const runAgentTurn: AgentRuntime["runAgentTurn"] = ((...args: Parameters<
 export const saveBundleUsageSnapshot: AgentRuntime["saveBundleUsageSnapshot"] = ((...args: Parameters<AgentRuntime["saveBundleUsageSnapshot"]>) => getCurrentRuntime().saveBundleUsageSnapshot(...args)) as AgentRuntime["saveBundleUsageSnapshot"];
 export const loadBundleUsageSnapshot: AgentRuntime["loadBundleUsageSnapshot"] = ((...args: Parameters<AgentRuntime["loadBundleUsageSnapshot"]>) => getCurrentRuntime().loadBundleUsageSnapshot(...args)) as AgentRuntime["loadBundleUsageSnapshot"];
 export const loadBundleUsageSnapshotsForSession: AgentRuntime["loadBundleUsageSnapshotsForSession"] = ((...args: Parameters<AgentRuntime["loadBundleUsageSnapshotsForSession"]>) => getCurrentRuntime().loadBundleUsageSnapshotsForSession(...args)) as AgentRuntime["loadBundleUsageSnapshotsForSession"];
+export const loadDeepseekPricing: AgentRuntime["loadDeepseekPricing"] = ((...args: Parameters<AgentRuntime["loadDeepseekPricing"]>) => getCurrentRuntime().loadDeepseekPricing(...args)) as AgentRuntime["loadDeepseekPricing"];
+export const sqliteDatabaseInfo: AgentRuntime["sqliteDatabaseInfo"] = ((...args: Parameters<AgentRuntime["sqliteDatabaseInfo"]>) => getCurrentRuntime().sqliteDatabaseInfo(...args)) as AgentRuntime["sqliteDatabaseInfo"];
+export const saveModelCallUsage: AgentRuntime["saveModelCallUsage"] = ((...args: Parameters<AgentRuntime["saveModelCallUsage"]>) => getCurrentRuntime().saveModelCallUsage(...args)) as AgentRuntime["saveModelCallUsage"];
+export const loadModelCallUsage: AgentRuntime["loadModelCallUsage"] = ((...args: Parameters<AgentRuntime["loadModelCallUsage"]>) => getCurrentRuntime().loadModelCallUsage(...args)) as AgentRuntime["loadModelCallUsage"];
+export const loadModelCallUsagesForSession: AgentRuntime["loadModelCallUsagesForSession"] = ((...args: Parameters<AgentRuntime["loadModelCallUsagesForSession"]>) => getCurrentRuntime().loadModelCallUsagesForSession(...args)) as AgentRuntime["loadModelCallUsagesForSession"];
+export const loadModelCallUsages: AgentRuntime["loadModelCallUsages"] = ((...args: Parameters<AgentRuntime["loadModelCallUsages"]>) => getCurrentRuntime().loadModelCallUsages(...args)) as AgentRuntime["loadModelCallUsages"];
 
 export {
   loadRemoteProfiles,

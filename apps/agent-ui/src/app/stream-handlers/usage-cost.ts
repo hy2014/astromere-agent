@@ -1,6 +1,6 @@
 import type {AgentReplStreamEvent} from "../../types";
-import type {ModelCallUsage} from "../../tauri";
-import {saveModelCallUsage} from "../../tauri";
+import type {ModelCallUsage} from "../../runtime";
+import {saveModelCallUsage} from "../../runtime";
 import {loadModelSettings} from "../../runtime";
 import {calculateBundleUsageCostFromDeepSeekPricing} from "../usage-cost";
 
