@@ -5,7 +5,7 @@ import {aggregateModelCallUsages} from "../usage-cost";
 import {AssistantUsageMiniOverlayView} from "./assistant-usage-mini-overlay";
 import {RichMarkdownMessage} from "./preview-components";
 import {MessageImagePreviews} from "./image-reference-view";
-import {loadModelCallUsages} from "../../tauri";
+import {loadModelCallUsages} from "../../runtime";
 import {loadTypedRuntimeSession} from "../../runtime";
 import {runtimeSessionToArtifacts} from "../debug-utils";
 

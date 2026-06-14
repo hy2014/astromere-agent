@@ -348,5 +348,29 @@ export function createRemoteRuntime(profile: RemoteProfile): AgentRuntime {
   runtime.loadBundleUsageSnapshotsForSession = async (sessionId: string) =>
     remoteJson(profile, `/usage/bundle/${encodeURIComponent(sessionId)}`);
 
+  runtime.loadDeepseekPricing = async () =>
+    remoteJson(profile, "/models/deepseek-pricing");
+
+  runtime.sqliteDatabaseInfo = async () =>
+    remoteJson(profile, "/system/sqlite-info");
+
+  runtime.saveModelCallUsage = async (usage: any) =>
+    remoteJson(profile, "/usage/model-call", {
+      method: "POST",
+      body: JSON.stringify(usage),
+    });
+
+  runtime.loadModelCallUsage = async (modelCallId: string, sessionId: string) =>
+    remoteJson(profile, `/usage/model-call/${encodeURIComponent(modelCallId)}/${encodeURIComponent(sessionId)}`);
+
+  runtime.loadModelCallUsagesForSession = async (sessionId: string) =>
+    remoteJson(profile, `/usage/model-call/${encodeURIComponent(sessionId)}`);
+
+  runtime.loadModelCallUsages = async (modelCallIds: string[], sessionId: string) =>
+    remoteJson(profile, "/usage/model-call/batch", {
+      method: "POST",
+      body: JSON.stringify({ modelCallIds, sessionId }),
+    });
+
   return runtime as AgentRuntime;
 }

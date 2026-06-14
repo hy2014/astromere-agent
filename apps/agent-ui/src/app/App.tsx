@@ -54,7 +54,7 @@ import {
 } from "./file-utils";
 import {runtimeSessionToArtifacts,} from "./debug-utils";
 import type {AgentPermissionState, AgentReplStreamEvent, PermissionMode, StreamItem, StreamLink,} from "../types";
-import {sqliteDatabaseInfo,} from "../tauri";
+import {sqliteDatabaseInfo,} from "../runtime";
 import type {
     AppView,
     HiddenSession,
