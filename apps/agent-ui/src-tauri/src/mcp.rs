@@ -50,12 +50,12 @@ pub fn astromere_mcp_config_path() -> Result<PathBuf, String> {
     mcp_core::mcp_config_path()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_mcp_settings() -> Result<McpSettingsFile, String> {
     mcp_core::load_mcp_settings()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn save_mcp_settings(settings: McpSettings) -> Result<McpSettingsFile, String> {
     mcp_core::save_mcp_settings(settings)
 }

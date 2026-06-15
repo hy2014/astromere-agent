@@ -1,15 +1,33 @@
 mod sqlite;
 mod terminal;
 
-use claw_agent_ui::control;
-use claw_agent_ui::mcp;
-use claw_agent_ui::models;
-use claw_agent_ui::permissions;
-use claw_agent_ui::repl;
-use claw_agent_ui::runtime;
 use claw_agent_ui::server;
+
+#[cfg(feature = "gui")]
+use claw_agent_ui::control;
+
+#[cfg(feature = "gui")]
+use claw_agent_ui::mcp;
+
+#[cfg(feature = "gui")]
+use claw_agent_ui::models;
+
+#[cfg(feature = "gui")]
+use claw_agent_ui::permissions;
+
+#[cfg(feature = "gui")]
+use claw_agent_ui::repl;
+
+#[cfg(feature = "gui")]
+use claw_agent_ui::runtime;
+
+#[cfg(feature = "gui")]
 use claw_agent_ui::skills;
+
+#[cfg(feature = "gui")]
 use claw_agent_ui::workspace;
+
+#[cfg(feature = "gui")]
 use sqlite::{
     sqlite_database_info, sqlite_execute, sqlite_query,
     load_bundle_usage_snapshot,
@@ -20,19 +38,34 @@ use sqlite::{
     load_model_call_usages,
     load_model_call_usages_for_session,
 };
+
+#[cfg(feature = "gui")]
 use terminal::{terminal_kill, terminal_list, terminal_resize, terminal_spawn, terminal_write};
 
 fn main() {
-    // --remote mode: headless HTTP server, no Tauri GUI/webview required
-    if std::env::args().any(|a| a == "--remote") {
-        eprintln!("[agent-ui] remote mode — HTTP server only");
+    let is_remote = std::env::args().any(|a| a == "--remote");
+
+    #[cfg(not(feature = "gui"))]
+    {
+        // No Tauri — always headless
+        eprintln!("[agent-ui] headless mode — HTTP server only");
         let rt = tokio::runtime::Runtime::new()
             .expect("HTTP server: failed to create tokio runtime");
         rt.block_on(server::run_server(None));
         return;
     }
 
-    tauri::Builder::default()
+    #[cfg(feature = "gui")]
+    {
+        if is_remote {
+            eprintln!("[agent-ui] remote mode — HTTP server only");
+            let rt = tokio::runtime::Runtime::new()
+                .expect("HTTP server: failed to create tokio runtime");
+            rt.block_on(server::run_server(None));
+            return;
+        }
+
+        tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             terminal::set_app_handle(app.handle().clone());
@@ -109,4 +142,5 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Claw Agent UI");
+    } // #[cfg(feature = "gui")]
 }

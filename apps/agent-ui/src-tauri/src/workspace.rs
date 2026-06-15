@@ -370,7 +370,7 @@ fn collect_workspace_file_references(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn search_workspace_files(
     root: String,
     query: String,
@@ -424,7 +424,7 @@ pub fn search_workspace_files(
     Ok(references)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn read_workspace_file(root: String, path: String) -> Result<FileView, String> {
     let root_path = canonical_workspace_root(&root)?;
     let resolved = resolve_workspace_path(&root_path, &path)?;
@@ -440,7 +440,7 @@ pub fn read_workspace_file(root: String, path: String) -> Result<FileView, Strin
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn read_local_reference_file(root: String, path: String) -> Result<FileView, String> {
     let root_path = canonical_workspace_root(&root)?;
     let (resolved, display_path) = resolve_local_reference_file_path(&root_path, &path)?;
@@ -456,7 +456,7 @@ pub fn read_local_reference_file(root: String, path: String) -> Result<FileView,
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn read_local_image_metadata(root: String, path: String) -> Result<LocalImageMetadata, String> {
     let root_path = canonical_workspace_root(&root)?;
     let resolved = crate::utils::resolve_local_reference_path(&root_path, &path)?;
@@ -479,7 +479,7 @@ pub fn read_local_image_metadata(root: String, path: String) -> Result<LocalImag
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn read_local_image_preview(root: String, path: String) -> Result<LocalImagePreview, String> {
     let root_path = canonical_workspace_root(&root)?;
     let resolved = crate::utils::resolve_local_reference_path(&root_path, &path)?;
@@ -520,7 +520,7 @@ pub fn read_local_image_preview(root: String, path: String) -> Result<LocalImage
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn write_workspace_file(root: String, path: String, content: String) -> Result<(), String> {
     let root_path = canonical_workspace_root(&root)?;
     let resolved = resolve_workspace_path_allow_missing(&root_path, &path)?;
@@ -530,7 +530,7 @@ pub fn write_workspace_file(root: String, path: String, content: String) -> Resu
     fs::write(resolved, content).map_err(error_to_string)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn edit_workspace_file(
     root: String,
     path: String,
@@ -556,7 +556,7 @@ pub fn edit_workspace_file(
     Ok(serde_json::json!({ "ok": true, "path": path }))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn read_git_diff(root: String, path: Option<String>) -> Result<GitDiff, String> {
     let root_path = canonical_workspace_root(&root)?;
     let mut cmd = std::process::Command::new("git");
@@ -594,23 +594,23 @@ fn workspace_state_from_path(path: &Path) -> Result<WorkspaceState, String> {
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn default_workspace() -> Result<WorkspaceState, String> {
     let cwd = std::env::current_dir().map_err(error_to_string)?;
     workspace_state_from_path(&cwd)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn open_workspace(path: String) -> Result<WorkspaceState, String> {
     workspace_state_from_path(Path::new(&path))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_workspace_registry() -> Result<WorkspaceRegistry, String> {
     read_workspace_registry()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn add_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, String> {
     let ws = workspace_state_from_path(Path::new(&path))?;
     let mut registry = read_workspace_registry().unwrap_or_default();
@@ -624,7 +624,7 @@ pub fn add_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, S
     Ok(registry)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn remove_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry, String> {
     let mut registry = read_workspace_registry().unwrap_or_default();
     registry.workspaces.retain(|w| w.root != path);
@@ -632,7 +632,7 @@ pub fn remove_workspace_registry_entry(path: String) -> Result<WorkspaceRegistry
     Ok(registry)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn list_project_entries(root: String) -> Result<Vec<ProjectEntry>, String> {
     let root_path = canonical_workspace_root(&root)?;
     let mut entries = Vec::new();

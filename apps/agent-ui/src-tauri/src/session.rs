@@ -5,7 +5,9 @@
 //   - control.rs — Process communication protocol (interrupt/send/capabilities/run-turn)
 //
 // This file re-exports tauri commands so main.rs doesn't need to change.
+// Gated behind gui feature since commands only exist in gui mode.
 
+#[cfg(feature = "gui")]
 pub use crate::repl::{
     get_agent_repl_process_status,
     kill_agent_repl_process,
@@ -13,6 +15,7 @@ pub use crate::repl::{
     fork_agent_repl_process,
 };
 
+#[cfg(feature = "gui")]
 pub use crate::control::{
     interrupt_agent_turn,
     send_agent_repl_input,

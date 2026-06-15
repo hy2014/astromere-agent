@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
+#[cfg(feature = "gui")]
 use tauri::Emitter;
 
 use crate::types::{
@@ -251,7 +252,7 @@ fn fork_debug(message: impl AsRef<str>) {
 
 /// Emit to both Tauri event system and SSE broadcast.
 /// When `app` is None (remote mode), only SSE is broadcast.
-pub(crate) fn emit_event(app: Option<&tauri::AppHandle>, event_name: &str, event: serde_json::Value) {
+pub(crate) fn emit_event(app: Option<&crate::AppHandle>, event_name: &str, event: serde_json::Value) {
     if let Some(a) = app {
         let _ = a.emit(event_name, &event);
     }
@@ -261,7 +262,7 @@ pub(crate) fn emit_event(app: Option<&tauri::AppHandle>, event_name: &str, event
 }
 
 pub(crate) fn emit_process_status(
-    app: Option<&tauri::AppHandle>,
+    app: Option<&crate::AppHandle>,
     root: &str,
     session_id: &str,
     running: bool,
@@ -396,7 +397,7 @@ fn value_summary_for_log(value: &Value) -> String {
 }
 
 pub(crate) fn spawn_repl_stdout_reader(
-    app: Option<tauri::AppHandle>,
+    app: Option<crate::AppHandle>,
     shared_session: Arc<Mutex<String>>,
     root: String,
     stdout: std::process::ChildStdout,
@@ -814,7 +815,7 @@ pub(crate) fn spawn_repl_stdout_reader(
 // ── stderr reader thread (mirrors stable) ──
 
 fn spawn_repl_stderr_reader(
-    app: Option<tauri::AppHandle>,
+    app: Option<crate::AppHandle>,
     shared_session: Arc<Mutex<String>>,
     root: String,
     stderr: std::process::ChildStderr,
@@ -849,7 +850,7 @@ fn spawn_repl_stderr_reader(
 
 // ── Tauri commands ──
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn get_agent_repl_process_status(
     root: String,
     session_id: String,
@@ -886,7 +887,7 @@ pub fn get_agent_repl_process_status(
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn kill_agent_repl_process(
     root: String,
     session_id: String,
@@ -915,9 +916,9 @@ pub fn kill_agent_repl_process(
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn ensure_agent_repl_process(
-    app: tauri::AppHandle,
+    app: crate::AppHandle,
     root: String,
     session_id: String,
     model_override: Option<String>,
@@ -927,7 +928,7 @@ pub fn ensure_agent_repl_process(
 }
 
 pub fn ensure_agent_repl_process_inner(
-    app: Option<tauri::AppHandle>,
+    app: Option<crate::AppHandle>,
     root: String,
     session_id: String,
     model_override: Option<String>,
@@ -1110,9 +1111,9 @@ pub fn ensure_agent_repl_process_inner(
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn fork_agent_repl_process(
-    app: tauri::AppHandle,
+    app: crate::AppHandle,
     root: String,
     source_session_id: String,
     checkpoint_uuid: String,
@@ -1123,7 +1124,7 @@ pub fn fork_agent_repl_process(
 }
 
 pub fn fork_agent_repl_process_inner(
-    app: Option<tauri::AppHandle>,
+    app: Option<crate::AppHandle>,
     root: String,
     source_session_id: String,
     checkpoint_uuid: String,

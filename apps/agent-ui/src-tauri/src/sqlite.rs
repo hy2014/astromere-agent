@@ -114,7 +114,7 @@ fn normalized_sql_prefix(sql: &str) -> String {
         .to_ascii_lowercase()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn sqlite_database_info() -> Result<SqliteDatabaseInfo, String> {
     let (_conn, path) = open_sqlite_database()?;
     Ok(SqliteDatabaseInfo {
@@ -122,7 +122,7 @@ pub fn sqlite_database_info() -> Result<SqliteDatabaseInfo, String> {
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn sqlite_execute(
     sql: String,
     params: Option<Vec<Value>>,
@@ -148,7 +148,7 @@ pub fn sqlite_execute(
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn sqlite_query(
     sql: String,
     params: Option<Vec<Value>>,
@@ -268,7 +268,7 @@ fn ensure_bundle_usage_snapshots_table(conn: &Connection) -> Result<(), String> 
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn save_bundle_usage_snapshot(snapshot: BundleUsageSnapshot) -> Result<(), String> {
     let (conn, _path) = open_sqlite_database()?;
     ensure_bundle_usage_snapshots_table(&conn)?;
@@ -356,7 +356,7 @@ pub fn save_bundle_usage_snapshot(snapshot: BundleUsageSnapshot) -> Result<(), S
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_bundle_usage_snapshot(
     session_id: String,
     bundle_id: String,
@@ -380,7 +380,7 @@ pub fn load_bundle_usage_snapshot(
     serde_json::from_str(&snapshot_json).map_err(error_to_string)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_bundle_usage_snapshots_for_session(
     session_id: String,
 ) -> Result<Vec<BundleUsageSnapshot>, String> {
@@ -482,7 +482,7 @@ fn ensure_model_call_usage_table(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn save_model_call_usage(usage: ModelCallUsage) -> Result<(), String> {
     let (conn, _path) = open_sqlite_database()?;
     ensure_model_call_usage_table(&conn)?;
@@ -556,7 +556,7 @@ pub fn save_model_call_usage(usage: ModelCallUsage) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_model_call_usage(
     model_call_id: String,
     session_id: String,
@@ -599,7 +599,7 @@ pub fn load_model_call_usage(
     .map_err(error_to_string)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_model_call_usages_for_session(
     session_id: String,
 ) -> Result<Vec<ModelCallUsage>, String> {
@@ -656,7 +656,7 @@ pub fn load_model_call_usages_for_session(
     Ok(usages)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_model_call_usages(
     model_call_ids: Vec<String>,
     session_id: String,

@@ -369,9 +369,9 @@ fn find_string_field_deep(value: &Value, keys: &[&str]) -> Option<String> {
 
 // ── Tauri commands (control protocol) ──
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn interrupt_agent_turn(
-    app: tauri::AppHandle,
+    app: crate::AppHandle,
     root: String,
     session_id: String,
 ) -> Result<bool, String> {
@@ -379,7 +379,7 @@ pub fn interrupt_agent_turn(
 }
 
 pub fn interrupt_agent_turn_inner(
-    app: Option<tauri::AppHandle>,
+    app: Option<crate::AppHandle>,
     root: String,
     session_id: String,
 ) -> Result<bool, String> {
@@ -440,7 +440,7 @@ pub fn interrupt_agent_turn_inner(
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn send_agent_repl_input(
     root: String,
     session_id: String,
@@ -470,7 +470,7 @@ pub fn send_agent_repl_input(
     Ok(AgentReplSendResult { accepted: true })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn get_agent_repl_capabilities(
     root: String,
     session_id: String,
@@ -508,7 +508,7 @@ pub fn get_agent_repl_capabilities(
     capabilities_from_control_response(&root, &session_id, &response)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn get_agent_context_usage(
     root: String,
     session_id: String,
@@ -546,7 +546,7 @@ pub fn get_agent_context_usage(
     context_usage_from_control_response(&root, &session_id, &response)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn run_agent_turn(
     root: String,
     session_id: String,

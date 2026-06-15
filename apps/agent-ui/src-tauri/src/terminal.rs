@@ -4,6 +4,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::thread;
+#[cfg(feature = "gui")]
 use tauri::Emitter;
 
 #[derive(Debug)]
@@ -13,22 +14,22 @@ struct TerminalProcess {
 }
 
 static TERMINALS: OnceLock<Mutex<HashMap<String, TerminalProcess>>> = OnceLock::new();
-static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+static APP_HANDLE: OnceLock<claw_agent_ui::AppHandle> = OnceLock::new();
 
 fn terminals() -> &'static Mutex<HashMap<String, TerminalProcess>> {
     TERMINALS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn app_handle() -> &'static tauri::AppHandle {
+fn app_handle() -> &'static claw_agent_ui::AppHandle {
     APP_HANDLE.get().expect("AppHandle not initialized")
 }
 
-pub fn set_app_handle(handle: tauri::AppHandle) {
+pub fn set_app_handle(handle: claw_agent_ui::AppHandle) {
     let _ = APP_HANDLE.set(handle);
     println!("[terminal] AppHandle initialized");
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn terminal_spawn(id: String) -> Result<(), String> {
     println!("[terminal] terminal_spawn called with id={}", id);
     let mut terms = terminals().lock().map_err(|e| e.to_string())?;
@@ -102,7 +103,7 @@ pub fn terminal_spawn(id: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn terminal_write(id: String, data: String) -> Result<(), String> {
     println!("[terminal] write to {}: {:?}", id, data);
     let mut terms = terminals().lock().map_err(|e| e.to_string())?;
@@ -116,7 +117,7 @@ pub fn terminal_write(id: String, data: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn terminal_kill(id: String) -> Result<(), String> {
     println!("[terminal] kill {}", id);
     let mut terms = terminals().lock().map_err(|e| e.to_string())?;
@@ -127,12 +128,12 @@ pub fn terminal_kill(id: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn terminal_resize(_id: String, _cols: u16, _rows: u16) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn terminal_list() -> Result<Vec<String>, String> {
     let terms = terminals().lock().map_err(|e| e.to_string())?;
     Ok(terms.keys().cloned().collect())
