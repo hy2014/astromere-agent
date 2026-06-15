@@ -267,7 +267,10 @@ export function MessagesStreamView({
       activeProject.name,
       sessionTitle,
       (items) => setSessionStreamItems(items),
-      (err) => console.error("[messages-stream] load history failed:", err),
+      (_err) => {
+        // pending session / 无 JSONL 文件时回退到欢迎页
+        setSessionStreamItems(welcomeStream(activeProject.name, sessionTitle));
+      },
     );
   }, [activeSessionId, activeProject?.root]);
 
