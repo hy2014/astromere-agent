@@ -375,6 +375,14 @@ pub fn interrupt_agent_turn(
     root: String,
     session_id: String,
 ) -> Result<bool, String> {
+    interrupt_agent_turn_inner(Some(app), root, session_id)
+}
+
+pub fn interrupt_agent_turn_inner(
+    app: Option<tauri::AppHandle>,
+    root: String,
+    session_id: String,
+) -> Result<bool, String> {
     let request_id = format!("agent-ui-interrupt-{}", crate::utils::now_millis());
     let request = json!({
         "type": "control_request",
@@ -402,7 +410,7 @@ pub fn interrupt_agent_turn(
             use std::io::Write;
             writeln!(proc_state.stdin, "{line}").map_err(error_to_string)?;
             proc_state.stdin.flush().map_err(error_to_string)?;
-            crate::repl::emit_event(&app, "agent-repl-event",
+            crate::repl::emit_event(app.as_ref(), "agent-repl-event",
                 json!({
                     "sessionId": session_id,
                     "root": root,
@@ -416,7 +424,7 @@ pub fn interrupt_agent_turn(
             Ok(true)
         }
         None => {
-            crate::repl::emit_event(&app, "agent-repl-event",
+            crate::repl::emit_event(app.as_ref(), "agent-repl-event",
                 json!({
                     "sessionId": session_id,
                     "root": root,

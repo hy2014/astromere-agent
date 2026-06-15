@@ -86,6 +86,10 @@ fn http_enabled() -> bool {
         .unwrap_or(true)
 }
 
+fn http_host() -> String {
+    std::env::var("AGENT_UI_HTTP_HOST").unwrap_or_else(|_| "127.0.0.1".into())
+}
+
 // ─── Global SSE broadcast ─────────────────────────────────────────────
 
 static SSE_BROADCAST: OnceLock<broadcast::Sender<String>> = OnceLock::new();
@@ -106,11 +110,12 @@ pub fn broadcast_sse_event(event_json: String) {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub app_handle: AppHandle,
+    /// Tauri AppHandle for emitting IPC events (None in --remote mode)
+    pub app_handle: Option<AppHandle>,
 }
 
 impl AppState {
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn new(app_handle: Option<AppHandle>) -> Self {
         Self { app_handle }
     }
 }
@@ -278,7 +283,7 @@ async fn ensure_handler(
     State(state): State<AppState>,
     Json(req): Json<EnsureRequest>,
 ) -> Result<Json<AgentReplProcessState>, AppError> {
-    repl::ensure_agent_repl_process(
+    repl::ensure_agent_repl_process_inner(
         state.app_handle,
         req.root,
         req.session_id,
@@ -325,7 +330,7 @@ async fn interrupt_handler(
     State(state): State<AppState>,
     Json(req): Json<InterruptRequest>,
 ) -> Result<Json<bool>, AppError> {
-    control::interrupt_agent_turn(state.app_handle, req.root, req.session_id).map(Json).map_err(AppError::new)
+    control::interrupt_agent_turn_inner(state.app_handle, req.root, req.session_id).map(Json).map_err(AppError::new)
 }
 
 #[derive(Deserialize)]
@@ -358,7 +363,7 @@ async fn fork_handler(
     State(state): State<AppState>,
     Json(req): Json<ForkRequest>,
 ) -> Result<Json<AgentReplProcessState>, AppError> {
-    repl::fork_agent_repl_process(
+    repl::fork_agent_repl_process_inner(
         state.app_handle,
         req.root,
         req.source_session_id,
@@ -946,15 +951,17 @@ pub fn stateless_test_router() -> Router {
     //        not included in stateless test router.
 }
 
-/// 启动 HTTP server（在独立 tokio runtime 上运行）
-pub async fn run_server(app_handle: AppHandle) {
+/// 启动 HTTP server（在独立 tokio runtime 上运行）。
+/// `app_handle` is None in --remote mode.
+pub async fn run_server(app_handle: Option<AppHandle>) {
     if !http_enabled() {
         eprintln!("[http] disabled (AGENT_UI_HTTP_ENABLED=0)");
         return;
     }
 
     let port = http_port();
-    let addr = format!("127.0.0.1:{port}");
+    let host = http_host();
+    let addr = format!("{host}:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) => {
