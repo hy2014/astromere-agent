@@ -87,3 +87,38 @@ pub fn available_permission_modes() -> Vec<String> {
         "plan".to_string(),
     ]
 }
+
+// ─── Tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_permission_mode_all_valid() {
+        assert_eq!(normalize_permission_mode("default").unwrap(), "default");
+        assert_eq!(normalize_permission_mode("acceptEdits").unwrap(), "acceptEdits");
+        assert_eq!(normalize_permission_mode("bypassPermissions").unwrap(), "bypassPermissions");
+        assert_eq!(normalize_permission_mode("dontAsk").unwrap(), "dontAsk");
+        assert_eq!(normalize_permission_mode("plan").unwrap(), "plan");
+    }
+
+    #[test]
+    fn test_normalize_permission_mode_invalid() {
+        assert!(normalize_permission_mode("invalid").is_err());
+        assert!(normalize_permission_mode("bypassed").is_err());
+        assert!(normalize_permission_mode("prompt").is_err());
+        assert!(normalize_permission_mode("").is_err());
+    }
+
+    #[test]
+    fn test_available_permission_modes() {
+        let modes = available_permission_modes();
+        assert_eq!(modes.len(), 5);
+        assert!(modes.contains(&"default".to_string()));
+        assert!(modes.contains(&"acceptEdits".to_string()));
+        assert!(modes.contains(&"bypassPermissions".to_string()));
+        assert!(modes.contains(&"dontAsk".to_string()));
+        assert!(modes.contains(&"plan".to_string()));
+    }
+}

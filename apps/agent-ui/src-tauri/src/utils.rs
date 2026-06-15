@@ -683,11 +683,199 @@ pub fn extract_tool_uses_from_jsonl(value: &Value) -> Vec<Value> {
 mod tests {
     use super::*;
 
+    // ── canonical_workspace_root ──
+
+    #[test]
+    fn test_canonical_workspace_root_valid_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = canonical_workspace_root(tmp.path().to_str().unwrap()).unwrap();
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn test_canonical_workspace_root_nonexistent() {
+        let result = canonical_workspace_root("/nonexistent/path/xyz12345");
+        assert!(result.is_err());
+    }
+
+    // ── sanitize_claude_project_path ──
+
+    #[test]
+    fn test_sanitize_claude_project_path_replaces_special_chars() {
+        let result = sanitize_claude_project_path(std::path::Path::new("/Users/foo/workspace"));
+        assert!(!result.contains('/'));
+        assert!(!result.contains(':'));
+        // All chars should be ascii alphanumeric or '-'
+        assert!(result.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    }
+
+    // ── truncate_for_log ──
+
+    #[test]
+    fn test_truncate_for_log_short_text() {
+        assert_eq!(truncate_for_log("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_for_log_long_text() {
+        let result = truncate_for_log("hello world this is long", 10);
+        assert!(result.ends_with("<truncated>"));
+        assert!(result.len() <= 10 + "<truncated>".len() + 3); // … is 3 bytes in UTF-8
+    }
+
+    // ── session_title ──
+
+    #[test]
+    fn test_session_title_zero_messages() {
+        assert_eq!(session_title("abc-123", 0), "New session");
+    }
+
+    #[test]
+    fn test_session_title_with_messages() {
+        let title = session_title("abc-123", 5);
+        assert!(title.contains("abc-123"));
+        assert!(title.contains("5 messages"));
+    }
+
+    // ── normalize_reference_path_input ──
+
+    #[test]
+    fn test_normalize_reference_path_trims_quotes() {
+        assert_eq!(normalize_reference_path_input("`/path/to/file`"), "/path/to/file");
+        assert_eq!(normalize_reference_path_input("\"/path\""), "/path");
+        assert_eq!(normalize_reference_path_input("'/path'"), "/path");
+    }
+
+    #[test]
+    fn test_normalize_reference_path_trims_whitespace() {
+        assert_eq!(normalize_reference_path_input("  /path  "), "/path");
+    }
+
+    #[test]
+    fn test_normalize_reference_path_replaces_fullwidth_tilde() {
+        // ～ (fullwidth tilde, U+FF5E) should become ~
+        assert_eq!(normalize_reference_path_input("～/docs"), "~/docs");
+    }
+
+    // ── extract_text_from_json_value ──
+
+    #[test]
+    fn test_extract_text_from_plain_string() {
+        let v = serde_json::json!("hello world");
+        assert_eq!(extract_text_from_json_value(&v), "hello world");
+    }
+
+    #[test]
+    fn test_extract_text_from_content_blocks() {
+        let v = serde_json::json!([
+            {"type": "text", "text": "Hello "},
+            {"type": "text", "text": "World"}
+        ]);
+        // Content blocks are joined with a single space; note first
+        // block "Hello " already has trailing space, so result is "Hello  World"
+        assert_eq!(extract_text_from_json_value(&v), "Hello  World");
+    }
+
+    #[test]
+    fn test_extract_text_from_empty_array() {
+        let v = serde_json::json!([]);
+        assert_eq!(extract_text_from_json_value(&v), "");
+    }
+
+    // ── is_absolute_or_home_reference ──
+
+    #[test]
+    fn test_is_absolute_or_home_reference() {
+        assert!(is_absolute_or_home_reference("/absolute/path"));
+        assert!(is_absolute_or_home_reference("~/docs"));
+        assert!(is_absolute_or_home_reference("~"));
+        assert!(!is_absolute_or_home_reference("relative/path"));
+        assert!(!is_absolute_or_home_reference("./relative"));
+    }
+
+    // ── expand_absolute_or_home_reference ──
+
+    #[test]
+    fn test_expand_home_reference() {
+        let result = expand_absolute_or_home_reference("~/docs");
+        assert!(result.is_some());
+        let path = result.unwrap();
+        assert!(path.to_string_lossy().ends_with("/docs"));
+    }
+
+    #[test]
+    fn test_expand_absolute_path() {
+        let result = expand_absolute_or_home_reference("/tmp/test");
+        assert_eq!(result, Some(std::path::PathBuf::from("/tmp/test")));
+    }
+
+    #[test]
+    fn test_expand_relative_path_is_none() {
+        assert_eq!(expand_absolute_or_home_reference("relative/path"), None);
+    }
+
+    // ── process_key ──
+
+    #[test]
+    fn test_process_key_format() {
+        let key = process_key("/root", "abc-123");
+        assert_eq!(key, "/root\nabc-123");
+    }
+
+    // ── generate_agent_ui_session_id ──
+
+    #[test]
+    fn test_session_id_is_uuid_format() {
+        let id = generate_agent_ui_session_id();
+        assert_eq!(id.len(), 36);
+        let parts: Vec<&str> = id.split('-').collect();
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[0].len(), 8);
+        assert_eq!(parts[1].len(), 4);
+        assert_eq!(parts[2].len(), 4);
+        assert_eq!(parts[3].len(), 4);
+        assert_eq!(parts[4].len(), 12);
+    }
+
+    #[test]
+    fn test_session_id_unique() {
+        let id1 = generate_agent_ui_session_id();
+        let id2 = generate_agent_ui_session_id();
+        assert_ne!(id1, id2);
+    }
+
+    // ── parse_jsonl_messages ──
+
+    #[test]
+    fn test_parse_jsonl_with_meta_message_skipped() {
+        let content = r#"{"isMeta":true,"message":{"role":"user","content":"skip me"}}
+{"type":"user","message":{"role":"user","content":"real message"}}"#;
+        let messages = parse_jsonl_messages(content);
+        // Meta messages should be skipped, only the real one remains
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+    }
+
+    #[test]
+    fn test_parse_jsonl_empty_content() {
+        let messages = parse_jsonl_messages("");
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn test_parse_jsonl_corrupted_lines_skipped() {
+        let content = r#"not json at all
+{"type":"user","message":{"role":"user","content":"valid"}}"#;
+        let messages = parse_jsonl_messages(content);
+        // Corrupted line should be skipped
+        assert_eq!(messages.len(), 1);
+    }
+
     #[test]
     fn test_parse_jsonl_messages_have_text_field() {
         // Use a real jsonl session file to verify the parser produces valid {id, role, text} output
         let home = std::env::var("HOME").unwrap_or_default();
-        let possible_roots = [
+        let _possible_roots = [
             format!("{}/workspace/astromere-infra", home),
             format!("{}/workspace/claude-code/apps/agent-ui", home),
         ];

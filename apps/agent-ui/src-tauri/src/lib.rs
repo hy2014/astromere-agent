@@ -8,12 +8,17 @@
 
 pub mod control;
 pub mod mcp;
+pub mod mcp_core;
 pub mod models;
+pub mod models_core;
 pub mod permissions;
 pub mod repl;
 pub mod runtime;
+pub mod server;
 pub mod session;
+pub mod session_core;
 pub mod skills;
+pub mod sqlite;
 pub mod types;
 pub mod utils;
 pub mod workspace;

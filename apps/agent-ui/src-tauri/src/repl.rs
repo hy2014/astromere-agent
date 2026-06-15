@@ -15,7 +15,8 @@ use crate::utils::{
     canonical_workspace_root, claude_project_sessions_dir, error_to_string,
     process_key, repo_root,
 };
-use crate::models::{active_model_config, apply_agent_ui_env, apply_model_env, default_model_settings, load_model_settings, resolve_model_for_provider};
+use crate::models::{apply_agent_ui_env, apply_model_env};
+use crate::models_core::{active_model_config, default_model_settings, load_model_settings, resolve_model_for_provider};
 use crate::mcp::astromere_mcp_config_path;
 use crate::control::{
     remember_control_response, shared_session_id, set_shared_session_id,
@@ -248,6 +249,14 @@ fn fork_debug(message: impl AsRef<str>) {
     eprintln!("[agent-ui][fork] {}", message.as_ref());
 }
 
+/// Emit to both Tauri event system and SSE broadcast
+pub(crate) fn emit_event(app: &tauri::AppHandle, event_name: &str, event: serde_json::Value) {
+    let _ = app.emit(event_name, &event);
+    if let Ok(json_str) = serde_json::to_string(&event) {
+        crate::server::broadcast_sse_event(json_str);
+    }
+}
+
 pub(crate) fn emit_process_status(
     app: &tauri::AppHandle,
     root: &str,
@@ -256,8 +265,7 @@ pub(crate) fn emit_process_status(
     pid: Option<u32>,
     reason: &str,
 ) {
-    let _ = app.emit(
-        "agent-repl-event",
+    emit_event(&app, "agent-repl-event",
         json!({
             "sessionId": session_id,
             "root": root,
@@ -405,8 +413,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                         "stdout reader error; session_id={} error={}",
                         event_session_id, error
                     ));
-                    let _ = app.emit(
-                        "agent-repl-event",
+                    emit_event(&app, "agent-repl-event",
                         json!({
                             "sessionId": event_session_id,
                             "root": root,
@@ -433,8 +440,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                         error,
                         crate::utils::truncate_for_log(&line, 1600)
                     ));
-                    let _ = app.emit(
-                        "agent-repl-event",
+                    emit_event(&app, "agent-repl-event",
                         json!({
                             "sessionId": event_session_id,
                             "root": root,
@@ -516,8 +522,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                 }
             }
 
-            let _ = app.emit(
-                "agent-repl-event",
+            emit_event(&app, "agent-repl-event",
                 json!({
                     "sessionId": event_session_id,
                     "root": root,
@@ -536,8 +541,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                     } else {
                         "system"
                     };
-                    let _ = app.emit(
-                        "agent-repl-event",
+                    emit_event(&app, "agent-repl-event",
                         json!({
                             "sessionId": event_session_id,
                             "root": root,
@@ -568,8 +572,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                     }
 
                     for tool in extract_tool_uses(&value) {
-                        let _ = app.emit(
-                            "agent-repl-event",
+                        emit_event(&app, "agent-repl-event",
                             json!({
                                 "sessionId": event_session_id,
                                 "root": root,
@@ -593,8 +596,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                             } else {
                                 "missing_assistant_message_id"
                             };
-                        let _ = app.emit(
-                            "agent-repl-event",
+                        emit_event(&app, "agent-repl-event",
                             json!({
                                 "sessionId": event_session_id,
                                 "root": root,
@@ -677,7 +679,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                             "missing_assistant_message_id"
                         };
 
-                    let _ = app.emit("agent-repl-event", json!({
+                    emit_event(&app, "agent-repl-event", json!({
                         "sessionId": event_session_id,
                         "root": root,
                         "eventType": "turn_complete",
@@ -714,8 +716,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                     let input = request.get("input").cloned().unwrap_or_else(|| json!({}));
                     let prompt = format!("{} requests permission to use {}", subtype, tool_name);
 
-                    let _ = app.emit(
-                        "agent-repl-event",
+                    emit_event(&app, "agent-repl-event",
                         json!({
                             "sessionId": event_session_id,
                             "root": root,
@@ -746,8 +747,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                             } else {
                                 "missing_assistant_message_id"
                             };
-                        let _ = app.emit(
-                            "agent-repl-event",
+                        emit_event(&app, "agent-repl-event",
                             json!({
                                 "sessionId": event_session_id,
                                 "root": root,
@@ -762,8 +762,7 @@ pub(crate) fn spawn_repl_stdout_reader(
                     }
                 }
                 _ => {
-                    let _ = app.emit(
-                        "agent-repl-event",
+                    emit_event(&app, "agent-repl-event",
                         json!({
                             "sessionId": event_session_id,
                             "root": root,
@@ -781,8 +780,7 @@ pub(crate) fn spawn_repl_stdout_reader(
             final_session_id, root
         ));
         remove_process_session(&root, &final_session_id);
-        let _ = app.emit(
-            "agent-repl-event",
+        emit_event(&app, "agent-repl-event",
             json!({
                 "sessionId": final_session_id,
                 "root": root,
@@ -794,6 +792,19 @@ pub(crate) fn spawn_repl_stdout_reader(
             }),
         );
         emit_process_status(&app, &root, &final_session_id, false, None, "stdout_closed");
+
+        // Send a session_end event to signal SSE clients that this session is done.
+        // The SSE connection itself stays open for other sessions.
+        emit_event(&app, "agent-repl-event",
+            json!({
+                "sessionId": final_session_id,
+                "root": root,
+                "eventType": "session_end",
+                "payload": {
+                    "reason": "process_exit"
+                }
+            }),
+        );
     });
 }
 
@@ -819,8 +830,7 @@ fn spawn_repl_stderr_reader(
                 event_session_id,
                 truncate_for_log(&line, 1600)
             ));
-            let _ = app.emit(
-                "agent-repl-event",
+            emit_event(&app, "agent-repl-event",
                 json!({
                     "sessionId": event_session_id,
                     "root": root,
@@ -933,8 +943,7 @@ pub fn ensure_agent_repl_process(
         if let Some(proc_state) = processes.get_mut(&key) {
             match proc_state.child.try_wait().map_err(error_to_string)? {
                 None => {
-                    let _ = app.emit(
-                        "agent-repl-event",
+                    emit_event(&app, "agent-repl-event",
                         json!({
                             "sessionId": session_id,
                             "root": root,
@@ -960,8 +969,7 @@ pub fn ensure_agent_repl_process(
                     let old_pid = proc_state.pid;
                     processes.remove(&key);
 
-                    let _ = app.emit(
-                        "agent-repl-event",
+                    emit_event(&app, "agent-repl-event",
                         json!({
                             "sessionId": session_id,
                             "root": root,
@@ -1050,7 +1058,7 @@ pub fn ensure_agent_repl_process(
 
     spawn_repl_stderr_reader(app.clone(), shared_session.clone(), root.clone(), stderr);
 
-    let _ = app.emit("agent-repl-event", json!({
+    emit_event(&app, "agent-repl-event", json!({
         "sessionId": session_id,
         "root": root,
         "eventType": "startup",
@@ -1317,8 +1325,7 @@ pub fn fork_agent_repl_process(
         forked_jsonl_path.display()
     ));
 
-    let _ = app.emit(
-        "agent-repl-event",
+    emit_event(&app, "agent-repl-event",
         json!({
             "sessionId": forked_session_id.clone(),
             "root": root.clone(),

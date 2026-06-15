@@ -2,7 +2,6 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::Emitter;
 
 use crate::types::{
     AgentContextUsage, AgentReplCapabilities, AgentReplCapabilityItem,
@@ -403,8 +402,7 @@ pub fn interrupt_agent_turn(
             use std::io::Write;
             writeln!(proc_state.stdin, "{line}").map_err(error_to_string)?;
             proc_state.stdin.flush().map_err(error_to_string)?;
-            let _ = app.emit(
-                "agent-repl-event",
+            crate::repl::emit_event(&app, "agent-repl-event",
                 json!({
                     "sessionId": session_id,
                     "root": root,
@@ -418,8 +416,7 @@ pub fn interrupt_agent_turn(
             Ok(true)
         }
         None => {
-            let _ = app.emit(
-                "agent-repl-event",
+            crate::repl::emit_event(&app, "agent-repl-event",
                 json!({
                     "sessionId": session_id,
                     "root": root,
@@ -549,8 +546,8 @@ pub fn run_agent_turn(
 ) -> Result<AgentTurnResponse, String> {
     let root_path = crate::utils::canonical_workspace_root(&root)?;
     let repo = crate::utils::repo_root()?;
-    let settings = crate::models::load_model_settings().unwrap_or_else(|_| crate::models::default_model_settings());
-    let config = crate::models::active_model_config(&settings).ok().cloned();
+    let settings = crate::models_core::load_model_settings().unwrap_or_else(|_| crate::models_core::default_model_settings());
+    let config = crate::models_core::active_model_config(&settings).ok().cloned();
 
     let mut cmd = std::process::Command::new("bun");
     cmd.arg("run")
@@ -567,7 +564,7 @@ pub fn run_agent_turn(
 
     if let Some(config) = config.as_ref() {
         crate::models::apply_model_env(&mut cmd, config);
-        let model = crate::models::resolve_model_for_provider(config);
+        let model = crate::models_core::resolve_model_for_provider(config);
         if model != "default" {
             cmd.arg("--model").arg(model);
         }
@@ -603,7 +600,7 @@ pub fn run_agent_turn(
         message,
         requires_confirmation: false,
         permission_prompt: None,
-        model: config.as_ref().map(|c| crate::models::resolve_model_for_provider(c)),
+        model: config.as_ref().map(|c| crate::models_core::resolve_model_for_provider(c)),
         iterations: None,
         tool_uses: vec![],
         tool_results: vec![],
@@ -619,4 +616,260 @@ pub fn run_agent_turn(
             Some(stderr)
         },
     })
+}
+
+// ─── Tests ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── is_existing_claude_session_id ──
+
+    #[test]
+    fn test_valid_uuid_is_recognized() {
+        assert!(is_existing_claude_session_id(
+            "abc12345-def4-5678-90ab-cdef01234567"
+        ));
+    }
+
+    #[test]
+    fn test_new_prefix_is_not_recognized() {
+        assert!(!is_existing_claude_session_id("new-1234567890"));
+    }
+
+    #[test]
+    fn test_pending_prefix_is_not_recognized() {
+        assert!(!is_existing_claude_session_id("pending-1234567890"));
+    }
+
+    #[test]
+    fn test_empty_string_is_not_recognized() {
+        assert!(!is_existing_claude_session_id(""));
+    }
+
+    #[test]
+    fn test_too_short_is_not_recognized() {
+        assert!(!is_existing_claude_session_id("abc-def"));
+    }
+
+    #[test]
+    fn test_non_hex_is_not_recognized() {
+        assert!(!is_existing_claude_session_id("gggg1234-def4-5678-90ab-cdef01234567"));
+    }
+
+    #[test]
+    fn test_wrong_part_count_is_not_recognized() {
+        // 4 parts instead of 5
+        assert!(!is_existing_claude_session_id("abc12345-def4-5678-cdef01234567"));
+    }
+
+    #[test]
+    fn test_wrong_part_length_is_not_recognized() {
+        // part[1] is 5 chars instead of 4
+        assert!(!is_existing_claude_session_id("abc12345-def45-5678-90ab-cdef01234567"));
+    }
+
+    // ── stream_value_session_id ──
+
+    #[test]
+    fn test_session_id_at_top_level() {
+        let v = json!({"session_id": "abc-123", "type": "result"});
+        assert_eq!(stream_value_session_id(&v), Some("abc-123".to_string()));
+    }
+
+    #[test]
+    fn test_session_id_in_response_object() {
+        let v = json!({"response": {"session_id": "def-456"}});
+        assert_eq!(stream_value_session_id(&v), Some("def-456".to_string()));
+    }
+
+    #[test]
+    fn test_session_id_deep_in_session_object() {
+        let v = json!({"session": {"id": "ghi-789"}});
+        assert_eq!(stream_value_session_id(&v), Some("ghi-789".to_string()));
+    }
+
+    #[test]
+    fn test_session_id_none_for_empty_json() {
+        let v = json!({});
+        assert_eq!(stream_value_session_id(&v), None);
+    }
+
+    #[test]
+    fn test_session_id_top_level_takes_priority() {
+        // top-level session_id should win over nested response.session_id
+        let v = json!({"session_id": "top-111", "response": {"session_id": "nested-222"}});
+        assert_eq!(stream_value_session_id(&v), Some("top-111".to_string()));
+    }
+
+    // ── control_response_request_id ──
+
+    #[test]
+    fn test_request_id_at_top_level() {
+        let v = json!({"request_id": "req-123", "type": "control_response"});
+        assert_eq!(control_response_request_id(&v), Some("req-123".to_string()));
+    }
+
+    #[test]
+    fn test_request_id_in_response_wrapper() {
+        let v = json!({"response": {"request_id": "req-456"}});
+        assert_eq!(control_response_request_id(&v), Some("req-456".to_string()));
+    }
+
+    #[test]
+    fn test_request_id_deeply_nested() {
+        let v = json!({"response": {"response": {"request_id": "req-789"}}});
+        assert_eq!(control_response_request_id(&v), Some("req-789".to_string()));
+    }
+
+    #[test]
+    fn test_request_id_empty_string_filtered() {
+        let v = json!({"request_id": "   "});
+        assert_eq!(control_response_request_id(&v), None);
+    }
+
+    #[test]
+    fn test_request_id_none_when_missing() {
+        let v = json!({"type": "assistant"});
+        assert_eq!(control_response_request_id(&v), None);
+    }
+
+    // ── capability_item_from_value ──
+
+    #[test]
+    fn test_capability_from_string() {
+        let v = json!("my-command");
+        let item = capability_item_from_value(&v, "command").unwrap();
+        assert_eq!(item.name, "my-command");
+        assert_eq!(item.slash, "/my-command");
+        assert_eq!(item.kind, "command");
+    }
+
+    #[test]
+    fn test_capability_from_string_trims_whitespace() {
+        let v = json!("  my-command  ");
+        let item = capability_item_from_value(&v, "command").unwrap();
+        assert_eq!(item.name, "my-command");
+    }
+
+    #[test]
+    fn test_capability_empty_string_is_none() {
+        let v = json!("   ");
+        assert!(capability_item_from_value(&v, "command").is_none());
+    }
+
+    #[test]
+    fn test_capability_from_object_with_name() {
+        let v = json!({"name": "/my-cmd", "kind": "tool", "description": "does things"});
+        let item = capability_item_from_value(&v, "fallback").unwrap();
+        assert_eq!(item.name, "my-cmd"); // leading slash stripped
+        assert_eq!(item.slash, "/my-cmd");
+        assert_eq!(item.kind, "tool");
+        assert_eq!(item.description, Some("does things".to_string()));
+    }
+
+    #[test]
+    fn test_capability_from_object_with_command_field() {
+        let v = json!({"command": "build"});
+        let item = capability_item_from_value(&v, "fallback").unwrap();
+        assert_eq!(item.name, "build");
+    }
+
+    #[test]
+    fn test_capability_from_object_with_summary_field() {
+        let v = json!({"name": "lint", "summary": "runs linter"});
+        let item = capability_item_from_value(&v, "fallback").unwrap();
+        assert_eq!(item.description, Some("runs linter".to_string()));
+    }
+
+    #[test]
+    fn test_capability_empty_name_is_none() {
+        let v = json!({"name": ""});
+        assert!(capability_item_from_value(&v, "fallback").is_none());
+    }
+
+    // ── capabilities_from_control_response ──
+
+    #[test]
+    fn test_capabilities_from_valid_response() {
+        let response = json!({
+            "response": {
+                "capabilities": {
+                    "commands": ["build", "test"],
+                    "skills": [{"name": "lint", "kind": "skill"}]
+                }
+            }
+        });
+        let caps = capabilities_from_control_response("/root", "sid-1", &response).unwrap();
+        assert_eq!(caps.root, "/root");
+        assert_eq!(caps.session_id, "sid-1");
+        assert_eq!(caps.commands.len(), 2);
+        assert_eq!(caps.skills.len(), 1);
+        // slash_commands fallback: commands + skills when no slashCommands field
+        assert_eq!(caps.slash_commands.len(), 3);
+        assert!(caps.updated_at_ms > 0);
+    }
+
+    #[test]
+    fn test_capabilities_with_slash_commands() {
+        let response = json!({
+            "response": {
+                "capabilities": {
+                    "slashCommands": [{"name": "only-this", "kind": "command"}]
+                }
+            }
+        });
+        let caps = capabilities_from_control_response("/root", "sid-2", &response).unwrap();
+        assert_eq!(caps.slash_commands.len(), 1);
+        assert_eq!(caps.slash_commands[0].name, "only-this");
+    }
+
+    #[test]
+    fn test_capabilities_missing_capabilities_field() {
+        let response = json!({"response": {"something": "else"}});
+        let result = capabilities_from_control_response("/root", "sid-3", &response);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("did not include capabilities"));
+    }
+
+    // ── context_usage_from_control_response ──
+
+    #[test]
+    fn test_context_usage_from_response_wrapped() {
+        let response = json!({
+            "response": {
+                "response": {
+                    "tokens": 1234,
+                    "model": "deepseek-chat"
+                }
+            }
+        });
+        let usage = context_usage_from_control_response("/root", "sid-4", &response).unwrap();
+        assert_eq!(usage.root, "/root");
+        assert_eq!(usage.session_id, "sid-4");
+        assert!(usage.updated_at_ms > 0);
+    }
+
+    #[test]
+    fn test_context_usage_from_shallow_response() {
+        let response = json!({
+            "response": {
+                "tokens": 5678
+            }
+        });
+        let usage = context_usage_from_control_response("/root", "sid-5", &response).unwrap();
+        assert_eq!(usage.data.get("tokens").and_then(|v| v.as_u64()), Some(5678));
+    }
+
+    // ── shared_session_id ──
+
+    #[test]
+    fn test_shared_session_id_read_write() {
+        let shared = Arc::new(Mutex::new("initial".to_string()));
+        assert_eq!(shared_session_id(&shared), "initial");
+        set_shared_session_id(&shared, "updated");
+        assert_eq!(shared_session_id(&shared), "updated");
+    }
 }
