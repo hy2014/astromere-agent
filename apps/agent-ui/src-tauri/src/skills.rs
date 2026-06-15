@@ -287,7 +287,7 @@ fn build_skill_summary(
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn list_skills(root: String) -> Result<Value, String> {
     let root_path = canonical_workspace_root(&root)?;
     let project_skills_dir = root_path.join(".claude").join("skills");
@@ -369,7 +369,7 @@ pub fn list_skills(root: String) -> Result<Value, String> {
     }))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn install_skill(root: String, source: String) -> Result<Value, String> {
     let _ = source;
     let root_path = canonical_workspace_root(&root)?;

@@ -1,7 +1,7 @@
 use crate::types::AgentPermissionState;
 use crate::utils::error_to_string;
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn get_agent_permission_state() -> Result<AgentPermissionState, String> {
     Ok(AgentPermissionState {
         current_mode: "default".to_string(),
@@ -9,7 +9,7 @@ pub fn get_agent_permission_state() -> Result<AgentPermissionState, String> {
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn set_agent_permission_mode(_root: String, mode: String) -> Result<AgentPermissionState, String> {
     let normalized = normalize_permission_mode(&mode)?.to_string();
     Ok(AgentPermissionState {
@@ -18,7 +18,7 @@ pub fn set_agent_permission_mode(_root: String, mode: String) -> Result<AgentPer
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn respond_agent_permission(
     root: String,
     session_id: String,

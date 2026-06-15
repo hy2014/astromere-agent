@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::convert::Infallible;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tauri::AppHandle;
+use crate::AppHandle;
 use tokio::sync::broadcast;
 
 use crate::control;

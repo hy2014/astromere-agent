@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::types::{BashRuntimeRequest, GrepRuntimeRequest, RuntimeSessionSummary};
 use crate::utils::{canonical_workspace_root, error_to_string};
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn glob_runtime_search(
     root: String,
     pattern: String,
@@ -31,7 +31,7 @@ pub fn glob_runtime_search(
     }))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn grep_runtime_search(
     root: String,
     request: GrepRuntimeRequest,
@@ -70,7 +70,7 @@ pub fn grep_runtime_search(
     }))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn execute_runtime_bash(
     root: String,
     request: BashRuntimeRequest,
@@ -91,12 +91,12 @@ pub fn execute_runtime_bash(
     }))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn list_runtime_sessions(root: String) -> Result<Vec<RuntimeSessionSummary>, String> {
     crate::session_core::list_sessions(&root)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_runtime_session(root: String, reference: String) -> Result<Value, String> {
     crate::session_core::load_session(&root, &reference)
 }
@@ -128,7 +128,7 @@ fn find_session_file(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn create_runtime_session(root: String) -> Result<RuntimeSessionSummary, String> {
     crate::session_core::create_session(&root)
 }

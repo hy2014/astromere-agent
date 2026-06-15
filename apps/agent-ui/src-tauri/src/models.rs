@@ -5,22 +5,22 @@ use crate::types::{
 use crate::utils::{error_to_string, repo_root};
 use crate::models_core;
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_model_settings() -> Result<ModelSettings, String> {
     models_core::load_model_settings()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn save_model_settings(settings: ModelSettings) -> Result<ModelSettings, String> {
     models_core::save_model_settings(settings)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn test_model_connection(settings: ModelSettings) -> Result<ModelConnectionTestResult, String> {
     models_core::test_active_model_connection(&settings)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_deepseek_pricing() -> Result<Option<DeepSeekPricingConfig>, String> {
     models_core::load_deepseek_pricing()
 }
