@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use crate::AppHandle;
 use tokio::sync::broadcast;
+use tower_http::cors::CorsLayer;
 
 use crate::control;
 use crate::mcp_core;
@@ -221,6 +222,7 @@ pub fn app_router(state: AppState) -> Router {
         .route("/events", get(sse_handler))
         // client
         .route("/client/exit", post(client_exit_handler))
+        .layer(CorsLayer::permissive())
         .with_state(state)
 }
 
