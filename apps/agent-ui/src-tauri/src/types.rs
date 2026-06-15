@@ -274,3 +274,376 @@ pub struct SessionReadyRegistry {
     pub sessions: std::sync::Mutex<HashMap<String, bool>>,
     pub condvar: std::sync::Condvar,
 }
+
+// ─── Tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── RuntimeSessionSummary ──
+
+    #[test]
+    fn test_runtime_session_summary_serialization() {
+        let s = RuntimeSessionSummary {
+            id: "abc-123".into(),
+            title: "My session".into(),
+            path: "/tmp/sessions/abc-123.jsonl".into(),
+            updated_at_ms: 1700000000000,
+            modified_epoch_millis: 1700000000000,
+            message_count: 5,
+            parent_session_id: Some("parent-456".into()),
+            branch_name: Some("main".into()),
+        };
+        let json = serde_json::to_value(&s).unwrap();
+        // RuntimeSessionSummary uses snake_case for IPC compatibility with the frontend
+        assert_eq!(json["id"], "abc-123");
+        assert_eq!(json["title"], "My session");
+        assert_eq!(json["message_count"], 5);
+        assert_eq!(json["parent_session_id"], "parent-456");
+        assert_eq!(json["branch_name"], "main");
+        assert_eq!(json["updated_at_ms"], 1700000000000u64);
+        assert_eq!(json["modified_epoch_millis"], 1700000000000u64);
+    }
+
+    #[test]
+    fn test_runtime_session_summary_no_parent() {
+        let s = RuntimeSessionSummary {
+            id: "x".into(), title: "t".into(), path: "p".into(),
+            updated_at_ms: 0, modified_epoch_millis: 0, message_count: 0,
+            parent_session_id: None, branch_name: None,
+        };
+        let json = serde_json::to_value(&s).unwrap();
+        assert!(json["parent_session_id"].is_null());
+        assert!(json["branch_name"].is_null());
+    }
+
+    // ── AgentReplProcessState ──
+
+    #[test]
+    fn test_agent_repl_process_state_camelcase() {
+        let s = AgentReplProcessState {
+            session_id: "sid-1".into(),
+            root: "/proj".into(),
+            model: "deepseek-chat".into(),
+            permission_mode: "default".into(),
+        };
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["sessionId"], "sid-1");
+        assert_eq!(json["root"], "/proj");
+        assert_eq!(json["model"], "deepseek-chat");
+        assert_eq!(json["permissionMode"], "default");
+    }
+
+    // ── AgentReplProcessStatus ──
+
+    #[test]
+    fn test_agent_repl_process_status_camelcase() {
+        let s = AgentReplProcessStatus {
+            session_id: "sid-1".into(),
+            root: "/proj".into(),
+            running: true,
+            pid: Some(12345),
+        };
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["sessionId"], "sid-1");
+        assert_eq!(json["running"], true);
+        assert_eq!(json["pid"], 12345);
+    }
+
+    #[test]
+    fn test_agent_repl_process_status_not_running() {
+        let s = AgentReplProcessStatus {
+            session_id: "sid-2".into(), root: "/proj".into(),
+            running: false, pid: None,
+        };
+        let json = serde_json::to_value(&s).unwrap();
+        assert!(!json["running"].as_bool().unwrap());
+        assert!(json["pid"].is_null());
+    }
+
+    // ── AgentReplSendResult ──
+
+    #[test]
+    fn test_agent_repl_send_result_camelcase() {
+        let s = AgentReplSendResult { accepted: true };
+        let json = serde_json::to_value(&s).unwrap();
+        assert!(json["accepted"].as_bool().unwrap());
+    }
+
+    // ── AgentReplCapabilities ──
+
+    #[test]
+    fn test_agent_repl_capabilities_camelcase() {
+        let caps = AgentReplCapabilities {
+            root: "/proj".into(),
+            session_id: "sid-1".into(),
+            commands: vec![AgentReplCapabilityItem {
+                name: "build".into(), slash: "/build".into(),
+                kind: "command".into(), description: Some("build project".into()),
+            }],
+            skills: vec![],
+            slash_commands: vec![],
+            updated_at_ms: 1700000000000,
+        };
+        let json = serde_json::to_value(&caps).unwrap();
+        assert_eq!(json["root"], "/proj");
+        assert_eq!(json["sessionId"], "sid-1");
+        assert_eq!(json["updatedAtMs"], 1700000000000u64);
+        assert_eq!(json["commands"][0]["name"], "build");
+        assert_eq!(json["commands"][0]["description"], "build project");
+    }
+
+    // ── AgentContextUsage ──
+
+    #[test]
+    fn test_agent_context_usage_camelcase() {
+        let usage = AgentContextUsage {
+            root: "/proj".into(),
+            session_id: "sid-1".into(),
+            data: json!({"tokens": 1234}),
+            updated_at_ms: 1700000000000,
+        };
+        let json = serde_json::to_value(&usage).unwrap();
+        assert_eq!(json["sessionId"], "sid-1");
+        assert_eq!(json["updatedAtMs"], 1700000000000u64);
+        assert_eq!(json["data"]["tokens"], 1234);
+    }
+
+    // ── ModelSettings deserialization ──
+
+    #[test]
+    fn test_model_settings_deserialization() {
+        let json = json!({
+            "activeModelId": "deepseek",
+            "models": [{
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "apiKey": "sk-xxx",
+                "baseUrl": "https://api.deepseek.com/anthropic",
+                "maxTokens": 4096,
+                "temperature": 0.2,
+                "enabled": true
+            }]
+        });
+        let settings: ModelSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.active_model_id, "deepseek");
+        assert_eq!(settings.models.len(), 1);
+        assert_eq!(settings.models[0].provider, ModelProvider::DeepSeek);
+        assert!(settings.deepseek_pricing.is_none());
+    }
+
+    #[test]
+    fn test_model_settings_with_pricing() {
+        let json = json!({
+            "activeModelId": "deepseek",
+            "models": [],
+            "deepseekPricing": {
+                "source": "api",
+                "fetchedAt": "2026-01-01",
+                "url": "https://api.deepseek.com/pricing",
+                "currency": "CNY",
+                "unit": "per 1M tokens",
+                "models": []
+            }
+        });
+        let settings: ModelSettings = serde_json::from_value(json).unwrap();
+        let pricing = settings.deepseek_pricing.unwrap();
+        assert_eq!(pricing.source, "api");
+        assert_eq!(pricing.currency, "CNY");
+    }
+
+    // ── ModelEndpointConfig defaults ──
+
+    #[test]
+    fn test_model_endpoint_config_optional_fields() {
+        // support_models defaults to [], organization_id defaults to None
+        let json = json!({
+            "id": "test",
+            "name": "Test",
+            "provider": "openai",
+            "apiKey": "sk-xxx",
+            "baseUrl": "https://api.openai.com",
+            "maxTokens": 4096,
+            "temperature": 0.0,
+            "enabled": true
+        });
+        let config: ModelEndpointConfig = serde_json::from_value(json).unwrap();
+        assert!(config.support_models.is_empty());
+        assert!(config.organization_id.is_none());
+    }
+
+    // ── WorkspaceFileReference ──
+
+    #[test]
+    fn test_workspace_file_reference_snake_case() {
+        let f = WorkspaceFileReference {
+            path: "/proj/src/main.rs".into(),
+            name: "main.rs".into(),
+            directory: "/proj/src".into(),
+            extension: Some("rs".into()),
+            size_bytes: Some(1024),
+            modified_epoch_millis: Some(1700000000000),
+            score: 100,
+        };
+        let json = serde_json::to_value(&f).unwrap();
+        assert_eq!(json["size_bytes"], 1024);
+        assert_eq!(json["modified_epoch_millis"].as_u64(), Some(1700000000000));
+    }
+
+    // ── ProjectEntryKind ──
+
+    #[test]
+    fn test_project_entry_kind_lowercase() {
+        let e = ProjectEntry { name: "f".into(), path: "/f".into(), kind: ProjectEntryKind::File };
+        let json = serde_json::to_value(&e).unwrap();
+        assert_eq!(json["kind"], "file");
+
+        let d = ProjectEntry { name: "d".into(), path: "/d".into(), kind: ProjectEntryKind::Directory };
+        let json = serde_json::to_value(&d).unwrap();
+        assert_eq!(json["kind"], "directory");
+    }
+
+    // ── McpServerConfig deserialization ──
+
+    #[test]
+    fn test_mcp_server_config_deserialization() {
+        use crate::mcp::McpServerConfig; // import from mcp module
+        let json = json!({
+            "enabled": true,
+            "type": "stdio",
+            "command": "node",
+            "args": ["server.js"],
+            "env": {"NODE_ENV": "production"},
+            "cwd": "/project",
+            "tools": [{"name": "search", "description": "search tool"}]
+        });
+        let config: McpServerConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(config.enabled, Some(true));
+        assert_eq!(config.server_type, Some("stdio".to_string()));
+        assert_eq!(config.command, "node");
+        assert_eq!(config.args, Some(vec!["server.js".to_string()]));
+        assert_eq!(config.env.unwrap().get("NODE_ENV").unwrap(), "production");
+        assert_eq!(config.cwd, Some("/project".to_string()));
+        assert_eq!(config.tools.len(), 1);
+    }
+
+    #[test]
+    fn test_mcp_server_config_minimal() {
+        use crate::mcp::McpServerConfig;
+        let json = json!({"command": "echo"});
+        let config: McpServerConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(config.command, "echo");
+        assert!(config.enabled.is_none());
+        assert!(config.server_type.is_none());
+        assert!(config.args.is_none());
+        assert!(config.env.is_none());
+        assert!(config.cwd.is_none());
+        assert!(config.tools.is_empty());
+    }
+
+    // ── McpSettings deserialization ──
+
+    #[test]
+    fn test_mcp_settings_deserialization() {
+        use crate::mcp::McpSettings;
+        let json = json!({
+            "mcpServers": {
+                "srv1": {"command": "node"},
+                "srv2": {"command": "python"}
+            }
+        });
+        let settings: McpSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.mcp_servers.len(), 2);
+        assert!(settings.mcp_servers.contains_key("srv1"));
+        assert!(settings.mcp_servers.contains_key("srv2"));
+    }
+
+    // ── GrepRuntimeRequest ──
+
+    #[test]
+    fn test_grep_runtime_request_all_fields() {
+        let json = json!({
+            "pattern": "TODO",
+            "path": "src",
+            "glob": "*.rs",
+            "output_mode": "content",
+            "case_insensitive": true,
+            "head_limit": 50
+        });
+        let req: GrepRuntimeRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.pattern, "TODO");
+        assert_eq!(req.path, Some("src".to_string()));
+        assert_eq!(req.glob, Some("*.rs".to_string()));
+        assert_eq!(req.output_mode, Some("content".to_string()));
+        assert_eq!(req.case_insensitive, Some(true));
+        assert_eq!(req.head_limit, Some(50));
+    }
+
+    // ── BashRuntimeRequest ──
+
+    #[test]
+    fn test_bash_runtime_request_all_fields() {
+        let json = json!({"command": "ls", "timeout_ms": 5000});
+        let req: BashRuntimeRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.command, "ls");
+        assert_eq!(req.timeout_ms, Some(5000));
+    }
+
+    // ── DeepSeekPricingConfig roundtrip ──
+
+    #[test]
+    fn test_deepseek_pricing_roundtrip() {
+        let pricing = DeepSeekPricingConfig {
+            source: "api".into(),
+            fetched_at: "2026-06-15".into(),
+            url: "https://api.deepseek.com/pricing".into(),
+            currency: "CNY".into(),
+            unit: "per 1M tokens".into(),
+            models: vec![DeepSeekPricingModel {
+                model: "deepseek-chat".into(),
+                items: vec![DeepSeekPricingItem {
+                    item: "input".into(),
+                    price_per_m_tokens: 1.0,
+                }],
+            }],
+        };
+        let json = serde_json::to_value(&pricing).unwrap();
+        assert_eq!(json["source"], "api");
+        assert_eq!(json["currency"], "CNY");
+        assert_eq!(json["models"][0]["model"], "deepseek-chat");
+
+        let back: DeepSeekPricingConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back.source, "api");
+        assert_eq!(back.models[0].items[0].price_per_m_tokens, 1.0);
+    }
+
+    // ── GitDiff ──
+
+    #[test]
+    fn test_git_diff_separate_path() {
+        let gd = GitDiff { path: Some("file.rs".into()), diff: "diff content".into(), is_empty: false };
+        let json = serde_json::to_value(&gd).unwrap();
+        assert_eq!(json["path"], "file.rs");
+        assert_eq!(json["diff"], "diff content");
+        assert!(!json["is_empty"].as_bool().unwrap());
+    }
+
+    // ── ModelProvider serialize/deserialize ──
+
+    #[test]
+    fn test_model_provider_lowercase() {
+        let v = serde_json::to_value(ModelProvider::DeepSeek).unwrap();
+        assert_eq!(v, "deepseek");
+        let v = serde_json::to_value(ModelProvider::OpenAI).unwrap();
+        assert_eq!(v, "openai");
+        let v = serde_json::to_value(ModelProvider::Anthropic).unwrap();
+        assert_eq!(v, "anthropic");
+
+        let p: ModelProvider = serde_json::from_value(json!("deepseek")).unwrap();
+        assert_eq!(p, ModelProvider::DeepSeek);
+    }
+}

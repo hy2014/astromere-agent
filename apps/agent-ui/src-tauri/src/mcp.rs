@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::PathBuf;
 
-use crate::utils::ui_config_dir;
+use crate::mcp_core;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,57 +46,16 @@ pub struct McpSettingsFile {
     pub settings: McpSettings,
 }
 
-fn default_mcp_settings() -> McpSettings {
-    McpSettings {
-        mcp_servers: BTreeMap::new(),
-    }
-}
-
 pub fn astromere_mcp_config_path() -> Result<PathBuf, String> {
-    let dir = ui_config_dir()?;
-    Ok(dir.join("mcp.json"))
+    mcp_core::mcp_config_path()
 }
 
 #[tauri::command]
 pub fn load_mcp_settings() -> Result<McpSettingsFile, String> {
-    let path = astromere_mcp_config_path()?;
-
-    if !path.is_file() {
-        return Ok(McpSettingsFile {
-            path: path.to_string_lossy().to_string(),
-            settings: default_mcp_settings(),
-        });
-    }
-
-    let raw = fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read MCP settings {}: {error}", path.display()))?;
-
-    let settings = serde_json::from_str::<McpSettings>(&raw)
-        .map_err(|error| format!("failed to parse MCP settings {}: {error}", path.display()))?;
-
-    Ok(McpSettingsFile {
-        path: path.to_string_lossy().to_string(),
-        settings,
-    })
+    mcp_core::load_mcp_settings()
 }
 
 #[tauri::command]
 pub fn save_mcp_settings(settings: McpSettings) -> Result<McpSettingsFile, String> {
-    let path = astromere_mcp_config_path()?;
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create MCP settings dir {}: {error}", parent.display()))?;
-    }
-
-    let raw = serde_json::to_string_pretty(&settings)
-        .map_err(|error| format!("failed to serialize MCP settings: {error}"))?;
-
-    fs::write(&path, format!("{raw}\n"))
-        .map_err(|error| format!("failed to write MCP settings {}: {error}", path.display()))?;
-
-    Ok(McpSettingsFile {
-        path: path.to_string_lossy().to_string(),
-        settings,
-    })
+    mcp_core::save_mcp_settings(settings)
 }

@@ -7,6 +7,7 @@ use claw_agent_ui::models;
 use claw_agent_ui::permissions;
 use claw_agent_ui::repl;
 use claw_agent_ui::runtime;
+use claw_agent_ui::server;
 use claw_agent_ui::skills;
 use claw_agent_ui::workspace;
 use sqlite::{
@@ -30,6 +31,13 @@ fn main() {
                 if let Err(error) = models::refresh_deepseek_pricing_on_startup() {
                     eprintln!("[deepseek-pricing] refresh failed: {error}");
                 }
+            });
+            // HTTP server 在独立 tokio runtime 上运行
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new()
+                    .expect("HTTP server: failed to create tokio runtime");
+                rt.block_on(server::run_server(app_handle));
             });
             Ok(())
         })
@@ -62,7 +70,6 @@ fn main() {
             workspace::read_git_diff,
             models::load_model_settings,
             models::save_model_settings,
-            models::load_deepseek_pricing,
             mcp::load_mcp_settings,
             mcp::save_mcp_settings,
             models::test_model_connection,

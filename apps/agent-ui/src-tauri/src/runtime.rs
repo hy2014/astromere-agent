@@ -3,10 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::types::{BashRuntimeRequest, GrepRuntimeRequest, RuntimeSessionSummary};
-use crate::utils::{
-    canonical_workspace_root, claude_project_sessions_dir, error_to_string,
-    now_millis, collect_session_files, parse_jsonl_messages,
-};
+use crate::utils::{canonical_workspace_root, error_to_string};
 
 #[tauri::command]
 pub fn glob_runtime_search(
@@ -96,49 +93,12 @@ pub fn execute_runtime_bash(
 
 #[tauri::command]
 pub fn list_runtime_sessions(root: String) -> Result<Vec<RuntimeSessionSummary>, String> {
-    let root_path = canonical_workspace_root(&root)?;
-    let sessions_dir = claude_project_sessions_dir(&root_path)?;
-    let mut sessions = Vec::new();
-
-    if sessions_dir.exists() {
-        collect_session_files(&sessions_dir, &mut sessions)?;
-    }
-
-    sessions.sort_by(|a, b| b.modified_epoch_millis.cmp(&a.modified_epoch_millis));
-    Ok(sessions)
+    crate::session_core::list_sessions(&root)
 }
 
 #[tauri::command]
 pub fn load_runtime_session(root: String, reference: String) -> Result<Value, String> {
-    let root_path = canonical_workspace_root(&root)?;
-    let sessions = list_runtime_sessions(root)?;
-    let found = sessions
-        .into_iter()
-        .find(|s| s.id == reference || s.path == reference);
-
-    if let Some(summary) = found {
-        let content = fs::read_to_string(&summary.path)
-            .map_err(|e| format!("failed to read session file: {e}"))?;
-        let messages = parse_jsonl_messages(&content);
-
-        Ok(json!({
-            "id": summary.id,
-            "path": summary.path,
-            "title": summary.title,
-            "version": 1,
-            "created_at_ms": summary.updated_at_ms,
-            "updated_at_ms": summary.updated_at_ms,
-            "message_count": messages.len(),
-            "prompt_history_count": 0,
-            "model": null,
-            "workspace_root": root_path.to_string_lossy().to_string(),
-            "has_compaction": false,
-            "messages": messages,
-            "fork": null
-        }))
-    } else {
-        Err("session not found".to_string())
-    }
+    crate::session_core::load_session(&root, &reference)
 }
 
 #[allow(dead_code)]
@@ -170,19 +130,5 @@ fn find_session_file(
 
 #[tauri::command]
 pub fn create_runtime_session(root: String) -> Result<RuntimeSessionSummary, String> {
-    let root_path = canonical_workspace_root(&root)?;
-    let id = format!("new-{}", now_millis());
-
-    Ok(RuntimeSessionSummary {
-        id,
-        title: "New session".to_string(),
-        path: claude_project_sessions_dir(&root_path)?
-            .to_string_lossy()
-            .to_string(),
-        updated_at_ms: now_millis() as u64,
-        modified_epoch_millis: now_millis(),
-        message_count: 0,
-        parent_session_id: None,
-        branch_name: None,
-    })
+    crate::session_core::create_session(&root)
 }
