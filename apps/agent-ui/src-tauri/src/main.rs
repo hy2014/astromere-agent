@@ -23,6 +23,15 @@ use sqlite::{
 use terminal::{terminal_kill, terminal_list, terminal_resize, terminal_spawn, terminal_write};
 
 fn main() {
+    // --remote mode: headless HTTP server, no Tauri GUI/webview required
+    if std::env::args().any(|a| a == "--remote") {
+        eprintln!("[agent-ui] remote mode — HTTP server only");
+        let rt = tokio::runtime::Runtime::new()
+            .expect("HTTP server: failed to create tokio runtime");
+        rt.block_on(server::run_server(None));
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -37,7 +46,7 @@ fn main() {
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new()
                     .expect("HTTP server: failed to create tokio runtime");
-                rt.block_on(server::run_server(app_handle));
+                rt.block_on(server::run_server(Some(app_handle)));
             });
             Ok(())
         })
