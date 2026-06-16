@@ -229,7 +229,7 @@ function renderRemoteForm(
 function renderRemoteProfileList(
   { profiles, activeProfileId }: { profiles: RemoteProfile[]; activeProfileId: string | null },
   {}: Record<string, never>,
-  { handleUseRemote, handleDeleteRemote }: { handleUseRemote: (profile: RemoteProfile) => void; handleDeleteRemote: (profile: RemoteProfile, activeProfileId: string | null) => void },
+  { handleUseRemote, handleDeleteRemote, handleTestRemote }: { handleUseRemote: (profile: RemoteProfile) => void; handleDeleteRemote: (profile: RemoteProfile, activeProfileId: string | null) => void; handleTestRemote: (name: string, baseUrl: string, token: string) => Promise<void> },
 ) {
   return (
     <section className="settings-card remote-settings-card remote-profile-card">
@@ -265,6 +265,13 @@ function renderRemoteProfileList(
                     disabled={isActive}
                   >
                     {isActive ? "In use" : "Use"}
+                  </button>
+                  <button
+                    className="remote-button compact secondary"
+                    type="button"
+                    onClick={() => handleTestRemote(profile.name, profile.baseUrl, profile.token ?? "")}
+                  >
+                    Test
                   </button>
                   <button
                     className="remote-button compact ghost danger"
@@ -327,7 +334,7 @@ export function RemoteSettingsPanelView() {
         state: { profiles, activeProfileId },
         props: {},
         fn: renderRemoteProfileList,
-        events: { handleUseRemote, handleDeleteRemote },
+        events: { handleUseRemote, handleDeleteRemote, handleTestRemote: (name: string, baseUrl: string, token: string) => handleTestRemote(name, baseUrl, token, 0) },
         memo: {},
       })}
     </>

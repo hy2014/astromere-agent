@@ -124,6 +124,8 @@ impl AppState {
 #[derive(Serialize)]
 struct HealthResponse {
     ok: bool,
+    proxyVersion: &'static str,
+    protocolVersion: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -132,7 +134,11 @@ struct SessionQuery {
 }
 
 async fn health_handler() -> Json<HealthResponse> {
-    Json(HealthResponse { ok: true })
+    Json(HealthResponse {
+        ok: true,
+        proxyVersion: concat!("claw-agent-ui/", env!("CARGO_PKG_VERSION")),
+        protocolVersion: "1.0",
+    })
 }
 
 // ─── Session handlers ─────────────────────────────────────────────────
