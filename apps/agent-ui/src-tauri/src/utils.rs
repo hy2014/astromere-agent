@@ -87,6 +87,12 @@ pub fn value_summary_for_log(value: &Value) -> String {
 }
 
 pub fn repo_root() -> Result<PathBuf, String> {
+    if let Ok(val) = std::env::var("ASTROMERE_REPO_ROOT") {
+        let p = PathBuf::from(val);
+        if p.is_dir() {
+            return Ok(p);
+        }
+    }
     let manifest_dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo = manifest_dir
