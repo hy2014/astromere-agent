@@ -89,6 +89,41 @@ async fn stateless_endpoints_registered() {
     }
 }
 
+/// 验证所有带路径参数的路由已注册（不会 404）。
+/// NOTE: 之前 `{id}` 语法在 matchit 不工作，现已改为 `:id`。
+#[tokio::test]
+async fn parameterized_routes_registered() {
+    let app = claw_agent_ui::server::stateless_test_router();
+
+    // 带路径参数的路由 — 加上 root query 避免 400（missing field）
+    let param_routes = [
+        ("/sessions/test-id?root=/tmp", Method::GET),
+        ("/usage/bundle/test-sid?root=/tmp", Method::GET),
+        ("/usage/model-call/test-sid?root=/tmp", Method::GET),
+    ];
+
+    for (uri, method) in &param_routes {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method.clone())
+                    .uri(uri.to_string())
+                    .header("accept", "application/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_ne!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "parameterized route {method} {uri} returned 404 — path param syntax may be broken (use :id not {{id}})"
+        );
+    }
+}
+
 /// 验证 usage/* 和 system/* 端点已注册。
 /// 之前这些路由缺失（返回 404），现已修复注册。
 #[tokio::test]
@@ -893,9 +928,7 @@ async fn business_workspace_file_edit_then_read() {
 
 // ── Business test 5: Session 创建 → 列表 → 加载 → 清理 ───────────
 
-/// 手动创建 JSONL session 文件 → GET /sessions 列表 → session_core::load_session 加载 → 清理。
-/// Session 数据存储在 ~/.claude/projects/{sanitized_root}/ 下。
-/// NOTE: HTTP load (/sessions/{id}) 验证通过 session_core 替代（test router 路径参数路由限制）。
+/// 手动创建 JSONL session 文件 → GET /sessions 列表 → GET /sessions/:id 加载 → 清理。
 #[tokio::test]
 async fn business_session_list_and_load() {
     use claw_agent_ui::{utils, session_core};
@@ -923,7 +956,7 @@ async fn business_session_list_and_load() {
 
     // Step 1: HTTP GET list
     let list_uri = format!("/sessions?root={}", urlencoding(&root));
-    let response = app.oneshot(
+    let response = app.clone().oneshot(
         Request::get(&list_uri).header("accept", "application/json").body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -932,8 +965,14 @@ async fn business_session_list_and_load() {
     let sessions = list.as_array().unwrap();
     assert!(sessions.iter().any(|s| s.get("id").and_then(|v| v.as_str()) == Some(session_id)));
 
-    // Step 2: core load
-    let detail = session_core::load_session(&root, session_id).unwrap();
+    // Step 2: HTTP GET load (with :id path param fix)
+    let load_uri = format!("/sessions/{}?root={}", session_id, urlencoding(&root));
+    let response = app.clone().oneshot(
+        Request::get(&load_uri).header("accept", "application/json").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "HTTP load /sessions/:id should work after :id fix");
+    let body_bytes = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+    let detail: Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(detail.get("id").and_then(|v| v.as_str()), Some(session_id));
     assert_eq!(detail.get("message_count").and_then(|v| v.as_u64()), Some(3));
 
