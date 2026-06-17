@@ -86,18 +86,14 @@ export function startStreamEventListener(): void {
       const prevData = data[name]?.[sessionId];
       const newData = handle(event, prevData);
 
-      let currentData: unknown;
       if (newData !== null) {
         data[name][sessionId] = newData;
-        currentData = newData;
-      } else {
-        currentData = prevData;
-      }
 
-      const cbs = eventCallbacks[name];
-      if (cbs) {
-        for (const cb of cbs) {
-          cb(currentData, sessionId);
+        const cbs = eventCallbacks[name];
+        if (cbs) {
+          for (const cb of cbs) {
+            cb(newData, sessionId);
+          }
         }
       }
     }
