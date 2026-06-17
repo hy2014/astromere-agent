@@ -39,14 +39,14 @@ export function handleSessionStatusEvent(
     return { turnStatus: "ctrl_block" };
   }
 
-  // turn_complete / error / interrupt / process_exit → idle
+  // turn_complete / error / interrupt / process_exit → 无条件 idle
+  // 不检查 prev，因为 prev 可能被无关事件（如 startup）残留的旧数据污染
   if (
     eventType === "turn_complete" ||
     eventType === "error" ||
     eventType === "interrupt" ||
     eventType === "process_exit"
   ) {
-    if (prev?.turnStatus === "idle") return null;
     return { turnStatus: "idle" };
   }
 
