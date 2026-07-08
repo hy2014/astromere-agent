@@ -1,0 +1,3 @@
+# helloworld component has no third-party dependencies.
+# An empty requirements.txt tells engine_executor to run with the system
+# python3 (no virtualenv is created). Add packages here if you extend it.
