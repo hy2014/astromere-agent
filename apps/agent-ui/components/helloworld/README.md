@@ -21,14 +21,17 @@ The full input object is also passed through, so any extra `args` keys survive.
 
 ## How to use it in a DAG
 
-Add a generic node and set its config to point at this folder:
+This component is **not** its own git repository — it lives as a folder
+(`components/helloworld/`) **inside the current project repository**. So `gitUrl`
+points at the **current repo**, and `entryPoint` carries the path to this
+component *within* the cloned repo.
 
 ```json
 {
   "name": "helloworld",
-  "gitUrl": "file:///Users/nazario.wang/workspace/claude-code/apps/agent-ui/components/helloworld",
-  "gitBranch": "master",
-  "entryPoint": "run.py",
+  "gitUrl": "git@github.com:hy2014/astromere-agent.git",
+  "gitBranch": "dev",
+  "entryPoint": "apps/agent-ui/components/helloworld/run.py",
   "args": { "text": "hello" },
   "inputs":  [{ "name": "text", "type": "csv" }],
   "outputs": [
@@ -38,15 +41,19 @@ Add a generic node and set its config to point at this folder:
 }
 ```
 
-`gitUrl` **must be a git URL** — this component is its own git repository, so
-reference it by its `file://` URL (a genuine git transport that `engine_executor`
-clones through the same code path as a remote `https://` URL). For real
-deployment, push this folder to a remote and use that URL instead. The engine
-clones once per `(gitUrl, gitBranch)` and caches it under `ENGINE_EXECUTOR_CACHE_ROOT`.
+- `gitUrl` **must be a git URL** — here it is the current repository
+  (`git@github.com:hy2014/astromere-agent.git`; for local dev you can use
+  `file:///Users/nazario.wang/workspace/claude-code`, which `engine_executor`
+  clones through the same code path as a remote URL).
+- `gitBranch` is the branch of the current repo that contains this component
+  (`dev` here).
+- `entryPoint` is the path to `run.py` **relative to the cloned repo root**
+  (`apps/agent-ui/components/helloworld/run.py`), because the engine checks out
+  the whole repo and runs the entry point from there.
 
-(For dev-time convenience you may also point `gitUrl` at a plain local directory
-path — the engine then skips the clone — but a real git URL is the intended
-usage.)
+The engine clones the whole repo once per `(gitUrl, gitBranch)` and caches it
+under `ENGINE_EXECUTOR_CACHE_ROOT`; `entryPoint` is resolved against that clone
+root, so the component is found at its subpath.
 
 ## Run it standalone
 
