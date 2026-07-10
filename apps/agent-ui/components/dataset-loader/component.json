@@ -1,0 +1,9 @@
+{
+  "name": "dataset-loader",
+  "version": "0.1.0",
+  "description": "Load a local CSV/Parquet file and expose its path + schema to the DAG.",
+  "type": "dataset",
+  "entryPoint": "run.py",
+  "inputs": [],
+  "outputs": ["data"]
+}
