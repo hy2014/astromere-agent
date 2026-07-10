@@ -1,0 +1,4 @@
+# dataset-loader has no third-party runtime dependencies: it only validates
+# the file path and reports it back (it does NOT load the data). A non-empty
+# file would make engine_executor build a .venv and `pip install -r`; leaving it
+# empty lets the component run with the system python3 directly.
