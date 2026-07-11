@@ -1,5 +1,9 @@
 # 决策：helloworld 改为真正"读文件 → 加列 → 输出"的组件（2026-07-11）
 
+> ⚠️ 本文档「What」中"扫描入参中任何文件卡片"的表述**已被纠正**：组件必须按声明的端口名
+> 读取输入，不能盲扫所有 value 找 `path`（多输入组件会丢失端口归属）。正确实现见
+> `decisions/2026-07-11-helloworld-read-by-port-name.md`。
+
 ## Why
 - 用户指出 helloworld 当前只做**字符串回声**：`data.get("text")` + 字符串拼接，并不消费上游
   dataset-loader 产出的 `outputFile` 文件卡片 `{"path":..., "format":"csv"}`。

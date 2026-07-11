@@ -197,9 +197,9 @@ AGENT_UI_DB_PATH=/path/to/agent-ui.db ENGINE_EXECUTOR_CACHE_ROOT=/tmp/cache pyth
 而不是文件内容。生产节点（如 `dataset-loader`）只校验并回传路径；**消费节点必须自己
 `open(path)` 读取**。参考实现见 `components/helloworld/run.py`：
 
-- 入参：上游 `outputFile` 卡片经 `build_input` 落到本节点的某个输入端口（这里是 `Input`）：
-  `data["Input"] == {"path": "/x.csv", "format": "csv"}`。helloworld 扫描所有入参值，
-  取第一个带 `path` 键的字典作为源文件卡片。
+- 入参：上游 `outputFile` 卡片经 `build_input` 落到本节点的输入端口 `Input`：
+  `data["Input"] == {"path": "/x.csv", "format": "csv"}`。helloworld **按端口名 `Input`
+  显式读取**这份文件卡片（绝不扫描所有入参值找 `path`）——端口名是组件契约，改端口名须同步改代码。
 - 处理：用标准库 `csv` 读取，给每一行（含表头）追加 `helloworld` 列，值恒为 `"helloworld"`。
 - 出参：写出一份新 CSV，再以**输出端口名 `output`** 为 key 回传文件卡片
   `{"output": {"path": <新csv>, "format": "csv"}}`（worker 按 `source_handle` 路由下游，
