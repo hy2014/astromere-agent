@@ -1,24 +1,27 @@
 """dataset-loader component entry point.
 
-Reads a local CSV or Parquet file path supplied as the `filePath` parameter and
-exposes it to the DAG as a `file` output. The component does NOT load or copy
-the data — it only validates the path and reports it back so downstream nodes
-read the file directly from disk.
+Reads a local CSV or Parquet file path supplied as the `file` parameter and
+exposes it to the DAG via the `outputFile` output port. The component does NOT
+load or copy the data — it only validates the path and reports it back so
+downstream nodes read the file directly from disk.
 
-Contract (see decisions/2026-07-10-dataset-component-design.md):
-  * Input  : JSON at $AGENT_UI_INPUT_PATH. The single parameter `filePath` is
-             the absolute path to a local CSV/Parquet file. It arrives as the
-             node's `config.params` (source node -> no upstream). `filePath` is
-             declared in the component's `config_schema` and filled per-instance
-             by the user.
-  * Output : JSON at $AGENT_UI_OUTPUT_PATH:
-               {"path": "/abs/path/to/file.csv", "format": "csv" | "parquet"}
-             Downstream nodes connect to the `data` output port and read `path`
-             from their own input.
+Contract (see decisions/2026-07-11-align-dataset-loader-to-db-contract.md;
+source of truth = the `components` row in the DB):
+  * Input  : JSON at $AGENT_UI_INPUT_PATH. The single parameter `file` is the
+             absolute path to a local CSV/Parquet file. For a source node (no
+             upstream) the worker feeds this node's `config.params`, i.e.
+             `{"file": "/abs/path"}`. `file` is declared in the component's
+             `config_schema` and filled per-instance by the user.
+  * Output : JSON at $AGENT_UI_OUTPUT_PATH. The whole object is keyed by the
+             output port name `outputFile` (the worker routes downstream edges
+             by `source_handle`, so the key MUST match the port name):
+               {"outputFile": {"path": "/abs/path/to/file.csv",
+                               "format": "csv" | "parquet"}}
 
 Smoke-test:
-  echo '{"filePath":"/tmp/sample.csv"}' > in.json
+  echo '{"file":"/tmp/sample.csv"}' > in.json
   AGENT_UI_INPUT_PATH=in.json AGENT_UI_OUTPUT_PATH=out.json python3 run.py
+  cat out.json   # -> {"outputFile": {"path": "/tmp/sample.csv", "format": "csv"}}
 """
 
 import json
@@ -56,19 +59,21 @@ def main() -> int:
     if not isinstance(data, dict):
         return fail("input must be a JSON object")
 
-    raw = data.get("filePath", "")
+    # The parameter key is `file` (matches the component's config_schema in DB).
+    raw = data.get("file", "")
     if not isinstance(raw, str) or not raw.strip():
-        return fail("missing required parameter `filePath` (local CSV/Parquet file)")
+        return fail("missing required parameter `file` (local CSV/Parquet file)")
 
     path = os.path.abspath(raw)
     if not os.path.isfile(path):
-        return fail(f"filePath does not exist or is not a file: {path}")
+        return fail(f"file does not exist or is not a file: {path}")
 
     fmt = detect_format(path)
     if not fmt:
         return fail(f"unsupported file type (need .csv/.csv.gz/.parquet): {path}")
 
-    result = {"path": path, "format": fmt}
+    # Keyed by the output port name `outputFile` so the worker can route it.
+    result = {"outputFile": {"path": path, "format": fmt}}
 
     try:
         with open(output_path, "w", encoding="utf-8") as fh:
