@@ -11,23 +11,24 @@ data — downstream nodes read the file directly from the returned path.
 
 ## Parameters (config_schema)
 
-| key      | type | required | meaning                                    |
-|----------|------|----------|--------------------------------------------|
-| filePath | path | yes      | absolute path to a local .csv/.parquet file |
+| key  | type   | required | meaning                                    |
+|------|--------|----------|--------------------------------------------|
+| file | string | no       | absolute path to a local .csv/.parquet file |
 
 ## Output ports
 
-| port | type   | meaning                                                   |
-|------|--------|-----------------------------------------------------------|
-| data | string | absolute path of the file (downstream reads it from disk) |
+| port       | type   | meaning                                                   |
+|------------|--------|-----------------------------------------------------------|
+| outputFile | string | absolute path of the file (downstream reads it from disk) |
 
-The output JSON written to `AGENT_UI_OUTPUT_PATH` is:
+The output JSON written to `AGENT_UI_OUTPUT_PATH` is keyed by the port name
+`outputFile`:
 
 ```json
-{"path": "<absolute path>", "format": "csv" | "parquet"}
+{"outputFile": {"path": "<absolute path>", "format": "csv" | "parquet"}}
 ```
 
-Downstream nodes connect to the `data` port and read `output.path`.
+Downstream nodes connect to the `outputFile` port and read `output["outputFile"]["path"]`.
 
 ## Notes
 
