@@ -134,6 +134,8 @@ export type SettingsViewProps = {
 
 export type AppView = "workspace" | "skills" | "mcp" | "settings" | "terminal";
 
+export type AppMode = "code" | "dag";
+
 export type ResolvedRuntimeBundleEvent = {
   event: import("../types").AgentReplStreamEvent;
   bundleId: string | null;
