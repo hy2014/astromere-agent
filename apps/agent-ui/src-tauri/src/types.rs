@@ -275,6 +275,155 @@ pub struct SessionReadyRegistry {
     pub condvar: std::sync::Condvar,
 }
 
+// ─── Component / DAG platform types ───────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub status: String,
+    /// Deprecated: retained as a physical column to avoid a dangerous DROP/ALTER
+    /// rebuild. No longer used for logical decisions; session paths are derived
+    /// from `component_id` instead.
+    pub workspace_root: String,
+    /// Git source — the configuration truth-source for where the code lives.
+    pub git_url: String,
+    pub git_branch: String,
+    /// Optional pinned ref (tag/branch); folded into the env cache key.
+    pub git_ref: String,
+    /// Git entry file relative path, e.g. `run.py` or `subdir/run.py`.
+    pub entry_point: String,
+    pub input_schema: Value,
+    pub output_schema: Value,
+    /// Configuration schema (config_schema): the list of parameter declarations
+    /// the component exposes to its users. Stored as a JSON array of
+    /// `{key, label, type, required, default, enum, description}`. NULL/empty =
+    /// no parameters. Declared by the user in the UI, NOT by the git author.
+    pub config_schema: Value,
+    pub tags: Vec<String>,
+    /// Registry flag: `true` => registered/global component (appears in the
+    /// "组件" list, reusable across DAGs); `false` => a generic, non-global
+    /// component created by dragging "通用组件" onto the canvas.
+    pub global: bool,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentSession {
+    pub id: String,
+    pub component_id: String,
+    pub session_id: String,
+    pub session_path: String,
+    pub title: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dag {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub execution_order: Option<Value>,
+    pub cron: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DagNode {
+    pub id: String,
+    pub dag_id: String,
+    pub component_id: String,
+    pub label: String,
+    pub position: DagNodePosition,
+    pub config: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DagNodePosition {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DagEdge {
+    pub id: String,
+    pub dag_id: String,
+    pub source_node_id: String,
+    pub target_node_id: String,
+    pub source_handle: String,
+    pub target_handle: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DagDetail {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub execution_order: Option<Value>,
+    pub cron: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub nodes: Vec<DagNode>,
+    pub edges: Vec<DagEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DagExecution {
+    pub id: String,
+    pub dag_id: String,
+    pub status: String,
+    pub trigger_kind: Option<String>,
+    pub started_at_ms: Option<i64>,
+    pub completed_at_ms: Option<i64>,
+    pub outputs: Option<Value>,
+    /// Frozen DAG plan (nodes w/ config + edges + execution_order) captured at
+    /// submit time. Lets a historical run replay / display the exact config it
+    /// ran with, not the live DAG that may have changed since.
+    pub snapshot: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeExecution {
+    pub id: String,
+    pub execution_id: String,
+    pub node_id: String,
+    pub status: String,
+    pub started_at_ms: Option<i64>,
+    pub completed_at_ms: Option<i64>,
+    pub output_path: Option<String>,
+    /// Per-output-port runtime artifacts (third layer = 运行产物), indexed by
+    /// output port key, e.g. `{"data": "/path/a.csv", "metrics": "/path/m.json"}`.
+    /// Written by the Python execution engine; NOT a user configuration input.
+    pub outputs: Option<Value>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionLog {
+    pub id: Option<i64>,
+    pub execution_id: String,
+    pub node_id: Option<String>,
+    pub level: String,
+    pub message: String,
+    pub timestamp_ms: i64,
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]

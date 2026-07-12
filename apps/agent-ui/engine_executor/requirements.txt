@@ -1,0 +1,4 @@
+# engine_executor uses only the Python standard library (sqlite3, subprocess,
+# json, signal, threading, hashlib). No third-party dependencies are required,
+# so a plain `python3 worker.py` is enough. If you later add GitPython or other
+# helpers, list them here.

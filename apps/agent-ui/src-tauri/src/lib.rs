@@ -23,7 +23,12 @@ impl AppHandle {
     }
 }
 
+pub mod component_session;
+pub mod components;
 pub mod control;
+pub mod dag;
+pub mod dag_api;
+pub mod engine;
 pub mod mcp;
 pub mod mcp_core;
 pub mod models;
@@ -31,6 +36,7 @@ pub mod models_core;
 pub mod permissions;
 pub mod repl;
 pub mod runtime;
+pub mod scheduler;
 pub mod server;
 pub mod session;
 pub mod session_core;

@@ -26,6 +26,8 @@ use crate::types::{
 };
 use crate::workspace;
 
+use crate::engine;
+
 // ─── AppError: proper HTTP error responses ───────────────────────────
 // Before this fix, all handlers returned `Result<Json<T>, String>`.
 // In axum 0.7, `String` implements `IntoResponse` by returning 200 OK with
@@ -172,7 +174,7 @@ async fn create_session_handler(
 }
 
 pub fn app_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health_handler))
         // sessions
         .route("/sessions/:id", get(load_session_handler))
@@ -227,9 +229,12 @@ pub fn app_router(state: AppState) -> Router {
         // SSE
         .route("/events", get(sse_handler))
         // client
-        .route("/client/exit", post(client_exit_handler))
-        .layer(CorsLayer::permissive())
-        .with_state(state)
+        .route("/client/exit", post(client_exit_handler));
+    // dag / component / execution (pure HTTP remote mode)
+    let router = crate::dag_api::register_dag_routes(router);
+    // CORS must wrap ALL routes (incl. the dag routes added above). In axum 0.7
+    // `.layer()` only wraps routes defined BEFORE it, so apply it LAST.
+    router.layer(CorsLayer::permissive()).with_state(state)
 }
 
 // ─── Model handlers ───────────────────────────────────────────────────
@@ -961,10 +966,19 @@ pub fn stateless_test_router() -> Router {
 
 /// 启动 HTTP server（在独立 tokio runtime 上运行）。
 /// `app_handle` is None in --remote mode.
-pub async fn run_server(app_handle: Option<AppHandle>) {
+/// `run_worker` = whether this process is the DAG execution host and should
+/// launch + supervise `engine_executor/worker.py`. The desktop GUI (pure
+/// client in dag pure-HTTP mode) passes false; a --remote server passes true.
+pub async fn run_server(app_handle: Option<AppHandle>, run_worker: bool) {
     if !http_enabled() {
         eprintln!("[http] disabled (AGENT_UI_HTTP_ENABLED=0)");
         return;
+    }
+
+    // 执行引擎（worker.py）随 server 启动并托管：崩溃自重启、退出时回收。
+    // 这样 worker 永远与"拥有队列/DB 的执行主机"同机，桌面纯 client 不再起它。
+    if run_worker {
+        engine::start_worker_supervisor();
     }
 
     let port = http_port();
