@@ -9,6 +9,11 @@
   color: #cbd5e1;
 }
 
+.side-panel-mode {
+  padding: 12px 16px;
+  border-bottom: 1px solid #1e293b;
+}
+
 .brand-block {
   display: flex;
   align-items: center;

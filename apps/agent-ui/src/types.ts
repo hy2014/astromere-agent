@@ -418,3 +418,189 @@ export type StreamLink = {
   kind: "file" | "markdown" | "pdf" | "image" | "report";
   path: string;
 };
+
+// ─── Component / DAG platform types ───────────────────────────────────────
+
+export type ParameterSchema = {
+  type: "object";
+  properties: Record<string, ParameterDef>;
+  required?: string[];
+};
+
+export type ParameterDef = {
+  type: "string" | "number" | "integer" | "boolean" | "array" | "object";
+  description?: string;
+  default?: unknown;
+  items?: ParameterDef;
+  // Carries the component port format ("parquet" | "csv") when the property is
+  // derived from a component IO port. Optional / non-standard.
+  format?: string;
+};
+
+// ─── Component configuration schema (config_schema) ────────────────────────
+// Declared by the user in the UI (definition-level), NOT by the git author.
+// Each item is one parameter the component exposes to its instances. See
+// docs/components.md "配置项 schema (config_schema)".
+
+export type ConfigFieldBaseType =
+  | "string"
+  | "number"
+  | "boolean"
+  | "enum"
+  | "path"
+  | "date";
+
+// A `list` parameter is encoded as an object so the element type is explicit:
+// `{kind: "list", element: <base type>}`.
+export type ConfigFieldType = ConfigFieldBaseType | {kind: "list"; element: ConfigFieldBaseType};
+
+export type ConfigSchemaItem = {
+  key: string;
+  label: string;
+  type: ConfigFieldType;
+  required: boolean;
+  default?: unknown;
+  // Only meaningful when `type === "enum"`: the allowed values.
+  enum?: string[];
+  description?: string;
+};
+
+export type Component = {
+  id: string;
+  name: string;
+  description: string;
+  status: "draft" | "exploring" | "generated" | "published" | "deprecated";
+  // Deprecated: retained only because the backend column still exists
+  // (avoiding a dangerous DROP rebuild). Never used for logic anymore.
+  workspaceRoot: string;
+  // Git source — the configuration truth-source for where the code lives.
+  gitUrl: string;
+  gitBranch: string;
+  gitRef: string;
+  entryPoint: string;
+  inputSchema: ParameterSchema;
+  outputSchema: ParameterSchema;
+  // Declared parameter schema (config_schema). Empty array / undefined = no
+  // parameters. Stored as a JSON array on the backend.
+  configSchema?: ConfigSchemaItem[];
+  tags: string[];
+  // Registry flag: true = registered/global (reusable across DAGs, shown in the
+  // "组件" list); false = generic, non-global (created by dragging "通用组件",
+  // not shown in the list).
+  global: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+export type ComponentSession = {
+  id: string;
+  componentId: string;
+  sessionId: string;
+  sessionPath: string;
+  title?: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+export type DagNodePosition = {
+  x: number;
+  y: number;
+};
+
+export type Dag = {
+  id: string;
+  name: string;
+  description?: string;
+  status: "draft" | "published" | "archived";
+  executionOrder?: string[];
+  cron?: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+export type DagNode = {
+  id: string;
+  dagId: string;
+  componentId: string;
+  label: string;
+  position: DagNodePosition;
+  config: Record<string, unknown>;
+};
+
+export type DagEdge = {
+  id: string;
+  dagId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  sourceHandle: string;
+  targetHandle: string;
+};
+
+// ---- Generic component (built-in, no pre-defined template library) ----
+// `GenericComponentConfig` is the **component-definition** shape edited by
+// `GenericComponentForm` / `RegisterComponentForm` and persisted to the
+// `components` table (git source, IO ports, name, parameter schema). It is NOT
+// the `DagNode.config` instance payload — that carries only `params` (see
+// `InstanceConfigForm`). The two are distinct: definition lives in `components`,
+// instance params live in `node.config.params`.
+
+export type PortType = "file" | "parquet" | "csv";
+
+export type PortDef = {
+  name: string;
+  type: PortType;
+};
+
+export type GenericComponentConfig = {
+  name: string;
+  inputs: PortDef[];
+  outputs: PortDef[];
+  gitUrl: string;
+  gitBranch: string; // empty => "master" at execution time
+  gitRef: string; // optional pinned ref (tag/branch)
+  params: Record<string, string>;
+  entryPoint: string;
+  // Declared parameter schema (definition-level). Empty = no parameters.
+  configSchema: ConfigSchemaItem[];
+};
+
+export type DagDetail = Dag & {
+  nodes: DagNode[];
+  edges: DagEdge[];
+};
+
+export type DagExecution = {
+  id: string;
+  dagId: string;
+  status: "pending" | "running" | "success" | "failed" | "cancelled";
+  triggerKind?: "manual" | "cron" | "api";
+  startedAtMs?: number;
+  completedAtMs?: number;
+  outputs?: Record<string, unknown>;
+  /** Frozen DAG plan (nodes w/ config + edges + execution order) captured at
+   *  submit time. Viewing a historical run shows this config, not the live one. */
+  snapshot?: string;
+};
+
+export type NodeExecution = {
+  id: string;
+  executionId: string;
+  nodeId: string;
+  status: "preparing" | "running" | "success" | "failed" | "cancelled";
+  startedAtMs?: number;
+  completedAtMs?: number;
+  outputPath?: string;
+  // Per-output-port runtime artifacts (third layer = 运行产物), indexed by
+  // output port key, e.g. {"data": "/path/a.csv", "metrics": "/path/m.json"}.
+  outputs?: Record<string, unknown>;
+  error?: string;
+};
+
+export type ExecutionLog = {
+  id?: number;
+  executionId: string;
+  nodeId?: string;
+  level: "info" | "error" | "stdout" | "stderr";
+  message: string;
+  timestampMs: number;
+};

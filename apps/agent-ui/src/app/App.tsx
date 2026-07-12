@@ -29,6 +29,9 @@ import {handleDetailEvent} from "./stream-handlers/message-detail";
 import {handleSessionStatusEvent} from "./stream-handlers/turn-status";
 import {TerminalView} from "./Terminal";
 import {RemoteTerminalPlaceholder} from "./RemoteTerminalPlaceholder";
+import {ComponentModeView} from "./component-mode/ComponentModeView";
+import {ErrorBoundary} from "./ErrorBoundary";
+import {ModeToggle} from "./ModeToggle";
 import {SkillsView} from "./components/skills-view";
 import {McpServersView} from "./components/mcp-servers-view";
 import {SettingsView} from "./components/settings-view";
@@ -56,6 +59,7 @@ import {runtimeSessionToArtifacts,} from "./debug-utils";
 import type {AgentPermissionState, AgentReplStreamEvent, PermissionMode, StreamItem, StreamLink,} from "../types";
 import {sqliteDatabaseInfo,} from "../runtime";
 import type {
+    AppMode,
     AppView,
     HiddenSession,
     PreviewTab,
@@ -172,6 +176,13 @@ export function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>("workspace");
+  const [appMode, setAppMode] = useState<AppMode>(() => {
+    if (typeof window === "undefined") return "code";
+    const stored = window.localStorage.getItem("claw:appMode");
+    // legacy value from before the rename
+    if (stored === "component") return "dag";
+    return (stored as AppMode) ?? "code";
+  });
   const [error, setError] = useState<string | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<string[]>([
     "deepseek-v4-flash",
@@ -233,6 +244,19 @@ export function App() {
       JSON.stringify(uniqueHiddenSessions(hiddenSessions)),
     );
   }, [hiddenSessions]);
+
+  useEffect(() => {
+    window.localStorage.setItem("claw:appMode", appMode);
+  }, [appMode]);
+
+  const handleModeChange = useCallback(
+    (next: AppMode) => {
+      setAppMode(next);
+      setPreviewTabs([]);
+      setActivePreviewId(null);
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -475,6 +499,60 @@ export function App() {
       await clientDebugLog("info", "handleAddProject.success", { projectId });
     } catch (reason) {
       await clientDebugLog("error", "handleAddProject.error", { error: String(reason) });
+      setError(String(reason));
+    }
+  }
+
+  async function handleOpenComponentCode(workspaceRoot: string, sessionId: string) {
+    try {
+      const workspace = await openWorkspace(workspaceRoot);
+      await addWorkspaceRegistryEntry(workspace.root);
+      const projectId = projectIdFromRoot(workspace.root);
+      const existingSessions = await listRuntimeSessions(workspace.root);
+      const initialSessions = sessionsFromRuntimeSummaries(
+        workspace.root,
+        existingSessions,
+        hiddenSessions,
+      );
+      const sessionExists = initialSessions.some((s) => s.id === sessionId);
+      if (!sessionExists) {
+        initialSessions.unshift({
+          id: sessionId,
+          title: "Component session",
+          processStatus: "stopped",
+        });
+      }
+      const nextProject: ProjectFolder = {
+        id: projectId,
+        name: workspace.name || workspaceRoot,
+        root: workspace.root,
+        sessions: dedupeSessions(initialSessions),
+        worktreeSessions: [],
+      };
+
+      setProjects((currentProjects) => {
+        const existing = currentProjects.find((project) => project.id === projectId);
+        if (existing) {
+          return currentProjects.map((project) =>
+            project.id === projectId
+              ? {
+                  ...project,
+                  sessions: dedupeSessions([...project.sessions, ...initialSessions]),
+                }
+              : project,
+          );
+        }
+        return [...currentProjects, nextProject];
+      });
+      setExpandedFolders((folders) => new Set(folders).add(projectId));
+      setActiveProjectId(projectId);
+      setActiveSessionId(sessionId);
+      setAppMode("code");
+      setActiveView("workspace");
+      setPreviewTabs([]);
+      setActivePreviewId(null);
+      setError(null);
+    } catch (reason) {
       setError(String(reason));
     }
   }
@@ -823,11 +901,25 @@ export function App() {
       });
   }
 
+  if (appMode === "dag") {
+    return (
+      <ErrorBoundary label="DAG mode">
+        <ComponentModeView
+          onSwitchToCode={() => handleModeChange("code")}
+          onOpenCode={handleOpenComponentCode}
+        />
+      </ErrorBoundary>
+    );
+  }
+
   return (
     <main
       className={`app-shell ${activeView === "settings" || activeView === "skills" ? "settings-mode" : ""}`}
     >
       <aside className="side-panel" aria-label="Project and skills">
+        <div className="side-panel-mode">
+          <ModeToggle mode={appMode} onChange={handleModeChange} />
+        </div>
         <WorkspaceTreeView
           projects={projects}
           activeSessionId={activeSessionId}

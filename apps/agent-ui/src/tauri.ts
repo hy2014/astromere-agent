@@ -9,7 +9,16 @@ import type {
   AgentReplStreamEvent,
   AgentTurnResponse,
   BashRuntimeRequest,
+  Component,
+  ComponentSession,
+  Dag,
+  DagDetail,
+  DagExecution,
+  DagEdge,
+  DagNode,
+  ExecutionLog,
   FileView,
+  NodeExecution,
   LocalImagePreview,
   LocalImageMetadata,
   GitDiff,
@@ -373,5 +382,116 @@ export function loadModelCallUsages(
   sessionId: string,
 ): Promise<ModelCallUsage[]> {
   return invoke("load_model_call_usages", { modelCallIds, sessionId });
+}
+
+// ── Component / DAG platform IPC wrappers ─────────────────────────────────
+
+export function listComponents(): Promise<Component[]> {
+  return invoke("list_components");
+}
+
+export function getComponent(componentId: string): Promise<Component> {
+  return invoke("get_component", { componentId });
+}
+
+export function updateComponent(component: Component): Promise<Component> {
+  return invoke("update_component", { component });
+}
+
+export function createComponent(component: Component): Promise<Component> {
+  return invoke("create_component", { component });
+}
+
+export function deleteComponent(componentId: string): Promise<void> {
+  return invoke("delete_component", { componentId });
+}
+
+export function listComponentFiles(componentId: string): Promise<string[]> {
+  return invoke("list_component_files", { componentId });
+}
+
+export function createComponentSession(
+  componentId: string,
+  title?: string,
+): Promise<ComponentSession> {
+  return invoke("create_component_session", { componentId, title });
+}
+
+export function listComponentSessions(componentId: string): Promise<ComponentSession[]> {
+  return invoke("list_component_sessions", { componentId });
+}
+
+export function deleteComponentSession(sessionId: string): Promise<void> {
+  return invoke("delete_component_session", { sessionId });
+}
+
+export function verifyComponent(componentId: string): Promise<string[]> {
+  return invoke("verify_component", { componentId });
+}
+
+export function listDags(): Promise<Dag[]> {
+  return invoke("list_dags");
+}
+
+export function getDag(dagId: string): Promise<DagDetail> {
+  return invoke("get_dag", { dagId });
+}
+
+export function createDag(name: string): Promise<Dag> {
+  return invoke("create_dag", { name });
+}
+
+export function updateDag(
+  dag: Dag,
+  nodes: DagNode[],
+  edges: DagEdge[],
+): Promise<void> {
+  return invoke("update_dag", { dag, nodes, edges });
+}
+
+export function deleteDag(dagId: string): Promise<void> {
+  return invoke("delete_dag", { dagId });
+}
+
+export function publishDag(dagId: string, cron?: string): Promise<Dag> {
+  return invoke("publish_dag", { dagId, cron: cron ?? null });
+}
+
+export function unpublishDag(dagId: string): Promise<Dag> {
+  return invoke("unpublish_dag", { dagId });
+}
+
+export function runDag(dagId: string): Promise<DagExecution> {
+  return invoke("run_dag", { dagId });
+}
+
+export function getExecution(executionId: string): Promise<DagExecution> {
+  return invoke("get_execution", { executionId });
+}
+
+export function listExecutions(dagId: string): Promise<DagExecution[]> {
+  return invoke("list_executions", { dagId });
+}
+
+export function cancelExecution(executionId: string): Promise<void> {
+  return invoke("cancel_execution", { executionId });
+}
+
+export function getExecutionLogs(executionId: string): Promise<ExecutionLog[]> {
+  return invoke("get_execution_logs", { executionId });
+}
+
+export function getNodeExecutions(executionId: string): Promise<NodeExecution[]> {
+  return invoke("get_node_executions", { executionId });
+}
+
+export function deleteDagNode(dagId: string, nodeId: string): Promise<void> {
+  return invoke("delete_dag_node", { dagId, nodeId });
+}
+
+export function listenDagEvents(
+  handler: (event: Record<string, unknown>) => void,
+): Promise<UnlistenFn> {
+  return listen<Record<string, unknown>>("agent-dag-event", (event) => handler(event.payload));
 }
 
