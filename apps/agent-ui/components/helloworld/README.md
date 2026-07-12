@@ -34,7 +34,7 @@ component *within* the cloned repo.
 ```json
 {
   "name": "helloworld",
-  "gitUrl": "git@github.com:hy2014/astromere-agent.git",
+  "gitUrl": "git@example.com:your-org/your-repo.git",
   "gitBranch": "dev",
   "entryPoint": "apps/agent-ui/components/helloworld/run.py",
   "inputs":  [{ "name": "Input", "type": "string", "format": "file" }],
@@ -43,8 +43,8 @@ component *within* the cloned repo.
 ```
 
 - `gitUrl` **must be a git URL** — here it is the current repository
-  (`git@github.com:hy2014/astromere-agent.git`; for local dev you can use
-  `file:///Users/nazario.wang/workspace/claude-code`, which `engine_executor`
+  (e.g. `git@example.com:your-org/your-repo.git`; for local dev you can use
+  `file:///path/to/your/clone`, which `engine_executor`
   clones through the same code path as a remote URL).
 - `gitBranch` is the branch of the current repo that contains this component
   (`dev` here).
