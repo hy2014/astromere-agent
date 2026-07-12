@@ -4,7 +4,16 @@ mod terminal;
 use claw_agent_ui::server;
 
 #[cfg(feature = "gui")]
+use claw_agent_ui::component_session;
+
+#[cfg(feature = "gui")]
+use claw_agent_ui::components;
+
+#[cfg(feature = "gui")]
 use claw_agent_ui::control;
+
+#[cfg(feature = "gui")]
+use claw_agent_ui::dag;
 
 #[cfg(feature = "gui")]
 use claw_agent_ui::mcp;
@@ -20,6 +29,9 @@ use claw_agent_ui::repl;
 
 #[cfg(feature = "gui")]
 use claw_agent_ui::runtime;
+
+#[cfg(feature = "gui")]
+use claw_agent_ui::scheduler;
 
 #[cfg(feature = "gui")]
 use claw_agent_ui::skills;
@@ -47,21 +59,21 @@ fn main() {
 
     #[cfg(not(feature = "gui"))]
     {
-        // No Tauri — always headless
+        // No Tauri — always headless. This IS the server role: run the worker.
         eprintln!("[agent-ui] headless mode — HTTP server only");
         let rt = tokio::runtime::Runtime::new()
             .expect("HTTP server: failed to create tokio runtime");
-        rt.block_on(server::run_server(None));
+        rt.block_on(server::run_server(None, true));
         return;
     }
 
     #[cfg(feature = "gui")]
     {
         if is_remote {
-            eprintln!("[agent-ui] remote mode — HTTP server only");
+            eprintln!("[agent-ui] remote mode — HTTP server only (server role, runs worker)");
             let rt = tokio::runtime::Runtime::new()
                 .expect("HTTP server: failed to create tokio runtime");
-            rt.block_on(server::run_server(None));
+            rt.block_on(server::run_server(None, true));
             return;
         }
 
@@ -74,12 +86,14 @@ fn main() {
                     eprintln!("[deepseek-pricing] refresh failed: {error}");
                 }
             });
-            // HTTP server 在独立 tokio runtime 上运行
+            // HTTP server 在独立 tokio runtime 上运行。
+            // 桌面 GUI 是 dag 的纯 client（dag 走远程 HTTP），本机不起 worker
+            // （run_worker=false）；本机 HTTP server 仅服务 code mode。
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new()
                     .expect("HTTP server: failed to create tokio runtime");
-                rt.block_on(server::run_server(Some(app_handle)));
+                rt.block_on(server::run_server(Some(app_handle), false));
             });
             Ok(())
         })
@@ -127,6 +141,31 @@ fn main() {
             control::get_agent_context_usage,
             control::send_agent_repl_input,
             control::run_agent_turn,
+            components::list_components,
+            components::get_component,
+            components::create_component,
+            components::update_component,
+            components::delete_component,
+            components::list_component_files,
+            components::verify_component,
+            component_session::create_component_session,
+            component_session::list_component_sessions,
+            component_session::update_component_session_title,
+            component_session::delete_component_session,
+            dag::list_dags,
+            dag::get_dag,
+            dag::create_dag,
+            dag::update_dag,
+            dag::delete_dag,
+            dag::delete_dag_node,
+            dag::publish_dag,
+            dag::unpublish_dag,
+            scheduler::run_dag,
+            scheduler::get_execution,
+            scheduler::list_executions,
+            scheduler::get_execution_logs,
+            scheduler::get_node_executions,
+            scheduler::cancel_execution,
             save_bundle_usage_snapshot,
             load_bundle_usage_snapshot,
             load_bundle_usage_snapshots_for_session,
@@ -142,5 +181,7 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Claw Agent UI");
+    // 应用退出后回收执行引擎 worker（stop_worker 会置 SHUTDOWN，supervisor 不再重建）
+    claw_agent_ui::engine::stop_worker();
     } // #[cfg(feature = "gui")]
 }

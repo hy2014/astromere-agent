@@ -3,3 +3,4 @@ dist/
 .npm-cache/
 src-tauri/target/
 dist-checker
+.workbuddy

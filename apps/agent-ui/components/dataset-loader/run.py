@@ -5,8 +5,7 @@ exposes it to the DAG via the `outputFile` output port. The component does NOT
 load or copy the data — it only validates the path and reports it back so
 downstream nodes read the file directly from disk.
 
-Contract (see decisions/2026-07-11-align-dataset-loader-to-db-contract.md;
-source of truth = the `components` row in the DB):
+Contract (source of truth = the `components` row in the DB):
   * Input  : JSON at $AGENT_UI_INPUT_PATH. The single parameter `file` is the
              absolute path to a local CSV/Parquet file. For a source node (no
              upstream) the worker feeds this node's `config.params`, i.e.
