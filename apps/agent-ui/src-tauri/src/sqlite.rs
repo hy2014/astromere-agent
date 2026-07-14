@@ -893,6 +893,10 @@ pub fn ensure_component_tables(conn: &Connection) -> Result<(), String> {
 
     // Cron schedule for DAGs: add the column to already-created DBs without wiping data.
     add_column_if_missing(conn, "dags", "cron", "TEXT")?;
+    // Last cron-triggered submit, stored as the start-of-minute epoch millis. The
+    // cron scheduler (scheduler.rs) uses it to avoid firing the same DAG more than
+    // once within a single minute across its 30s poll cycles.
+    add_column_if_missing(conn, "dags", "last_cron_run_ms", "INTEGER")?;
 
     // Execution worker claim/lease columns for the Python execution engine
     // (producer-consumer model). Added without wiping existing rows.

@@ -7,7 +7,6 @@ import type {
   ParameterDef,
   ParameterSchema,
   PortDef,
-  PortType,
 } from "../../types";
 
 // dataTransfer key used when dragging a *registered* component from the sidebar
@@ -26,10 +25,16 @@ export const GENERIC_DRAG_KEY = "application/claw-generic";
 export function schemaToPorts(schema?: ParameterSchema | null): PortDef[] {
   if (!schema || !schema.properties) return [];
   return Object.entries(schema.properties).map(([name, def]) => {
-    const fmt = def.format;
-    const type: PortType =
-      fmt === "file" ? "file" : fmt === "parquet" ? "parquet" : "csv";
-    return {name, type};
+    // A status (control-flow) port is encoded as {type:"status"}. Everything
+    // else is a file (data) port encoded as {type:"string", format:<fmt>}; the
+    // `format` sub-property carries the file type (parquet / csv / json / …),
+    // "file" or missing ⇒ any file.
+    if (def.type === "status") {
+      return {name, type: "status"};
+    }
+    const rawFmt = typeof def.format === "string" ? def.format : undefined;
+    const format = rawFmt && rawFmt !== "file" ? rawFmt : undefined;
+    return {name, type: "file", format};
   });
 }
 
@@ -38,7 +43,12 @@ export function portsToSchema(ports: PortDef[]): ParameterSchema {
   for (const port of ports) {
     const name = port.name.trim();
     if (name === "") continue;
-    properties[name] = {type: "string", format: port.type};
+    // Status ports carry no data ⇒ {type:"status"}. File ports keep the
+    // JSON-schema shape {type:"string", format:<fmt>} the backend already stores.
+    properties[name] =
+      port.type === "status"
+        ? {type: "status"}
+        : {type: "string", format: port.format ?? "file"};
   }
   return {type: "object", properties};
 }

@@ -65,14 +65,28 @@ Related: [docs/mode-toggle.md](mode-toggle.md), [docs/components.md](components.
   IO 端口在画布「配置」tab 手画（`+ 输入 / + 输出`）——这是通用组件的专属能力。
 - **注册** = 写 `components` 表（`global=1`：组件定义 git 来源 / 入口 / 参数 / IO）。
   注册表单内含「输入/输出端口」编辑区（key + 类型，默认 `file`），注册即声明 IO，画布只读展示。
+- **组件名全局唯一（2026-07-14）**：`components` 表中**所有组件**（无论 `global=0` 通用还是 `global=1` 注册）的 `name` 必须全局唯一。
+  后端 `create_component` / `update_component` 写入前按 `name` 全局查重（update 排除自身 `id`），
+  命中即返回「已存在同名组件「X」」中文错误；前端 `RegisterComponentForm` 也实时查重（对所有组件生效、排除正在编辑的自身），
+  重名时红字提示「已存在同名组件」并禁用「注册 / 保存修改」。通用组件（`global=0`）拖入时即按 `通用组件-<随机后缀>` 赋**区分默认名**
+  （不共享、不复用），实践上不会撞名、拖多个互不拦截，但仍受全局唯一约束（手动改成已存在名字会被拦）。
+  与「被引用则拦截」同为业务层友好错误，不动 schema、免迁移。
 - **拖拽（复用）** = 从「组件」列表拖一个已注册组件到画布，写 `dag_nodes`（`component_id`
   引用已注册组件）。拖拽时**不再新建空白组件**。
 - **IO 端口编辑按组件类型区分（2026-07-10 决策）**：
   - 通用组件（`global=0`）：画布「配置」tab 可手画端口（`+ 输入 / + 输出`，可编辑改名/类型/删除）。
   - 注册的 global 组件（`global=1`）：IO 由注册时声明的 `input_schema` / `output_schema` 决定，
     画布「配置」tab 对其**只读展示**端口 key，**不可手画、不可编辑**。注册组件只关心 input/output 的 key。
-  - 注册时端口类型默认 `file`（选项 `file` / `csv` / `parquet`）；与「端口传文件引用、格式在 payload
-    里」的 file-centric 模型一致。
+  - 端口**种类（kind）有两种：`file` 与 `status`**。
+    - `file`：数据端口，传文件引用。可再选**文件格式**子属性：`parquet` / `csv` / `json` / …，
+      留空 = 任意文件。即 `parquet`/`csv` 不是端口类型，而是 `file` 端口的 `format` 子属性——
+      与「端口传文件引用、格式在 payload 里」的 file-centric 模型一致。
+    - `status`：**控制流端口**，不承载数据，只表达「任务依赖」。两节点用 status 边相连即建立
+      一条纯控制依赖：上游运行成功 → 下游正常跑；上游失败/被跳过 → 下游被**跳过（skipped）**并
+      继续向再下游传播失败。用于「两组件有先后依赖但没有文件数据传递」的场景（详见
+      [docs/engine-executor.md](engine-executor.md) status 门控）。
+    - 连线**同类型校验**：只能 `file→file`、`status→status`，禁止交叉连接（画布
+      `isValidConnection` 拦截）。画布圆点：**实心 = file，空心 = status**，鼠标悬浮显示端口类型。
   - 画布节点圆点严格按 schema 渲染，**0 声明 ⇒ 0 点**，通用组件与已注册组件完全一致，
     无任何兜底画点（画布即 schema 镜像：看到几个点就是几个端口，没有写死的隐藏点）。
     通用组件想连线，先在配置 tab 用「+ 输入 / + 输出」声明端口，圆点才出现。
@@ -122,8 +136,13 @@ Tauri WebView **未实现 `window.prompt` / `window.confirm` / `window.alert`**�
 
 ## 删除组件
 
-- 入口：右侧「配置」tab 底部的「删除组件」按钮，或节点右键菜单的「删除」项
-  （画布节点上的 `×` 按钮已移除，避免干扰节点 UI）。
+- **组件库删除（按组件定义删）**：左侧「组件」列表每个注册组件 `⋯` 菜单的「删除」项
+  → `confirm` 二次确认 → 调 `deleteComponent(id)`（`DELETE /api/components/:id` →
+  `delete_component`）。**被引用保护**：若仍有 DAG 节点引用该组件（拖入过画布），后端直接拒绝
+  并返回中文提示「请先在画布中删除这些组件节点」；用户需先删引用它的节点（见下）再回来删组件。
+  未被引用时物理删除 `components` 行，其 `component_sessions` 因 FK 级联一并清掉。
+- **画布节点删除（按实例删）**：右侧「配置」tab 底部的「删除组件」按钮，或节点右键菜单的
+  「删除」项（画布节点上的 `×` 按钮已移除，避免干扰节点 UI）。
 - 两者都调 `delete_dag_node(dag_id, node_id)`（见 [docs/dag.md](dag.md)）：物理删除节点 +
   触及它的边；仅当该 component 不被其它节点引用时才级联删 `components` 行（其 session 一并清掉）。
 - 删除前用 `@tauri-apps/plugin-dialog` 的 `confirm` 二次确认（不使用原生 `window.confirm`）。

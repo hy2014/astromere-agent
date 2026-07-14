@@ -14,8 +14,9 @@ import {
   useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type {Component, DagEdge, DagNode} from "../../types";
+import type {Component, DagEdge, DagNode, PortDef} from "../../types";
 import {createComponent} from "./api";
+import {message} from "@tauri-apps/plugin-dialog";
 import {COMPONENT_DRAG_KEY, GENERIC_DRAG_KEY, schemaToPorts} from "./componentModel";
 
 export type ComponentCanvasProps = {
@@ -100,8 +101,15 @@ function ComponentNode({data}: {data: ComponentNodeData}) {
   // ⇒ 0 dots, for both generic and registered components. To wire a generic
   // node, declare its ports first in the config tab (+ 输入 / + 输出); the dots
   // then appear.
-  const inputPorts = Object.keys(component.inputSchema?.properties ?? {});
-  const outputPorts = Object.keys(component.outputSchema?.properties ?? {});
+  // Render one handle per declared port. A port's *kind* (file | status) drives
+  // its look: status handles are hollow (see component-mode.css) and both show
+  // the type on hover. schemaToPorts decodes {type:"status"} → status, else file.
+  const inputPorts = schemaToPorts(component.inputSchema);
+  const outputPorts = schemaToPorts(component.outputSchema);
+  const portTitle = (p: PortDef) =>
+    p.type === "status" ? "状态" : `文件${p.format ? `·${p.format}` : ""}`;
+  const portClass = (p: PortDef) =>
+    p.type === "status" ? "component-port component-port--status" : "component-port component-port--file";
 
   return (
     <div
@@ -110,12 +118,14 @@ function ComponentNode({data}: {data: ComponentNodeData}) {
       role="button"
       tabIndex={0}
     >
-      {inputPorts.map((name, i) => (
+      {inputPorts.map((port, i) => (
         <Handle
-          key={`in:${name}`}
+          key={`in:${port.name}`}
           type="target"
           position={Position.Top}
-          id={`in:${name}`}
+          id={`in:${port.name}`}
+          className={portClass(port)}
+          title={`${port.name}（${portTitle(port)}）`}
           style={{left: `${((i + 1) / (inputPorts.length + 1)) * 100}%`}}
         />
       ))}
@@ -125,12 +135,14 @@ function ComponentNode({data}: {data: ComponentNodeData}) {
         <span className="component-node-label">{dagNode.label || component.name}</span>
       </div>
       {broken && <div className="component-node-tag component-node-tag--broken">未解析</div>}
-      {outputPorts.map((name, i) => (
+      {outputPorts.map((port, i) => (
         <Handle
-          key={`out:${name}`}
+          key={`out:${port.name}`}
           type="source"
           position={Position.Bottom}
-          id={`out:${name}`}
+          id={`out:${port.name}`}
+          className={portClass(port)}
+          title={`${port.name}（${portTitle(port)}）`}
           style={{left: `${((i + 1) / (outputPorts.length + 1)) * 100}%`}}
         />
       ))}
@@ -254,6 +266,34 @@ function ComponentCanvasInner({
     );
   }, [components]);
 
+  // Resolve a port's kind (file | status) from a node id + handle id. Handle ids
+  // are namespaced "out:<port>" / "in:<port>"; strip the prefix to hit the bare
+  // key in the component schema. Unknown ⇒ treat as "file" (permissive default).
+  const portKindOf = useCallback(
+    (nodeId: string | null, handle: string | null | undefined, dir: "source" | "target"): "file" | "status" => {
+      if (!nodeId) return "file";
+      const fn = flowNodes.find((n) => n.id === nodeId);
+      const comp = fn?.data.component;
+      if (!comp) return "file";
+      const bare = (handle ?? "").replace(/^(out:|in:)/, "");
+      const schema = dir === "source" ? comp.outputSchema : comp.inputSchema;
+      const def = schema?.properties?.[bare];
+      return def?.type === "status" ? "status" : "file";
+    },
+    [flowNodes],
+  );
+
+  // Enforce same-kind wiring: file→file and status→status only. Crossing a
+  // control-flow port with a data port is rejected (see docs/component-mode.md).
+  const isValidConnection = useCallback(
+    (c: {source: string | null; target: string | null; sourceHandle?: string | null; targetHandle?: string | null}) => {
+      const srcKind = portKindOf(c.source, c.sourceHandle, "source");
+      const tgtKind = portKindOf(c.target, c.targetHandle, "target");
+      return srcKind === tgtKind;
+    },
+    [portKindOf],
+  );
+
   const onConnect = useCallback(
     (connection: Edge | {source: string | null; target: string | null; sourceHandle?: string | null; targetHandle?: string | null}) => {
       const edge = connection as Edge;
@@ -265,6 +305,15 @@ function ComponentCanvasInner({
     },
     [dagId, flowNodes, setFlowEdges, onChange],
   );
+
+  // Short random suffix (e.g. "a3gf5") used to make generic component default
+  // names distinct: every drag previously created a `components` row named the
+  // literal "通用组件", so N dropped generics were indistinguishable on the
+  // canvas (title = `label || name`) until manually renamed. We keep the
+  // "通用组件" prefix (recognizable in the palette) and append a random tag.
+  function randomSuffix(): string {
+    return Math.random().toString(36).slice(2, 7);
+  }
 
   // crypto.randomUUID can be unavailable in some webview/secure-context setups;
   // fall back to a time+rng based id so a drop never silently fails.
@@ -291,7 +340,7 @@ function ComponentCanvasInner({
           const now = Date.now();
           const newComponent: Component = {
             id: makeUuid(),
-            name: "通用组件",
+            name: `通用组件-${randomSuffix()}`,
             description: "",
             status: "draft",
             workspaceRoot: "",
@@ -301,6 +350,11 @@ function ComponentCanvasInner({
             entryPoint: "",
             inputSchema: {type: "object", properties: {}},
             outputSchema: {type: "object", properties: {}},
+            // `config_schema` is a REQUIRED column on the backend `Component`
+            // struct (serde has no default). Omitting it made axum reject the
+            // POST with 422, so the generic drop silently failed. Empty array
+            // = no declared params, matching the backend's NULL/empty contract.
+            configSchema: [],
             tags: [],
             global: false,
             createdAtMs: now,
@@ -358,7 +412,12 @@ function ComponentCanvasInner({
         onChange(nextDagNodes, flowEdges.map((e) => flowEdgeToDagEdge(e, dagId)));
         onSelectNode?.(dagNode.id);
       } catch (err) {
+        // Previously this only console.error'd, so a failed drop produced zero
+        // user-visible feedback (e.g. a 422 from the backend) and looked like
+        // "dragging does nothing". Surface it so the failure is actionable.
         console.error("[component-canvas] onDrop failed", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        message(`拖入组件失败：${msg}`, {kind: "error", title: "拖入失败"}).catch(() => {});
       }
     },
     [dagId, flowNodes, flowEdges, componentMap, setFlowNodes, onChange, screenToFlowPosition, onSelectNode, onComponentCreated],
@@ -390,6 +449,7 @@ function ComponentCanvasInner({
       onNodesChange={onFlowNodesChange}
       onEdgesChange={onFlowEdgesChange}
       onConnect={onConnect}
+      isValidConnection={isValidConnection}
       onDrop={onDrop}
       onDragOver={onDragOver}
       onNodeDragStop={onNodeDragStop}

@@ -67,12 +67,28 @@ submit → accepted → success | failed | cancelled
 ### 单节点 `node_executions.status`（方案 B）
 
 ```
-preparing → running → success | failed | cancelled
+preparing → running → success | failed | cancelled | skipped
 ```
 
 - `preparing`：环境准备（clone / venv / install）。
 - `running`：`entry_point` 真正执行中。
-- 整条状态由节点状态汇总：任一 `failed` → 整体 `failed`；中途取消 → 整体 `cancelled`。
+- `skipped`：**status 门控跳过**——某上游节点 failed/skipped，本节点被跳过，不 clone、不运行
+  （对下游而言等价于 failed，继续传播）。
+- 整条状态由节点状态汇总：任一节点 `failed` → 整体 `failed`；中途取消 → 整体 `cancelled`。
+  被跳过的节点（`skipped`）不单独算「失败」，但导致它被跳过的那个 `failed` 上游会让整体 `failed`。
+
+### status 门控（分支隔离，2026-07-14）
+
+节点失败**不再中止整条 DAG**，改为**分支级隔离**：
+
+- **门控**：进入某节点前，检查它的所有上游（沿任意入边，data 或 status）是否有 failed/skipped；
+  有则本节点标 `skipped` 并 `continue`（失败沿边继续向下游传播）。
+- **失败不 abort**：节点自身运行失败 → 标 `failed`、记 `any_failed`、`continue`；**与它无边相连的
+  其他分支照常跑完**。
+- **门控与端口 kind 无关**：worker 只看「上游节点状态」+ 图的边，不解析端口是 file 还是 status。
+  status 端口的意义在前端——给用户一个 handle 去画一条「本无文件关系」的控制依赖边；这条边一旦存在，
+  门控就沿它生效。所以「两组件有依赖但无文件传递」= 用 status 边把它们连起来即可。
+- **收尾**：有任一 `failed` → 整体 `failed`（但已放行分支都跑完）；否则 `success`；取消 → `cancelled`。
 
 > 各节点状态独立落库，UI 可据此在画布上把每个节点实时标色（runtime instance，第三层 = 运行产物，
 > 由 worker 写回，含按输出端口 key 索引的 `outputs`；详见 [docs/components.md](components.md) 三层模型）。
@@ -107,10 +123,30 @@ WHERE id=? AND status='submit';   -- rowcount == 1 才算抢到
    - `upsert_node_execution(status='running')`。
    - `build_input`：无上游节点 → `config.params` 作为入参；有上游 → 合并上游输出。
    - `runner.run_node` 执行，把 stdout/stderr 写 `execution_logs`。
-   - 成功 → `upsert_node_execution(status='success', outputs)` 并记录 `node_outputs`；
-     `outputs` 是按**输出端口 key** 索引的运行产物（如 `{"data": "/path/a.csv"}`），属三层模型的第三层
-     （运行产物，由 worker 写回，非用户配置）；失败/取消 → 写 `failed`/`cancelled` 并终止整体。
-5. 全部成功 → `set_execution_status('success', outputs=node_outputs)`。
+   - 成功 → `upsert_node_execution(status='success', outputs)` 并记录 `node_outputs` 与
+     `node_status[node]='success'`；`outputs` 是按**输出端口 key** 索引的运行产物（如
+     `{"data": "/path/a.csv"}`），属三层模型的第三层（运行产物，由 worker 写回，非用户配置）；
+     失败 → 写 `failed`、`node_status[node]='failed'`、`any_failed=True` 后 **`continue`（不再终止整体，
+     见上「status 门控」分支隔离）**；取消 → 写 `cancelled` 并终止整体。
+   - **门控前置**：真正 clone/run 之前先查上游 `node_status`，任一 failed/skipped → 本节点写
+     `skipped`、`node_status[node]='failed'`、`continue`。
+5. 收尾：`any_failed` → `set_execution_status('failed', outputs=node_outputs)`；否则
+   `set_execution_status('success', outputs=node_outputs)`。
+
+## 组件运行契约（entry_point 约定）
+
+- **解释器**：`runner.run_node` 以 `[interpreter, entry_point]` 形式启动组件进程。当前
+  `resolve_python` 恒返回 python 解释器，故 `entry_point` 被当作 Python 脚本执行；要直接跑
+  `bash` / `node` 等非 Python entry_point，需把解释器解析改成按扩展名选择（`.py→python`、
+  `.sh→bash`、`.js→node`，即"方案 B"，尚未实现）。
+- **成功判定 = 进程退出码**：`runner.run_node` 返回
+  `success = (proc.returncode == 0 and not cancelled)`（`runner.py`）。**这是语言无关的通用契约**——
+  Python 跑通 / 抛异常、bash 退出 0 / 非 0，对引擎而言都只看退出码。退出码正是 status 端口
+  `success` / `failed` 信号的数据源。
+- **⚠️ bash 脚本必须主动上报失败**：bash 默认「遇错不停止、只取最后一条命令的退出码」。一个
+  中间命令失败、但末尾 `echo done` 成功的脚本，整体退出码是 `0`，引擎会**误判成功**。正确写法是
+  在脚本开头加 `set -euo pipefail`（任一命令失败立即以非 0 退出），或显式 `cmd || { echo err >&2; exit 1; }`。
+  只有脚本以非 0 退出，引擎才标记节点 `failed` → status 端口发 `failed` → 下游分支级联 `skipped`。
 
 ## 环境准备与缓存（`runner.prepare_env`）
 

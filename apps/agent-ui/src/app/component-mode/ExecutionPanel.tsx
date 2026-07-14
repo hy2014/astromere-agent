@@ -36,6 +36,8 @@ function statusLabel(status: string): string {
       return "准备中";
     case "cancelled":
       return "已取消";
+    case "skipped":
+      return "已跳过";
     case "submit":
       return "已提交";
     case "accepted":

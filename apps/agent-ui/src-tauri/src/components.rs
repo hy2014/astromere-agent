@@ -158,6 +158,27 @@ pub fn insert_component(component: &Component) -> Result<(), String> {
 #[cfg_attr(feature = "gui", tauri::command)]
 pub fn update_component(component: Component) -> Result<Component, String> {
     let (conn, _path) = open_sqlite_database()?;
+    // Same name-uniqueness guard as create_component, but exclude the row
+    // being edited (match by id) so renaming to its own current name is a
+    // no-op, and renaming onto another component's name (any global flag) is
+    // blocked. Uniqueness is global across the whole `components` table.
+    let name = component.name.trim();
+    if name.is_empty() {
+        return Err("组件名称不能为空。".to_string());
+    }
+    let dup: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM components WHERE name = ?1 AND id != ?2",
+            params![name, component.id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if dup > 0 {
+        return Err(format!(
+            "已存在同名组件「{}」，请换一个名称，或修改该已有组件。",
+            name
+        ));
+    }
     let input_schema_json = serde_json::to_string(&component.input_schema).map_err(error_to_string)?;
     let output_schema_json =
         serde_json::to_string(&component.output_schema).map_err(error_to_string)?;
@@ -195,6 +216,33 @@ pub fn update_component(component: Component) -> Result<Component, String> {
 
 #[cfg_attr(feature = "gui", tauri::command)]
 pub fn create_component(component: Component) -> Result<Component, String> {
+    // Guard: component *names* must be unique across the whole `components`
+    // table (global=true registered AND global=false generic). Generic
+    // components dragged onto the canvas now get a random default name
+    // (`通用组件-<suffix>`), so each is already distinct and a second generic
+    // drop no longer collides — global uniqueness is safe. Mirror the
+    // "被引用则拦截" style: a friendly business-layer error, not a DB
+    // constraint (which would require a schema migration and break on the
+    // pre-existing duplicate "通用组件" rows).
+    let name = component.name.trim();
+    if name.is_empty() {
+        return Err("组件名称不能为空。".to_string());
+    }
+    let (conn, _path) = open_sqlite_database()?;
+    let dup: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM components WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if dup > 0 {
+        return Err(format!(
+            "已存在同名组件「{}」，请换一个名称，或修改该已有组件。",
+            name
+        ));
+    }
+    drop(conn);
     insert_component(&component)?;
     Ok(component)
 }
@@ -202,6 +250,25 @@ pub fn create_component(component: Component) -> Result<Component, String> {
 #[cfg_attr(feature = "gui", tauri::command)]
 pub fn delete_component(component_id: String) -> Result<(), String> {
     let (conn, _path) = open_sqlite_database()?;
+    // Guard: refuse to delete a component still referenced by any DAG node.
+    // `dag_nodes.component_id` has `ON DELETE CASCADE`, so a bare DELETE would
+    // silently wipe every referencing node and leave dangling `dag_edges`
+    // (edges are plain TEXT with no FK to nodes). Block instead and let the
+    // user remove those nodes first — mirrors the "published DAG must be taken
+    // offline before delete" guard on `delete_dag`.
+    let referenced: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM dag_nodes WHERE component_id = ?1",
+            params![component_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if referenced > 0 {
+        return Err(format!(
+            "该组件正被 {} 个 DAG 节点引用，无法删除：请先在画布中删除这些组件节点（或在节点上右键「删除」）后再试。",
+            referenced
+        ));
+    }
     conn.execute("DELETE FROM components WHERE id = ?1", params![component_id])
         .map_err(error_to_string)?;
     Ok(())
@@ -511,6 +578,90 @@ mod tests {
         assert_eq!(node_cfg["gitBranch"], "main");
         assert_eq!(node_cfg["gitRef"], "v1.0");
         assert_eq!(node_cfg["entryPoint"], "run.py");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    // Regression: component *names* must be globally unique across the whole
+    // `components` table — both registered (global=true) and generic
+    // (global=false). A second create with an already-used name is rejected
+    // with a friendly business-layer error (not a DB UNIQUE violation). Generic
+    // components get a random default name (`通用组件-<suffix>`) on drop, so they
+    // never collide in practice, but the guard still counts them.
+    #[test]
+    fn test_create_component_rejects_duplicate_name() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let db_path = with_temp_db();
+
+        // A registered (global=true) component exists with name "X".
+        let mut a = sample_component("dup-a");
+        a.name = "X".to_string();
+        insert_component(&a).expect("insert a");
+
+        // Another registered component with the same name => rejected.
+        let mut dup = sample_component("dup-b");
+        dup.name = "X".to_string();
+        dup.global = true;
+        let err = create_component(dup);
+        assert!(err.is_err(), "duplicate global name must be rejected");
+        assert!(
+            err.unwrap_err().contains("同名"),
+            "error should mention duplicate name"
+        );
+
+        // A generic (global=false) component reusing an existing name must ALSO
+        // be rejected now that uniqueness is global.
+        let mut g = sample_component("dup-c");
+        g.name = "X".to_string();
+        g.global = false;
+        assert!(
+            create_component(g).is_err(),
+            "duplicate name must be rejected regardless of global flag"
+        );
+
+        // A distinct name (generic or not) is allowed.
+        let mut ok = sample_component("dup-d");
+        ok.name = "Y".to_string();
+        ok.global = false;
+        assert!(
+            create_component(ok).is_ok(),
+            "distinct name must be allowed"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    // Regression: renaming a registered component to its own current name is a
+    // no-op (excluded by id); renaming onto another registered component's name
+    // is rejected.
+    #[test]
+    fn test_update_component_rejects_duplicate_global_name() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let db_path = with_temp_db();
+
+        let mut a = sample_component("u-a");
+        a.name = "alpha".to_string();
+        insert_component(&a).expect("insert alpha");
+        let mut b = sample_component("u-b");
+        b.name = "beta".to_string();
+        insert_component(&b).expect("insert beta");
+
+        // rename b -> alpha (collision with a) => rejected
+        let mut collide = b.clone();
+        collide.name = "alpha".to_string();
+        let err = update_component(collide);
+        assert!(
+            err.is_err(),
+            "renaming onto another global name must be rejected"
+        );
+
+        // rename b -> beta (its own name) => allowed
+        let mut self_rename = b.clone();
+        self_rename.name = "beta".to_string();
+        assert!(
+            update_component(self_rename).is_ok(),
+            "renaming to its own current name must be allowed"
+        );
 
         let _ = std::fs::remove_file(&db_path);
     }

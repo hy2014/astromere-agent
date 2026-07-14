@@ -1,5 +1,5 @@
 import {useState} from "react";
-import type {Component, ConfigFieldBaseType, ConfigSchemaItem, PortDef, PortType} from "../../types";
+import type {Component, ConfigFieldBaseType, ConfigSchemaItem, PortDef} from "../../types";
 import {
   assembleRegisterComponent,
   assembleUpdateComponent,
@@ -36,6 +36,13 @@ export type RegisterComponentFormProps = {
   // component, all fields read-only, no save action. The kebab "查看" menu in
   // the sidebar list opens it. Mutually exclusive with `editing`.
   viewing?: Component;
+  // The full component list (from the store), used to warn about a duplicate
+  // *name* before submit. Only registered (global=true) components count —
+  // generic components get a random default name (`通用组件-xxxx`) and are
+  // never reused across drops, so excluding them keeps dragging a second
+  // generic node working. The component being edited (if any) is excluded so
+  // renaming to its own current name is fine.
+  existingComponents?: Component[];
 };
 
 // Registers a *new* reusable component (or edits / views an existing one when
@@ -44,7 +51,7 @@ export type RegisterComponentFormProps = {
 // "查看"), NOT inline inside the sidebar accordion. A created component is
 // always `global: true` — that is what makes it appear in the sidebar list and
 // be reusable across DAGs.
-export function RegisterComponentForm({onRegister, onCancel, editing, onUpdate, viewing}: RegisterComponentFormProps) {
+export function RegisterComponentForm({onRegister, onCancel, editing, onUpdate, viewing, existingComponents}: RegisterComponentFormProps) {
   // `viewing` and `editing` are mutually exclusive; derive a single pre-fill
   // source + a read-only flag so the JSX below stays uniform.
   const source = editing ?? viewing ?? null;
@@ -78,7 +85,20 @@ export function RegisterComponentForm({onRegister, onCancel, editing, onUpdate, 
     outputPorts,
   };
   const defErrors = validateConfigSchemaDef(configSchema);
-  const canSubmit = canSubmitRegister(input) && Object.keys(defErrors).length === 0;
+  // Duplicate-name guard (mirrors the backend create_component /
+  // update_component check). Only registered (global=true) components count;
+  // the component being edited is excluded so it can keep its own name.
+  const trimmedName = name.trim();
+  // Global uniqueness: the name must not collide with ANY existing component
+  // (registered or generic), excluding the row being edited.
+  const nameConflict =
+    trimmedName !== "" &&
+    (existingComponents ?? []).some(
+      (c) => c.id !== (source?.id ?? "") && c.name.trim() === trimmedName,
+    );
+  const nameError = nameConflict ? "已存在同名组件" : null;
+  const canSubmit =
+    canSubmitRegister(input) && Object.keys(defErrors).length === 0 && !nameError;
 
   function updateSchemaItem(index: number, patch: Partial<ConfigSchemaItem>) {
     setConfigSchema((prev) => prev.map((item, i) => (i === index ? {...item, ...patch} : item)));
@@ -151,6 +171,7 @@ export function RegisterComponentForm({onRegister, onCancel, editing, onUpdate, 
             placeholder="组件名称"
             onChange={(event) => setName(event.target.value)}
           />
+          {nameError && <p className="generic-form-schemaerr">{nameError}</p>}
         </label>
 
         <label className="generic-form-field">
@@ -321,12 +342,31 @@ export function RegisterComponentForm({onRegister, onCancel, editing, onUpdate, 
               />
               <select
                 value={port.type}
-                onChange={(event) => updatePort("inputs", i, {type: event.target.value as PortType})}
+                title="端口类型"
+                onChange={(event) =>
+                  updatePort("inputs", i, {
+                    type: event.target.value as PortDef["type"],
+                    format: event.target.value === "status" ? undefined : port.format,
+                  })
+                }
               >
-                <option value="file">file</option>
-                <option value="csv">csv</option>
-                <option value="parquet">parquet</option>
+                <option value="file">文件</option>
+                <option value="status">状态</option>
               </select>
+              {port.type !== "status" && (
+                <select
+                  value={port.format ?? ""}
+                  title="文件格式"
+                  onChange={(event) =>
+                    updatePort("inputs", i, {format: event.target.value || undefined})
+                  }
+                >
+                  <option value="">任意</option>
+                  <option value="parquet">parquet</option>
+                  <option value="csv">csv</option>
+                  <option value="json">json</option>
+                </select>
+              )}
               {!readOnly && (
                 <button
                   type="button"
@@ -360,12 +400,31 @@ export function RegisterComponentForm({onRegister, onCancel, editing, onUpdate, 
               />
               <select
                 value={port.type}
-                onChange={(event) => updatePort("outputs", i, {type: event.target.value as PortType})}
+                title="端口类型"
+                onChange={(event) =>
+                  updatePort("outputs", i, {
+                    type: event.target.value as PortDef["type"],
+                    format: event.target.value === "status" ? undefined : port.format,
+                  })
+                }
               >
-                <option value="file">file</option>
-                <option value="csv">csv</option>
-                <option value="parquet">parquet</option>
+                <option value="file">文件</option>
+                <option value="status">状态</option>
               </select>
+              {port.type !== "status" && (
+                <select
+                  value={port.format ?? ""}
+                  title="文件格式"
+                  onChange={(event) =>
+                    updatePort("outputs", i, {format: event.target.value || undefined})
+                  }
+                >
+                  <option value="">任意</option>
+                  <option value="parquet">parquet</option>
+                  <option value="csv">csv</option>
+                  <option value="json">json</option>
+                </select>
+              )}
               {!readOnly && (
                 <button
                   type="button"

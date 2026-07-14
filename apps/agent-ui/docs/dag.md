@@ -43,6 +43,18 @@ Rust 同步执行路径（`build_node_inputs`）已于 2026-07-11 删除，不�
 哨兵 `"output"` / `"input"`（单端口组件专用，特判为"取/合并整个输出"）不以 `out:`/`in:` 开头，
 strip 后不变，单端口逻辑完全保留。
 
+### status 边（控制流依赖，2026-07-14）
+
+端口有两种 kind：`file`（数据）与 `status`（控制流）。`status` 边表达**纯任务依赖**，不传数据：
+
+- **建边即建依赖**：两个本无文件关系的节点用 status 边相连，就在 DAG 图里多出一条边——
+  拓扑排序据此让下游排在上游之后，`build_input` 门控据此判断下游是否放行。
+- **无数据载荷**：status 输出端口不写文件产物，故 `build_input` 按 `source_handle` 取值时命中
+  `None`（上游 `node_outputs` 无该 key），自然不注入下游 input——**无需为 status 边特判**。
+- **门控与传播**：门控是**边级、与端口 kind 无关**的——worker 只看「上游节点是否 failed/skipped」，
+  沿任意入边（data 或 status）传播。所以 status 端口的作用纯粹是「给 UI 一个 handle 去画这条
+  控制依赖边」，运行期 worker 不需要解析端口 kind（详见 engine-executor.md「status 门控」）。
+
 ## 命令（Tauri commands）
 
 | 命令 | 说明 |
