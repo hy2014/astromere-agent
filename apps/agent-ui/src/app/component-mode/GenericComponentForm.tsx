@@ -1,5 +1,5 @@
 import {useEffect, useState} from "react";
-import type {Component, GenericComponentConfig, PortDef, PortType} from "../../types";
+import type {Component, GenericComponentConfig, PortDef} from "../../types";
 import {componentToConfig, configToComponent} from "./componentModel";
 
 export type GenericComponentFormProps = {
@@ -107,12 +107,31 @@ export function GenericComponentForm({component, onChange}: GenericComponentForm
                   />
                   <select
                     value={port.type}
-                    onChange={(event) => updatePort("inputs", i, {type: event.target.value as PortType})}
+                    title="端口类型"
+                    onChange={(event) =>
+                      updatePort("inputs", i, {
+                        type: event.target.value as PortDef["type"],
+                        format: event.target.value === "status" ? undefined : port.format,
+                      })
+                    }
                   >
-                    <option value="file">file</option>
-                    <option value="csv">csv</option>
-                    <option value="parquet">parquet</option>
+                    <option value="file">文件</option>
+                    <option value="status">状态</option>
                   </select>
+                  {port.type !== "status" && (
+                    <select
+                      value={port.format ?? ""}
+                      title="文件格式"
+                      onChange={(event) =>
+                        updatePort("inputs", i, {format: event.target.value || undefined})
+                      }
+                    >
+                      <option value="">任意</option>
+                      <option value="parquet">parquet</option>
+                      <option value="csv">csv</option>
+                      <option value="json">json</option>
+                    </select>
+                  )}
                   <button
                     type="button"
                     className="generic-form-del"
@@ -151,12 +170,31 @@ export function GenericComponentForm({component, onChange}: GenericComponentForm
                   />
                   <select
                     value={port.type}
-                    onChange={(event) => updatePort("outputs", i, {type: event.target.value as PortType})}
+                    title="端口类型"
+                    onChange={(event) =>
+                      updatePort("outputs", i, {
+                        type: event.target.value as PortDef["type"],
+                        format: event.target.value === "status" ? undefined : port.format,
+                      })
+                    }
                   >
-                    <option value="file">file</option>
-                    <option value="csv">csv</option>
-                    <option value="parquet">parquet</option>
+                    <option value="file">文件</option>
+                    <option value="status">状态</option>
                   </select>
+                  {port.type !== "status" && (
+                    <select
+                      value={port.format ?? ""}
+                      title="文件格式"
+                      onChange={(event) =>
+                        updatePort("outputs", i, {format: event.target.value || undefined})
+                      }
+                    >
+                      <option value="">任意</option>
+                      <option value="parquet">parquet</option>
+                      <option value="csv">csv</option>
+                      <option value="json">json</option>
+                    </select>
+                  )}
                   <button
                     type="button"
                     className="generic-form-del"

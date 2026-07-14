@@ -216,8 +216,8 @@
     要改定义请走组件库的「修改」入口。
   - **通用组件（global=0）：可在此编辑并写回 `components` 表**（`updateComponent`）。
   - 字段：`name`（写 `components.name`，**不再**写 `dag_nodes.label`——节点显示名已独立为上面的
-    「节点名称」字段）、`inputs`/`outputs`（端口，type 暂仅 `parquet`/`csv`）、
-    `gitUrl`、`gitBranch`、`gitRef`、`entryPoint`。
+    「节点名称」字段）、`inputs`/`outputs`（端口，kind 仅 `file`，可再选 `format` 子属性
+    `parquet`/`csv`/`json`/…；留空=任意文件）、`gitUrl`、`gitBranch`、`gitRef`、`entryPoint`。
 - **实例参数（`InstanceConfigForm`，即「运行参数」）**：
   - 写 `dag_nodes.config.params`，**仅作用于当前节点**，与组件定义解耦；
     注册/通用组件都在此填实例值（如 dataset-loader 的 `file` 路径）。

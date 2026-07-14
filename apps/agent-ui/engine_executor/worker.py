@@ -192,6 +192,11 @@ class Worker:
         order = self.compute_order(plan)
         node_map = {n["id"]: n for n in plan["nodes"]}
         node_outputs = {}
+        # Per-node control-flow signal: "success" | "failed". Skipped nodes are
+        # recorded as "failed" so the failure keeps propagating downstream. This
+        # drives status gating (see docs/engine-executor.md "status 门控").
+        node_status = {}
+        any_failed = False
         cancel_check = lambda: is_cancel_requested(exec_id)
 
         for node_id in order:
@@ -207,6 +212,18 @@ class Worker:
             def _log(kind, message):
                 add_log(exec_id, node_id, kind, message)
 
+            # status 门控（分支隔离）：本节点若有任一上游（沿任意入边，data 或 status）
+            # 已 failed/skipped，则跳过本节点、不 clone/不运行，并让失败沿边继续传播。
+            # 门控与端口 kind 无关——只看上游节点状态 + 图的边（见 docs/engine-executor.md）。
+            upstream_ids = [
+                e["source_node_id"] for e in plan["edges"] if e["target_node_id"] == node_id
+            ]
+            if any(node_status.get(uid) == "failed" for uid in upstream_ids):
+                upsert_node_execution(exec_id, node_id, "skipped", completed_at_ms=now())
+                add_log(exec_id, node_id, "info", "上游状态为 failed/skipped，本节点跳过")
+                node_status[node_id] = "failed"  # skipped ⇒ 对下游等价于 failed
+                continue
+
             try:
                 component_root, entry_point = self.resolve_node(node, plan, log_fn=_log)
             except Exception as e:
@@ -214,8 +231,10 @@ class Worker:
                     exec_id, node_id, "failed", completed_at_ms=now(), error=str(e)[:2000]
                 )
                 add_log(exec_id, node_id, "error", f"Resolve failed: {e}")
-                set_execution_status(exec_id, "failed", now())
-                return
+                # 分支隔离：解析失败只标记本节点，不再中止整条 DAG。
+                node_status[node_id] = "failed"
+                any_failed = True
+                continue
 
             upsert_node_execution(exec_id, node_id, "preparing", started_at_ms=now())
             add_log(exec_id, node_id, "info", f"Preparing environment for node {node_id}")
@@ -252,10 +271,14 @@ class Worker:
                     exec_id, node_id, "failed", completed_at_ms=now(), error=err
                 )
                 add_log(exec_id, node_id, "error", f"Node failed: {err[:500]}")
-                set_execution_status(exec_id, "failed", now())
-                return
+                # 分支隔离：节点失败不再中止整条 DAG——标记本节点，让下游沿 status 门控
+                # 跳过，其他无依赖分支照常跑完（见 docs/engine-executor.md「status 门控」）。
+                node_status[node_id] = "failed"
+                any_failed = True
+                continue
 
             node_outputs[node_id] = result["output_value"]
+            node_status[node_id] = "success"
             upsert_node_execution(
                 exec_id,
                 node_id,
@@ -266,8 +289,11 @@ class Worker:
             )
             add_log(exec_id, node_id, "info", "Node succeeded")
 
-        set_execution_status(exec_id, "success", now(), outputs=node_outputs)
-        add_log(exec_id, None, "info", "Execution succeeded")
+        # 收尾：只要有真正运行失败/解析失败的节点即整体 failed（被门控跳过的节点不单独
+        # 计失败，但导致跳过的那个 failed 上游已置 any_failed）；否则 success。
+        final = "failed" if any_failed else "success"
+        set_execution_status(exec_id, final, now(), outputs=node_outputs)
+        add_log(exec_id, None, "info", f"Execution {final}")
 
 
 def main():

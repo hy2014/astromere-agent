@@ -14,6 +14,7 @@ export type ComponentFunctionListProps = {
   onStartRegister: () => void;
   onEditComponent: (component: Component) => void;
   onViewComponent: (component: Component) => void;
+  onDeleteComponent: (component: Component) => void;
   onOpenServerSettings: () => void;
 };
 
@@ -54,6 +55,7 @@ export function ComponentFunctionList({
   onStartRegister,
   onEditComponent,
   onViewComponent,
+  onDeleteComponent,
   onOpenServerSettings,
 }: ComponentFunctionListProps) {
   const [open, setOpen] = useState<OpenState>({component: true, dag: true, advanced: false});
@@ -179,6 +181,17 @@ export function ComponentFunctionList({
                           }}
                         >
                           修改
+                        </button>
+                        <button
+                          type="button"
+                          className="dag-menu-delete"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMenuAnchor(null);
+                            onDeleteComponent(component);
+                          }}
+                        >
+                          删除
                         </button>
                       </div>
                     </>

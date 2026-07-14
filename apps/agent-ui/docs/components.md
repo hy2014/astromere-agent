@@ -95,7 +95,7 @@ Related: [docs/sqlite.md](sqlite.md), [docs/dag.md](dag.md), [docs/component-ses
 | `list_components()` | 按 `updated_at_ms` 倒序返回所有组件（含 `global`；前端按 `global` 过滤注册表列表） |
 | `get_component(component_id)` | 取单个组件 |
 | `update_component(component)` | 更新组件字段 |
-| `delete_component(component_id)` | 删除（级联删 `component_sessions`，因 FK） |
+| `delete_component(component_id)` | **物理删除**组件行（级联删 `component_sessions`，因 FK）。**被引用保护**：若仍有 `dag_nodes.component_id` 指向它（`ON DELETE CASCADE` 会静默删节点并留悬空边），则拒绝删除并返回中文报错，提示先删引用节点。前端组件库 `⋯` 菜单的「删除」入口走此命令 |
 | `list_component_files(component_id)` | 列出 `component_root` 下文件 |
 | `verify_component(component_id)` | 返回缺失的必需文件列表（见下） |
 

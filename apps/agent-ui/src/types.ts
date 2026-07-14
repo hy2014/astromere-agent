@@ -428,12 +428,16 @@ export type ParameterSchema = {
 };
 
 export type ParameterDef = {
-  type: "string" | "number" | "integer" | "boolean" | "array" | "object";
+  // "status" is used ONLY for IO-port encoding: a control-flow (status) port is
+  // stored as {type:"status"} in input_schema/output_schema. The other values
+  // are standard JSON-schema types used by data (file) ports and config params.
+  type: "string" | "number" | "integer" | "boolean" | "array" | "object" | "status";
   description?: string;
   default?: unknown;
   items?: ParameterDef;
-  // Carries the component port format ("parquet" | "csv") when the property is
-  // derived from a component IO port. Optional / non-standard.
+  // Carries the component port's file *format* (e.g. "parquet" | "csv" | "json")
+  // when the property is derived from a component IO port. A file port may omit
+  // it (= any file). Optional / non-standard.
   format?: string;
 };
 
@@ -544,11 +548,23 @@ export type DagEdge = {
 // `InstanceConfigForm`). The two are distinct: definition lives in `components`,
 // instance params live in `node.config.params`.
 
-export type PortType = "file" | "parquet" | "csv";
+// A port's *kind*:
+//   - "file"   : data port carrying a file reference. Its *format*
+//                (parquet / csv / json / …) is a sub-property (`format`), NOT a
+//                separate PortType — that was the earlier modeling mistake
+//                (PortType was wrongly "file" | "parquet" | "csv").
+//   - "status" : control-flow port. Carries no data; a status edge expresses a
+//                pure task dependency (upstream failed/skipped ⇒ downstream is
+//                skipped). See docs/engine-executor.md "status 门控".
+export type PortType = "file" | "status";
 
 export type PortDef = {
   name: string;
   type: PortType;
+  // Only meaningful for file ports: the file format this port carries
+  // (parquet | csv | json | …). Undefined / omitted = any file. Ignored for
+  // status ports.
+  format?: string;
 };
 
 export type GenericComponentConfig = {
@@ -586,7 +602,7 @@ export type NodeExecution = {
   id: string;
   executionId: string;
   nodeId: string;
-  status: "preparing" | "running" | "success" | "failed" | "cancelled";
+  status: "preparing" | "running" | "success" | "failed" | "cancelled" | "skipped";
   startedAtMs?: number;
   completedAtMs?: number;
   outputPath?: string;

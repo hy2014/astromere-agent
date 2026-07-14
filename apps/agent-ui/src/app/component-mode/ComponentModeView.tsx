@@ -3,6 +3,7 @@ import type {Component, Dag, DagDetail, DagEdge, DagExecution, DagNode} from "..
 import {
   createComponent,
   createDag,
+  deleteComponent,
   deleteDag,
   deleteDagNode,
   getComponent,
@@ -19,10 +20,13 @@ import {
   updateDag,
 } from "./api";
 import {DagConnectModal} from "./DagConnectModal";
+import {DagListView} from "./DagListView";
 import {confirm, message} from "@tauri-apps/plugin-dialog";
 import {
   addComponent,
   getComponents,
+  removeComponent,
+  setComponents as syncComponents,
   subscribe as subscribeComponents,
   updateComponent as updateComponentStore,
 } from "../../stores/component-store";
@@ -113,6 +117,8 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   const [activeDagDetail, setActiveDagDetail] = useState<DagDetail | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [publishCron, setPublishCron] = useState("");
+  // Transient success toast (e.g. after a component update). Auto-dismisses.
+  const [successToast, setSuccessToast] = useState<string | null>(null);
   // When true, the right-hand panel shows the "register new component" form
   // instead of the per-node PropertiesPanel.
   const [registering, setRegistering] = useState(false);
@@ -140,6 +146,17 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   const [showExecHistory, setShowExecHistory] = useState(false);
   // 节点输出数据预览：点右键菜单「预览数据」时设置；为 null 时不渲染弹框。
   const [previewNode, setPreviewNode] = useState<{nodeId: string; label: string} | null>(null);
+  // Center view in dag mode: "list" = published-DAG catalog table (the default
+  // landing when entering dag mode), "detail" = the selected DAG's canvas.
+  // Clicking "进入" in the table (or a DAG in the sidebar) switches to detail.
+  const [centerView, setCenterView] = useState<"list" | "detail">("list");
+
+  // 成功提示自动消失
+  useEffect(() => {
+    if (!successToast) return;
+    const timer = setTimeout(() => setSuccessToast(null), 2500);
+    return () => clearTimeout(timer);
+  }, [successToast]);
 
   // 挂载时检查：已有配置则探活，通了才放行；否则弹连接框。
   useEffect(() => {
@@ -236,7 +253,13 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   const refreshComponents = useCallback(async () => {
     try {
       const result = await listComponents();
-      setComponents(result);
+      // Write into the store, NOT just local state. The store is the single
+      // source of truth: the subscribeComponents callback pushes
+      // store.components down to local state on every emit(). If we only set
+      // local state here, the store stays empty and a later removeComponent()
+      // emit() overwrites the list with [] — which is why deleting a component
+      // emptied the whole list. Mirror the refreshDags()/syncDags() pattern.
+      syncComponents(result);
     } catch (error) {
       console.error("[dag-mode] failed to list components", error);
     } finally {
@@ -282,6 +305,14 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   const handleSelectDag = useCallback((dagId: string) => {
     setActiveDagId(dagId);
     setLocalActiveDagId(dagId);
+    setCenterView("detail");
+  }, []);
+
+  // Enter a published DAG from the catalog table → open its detail canvas.
+  const handleEnterDag = useCallback((dagId: string) => {
+    setActiveDagId(dagId);
+    setLocalActiveDagId(dagId);
+    setCenterView("detail");
   }, []);
 
   const handleCreateDag = useCallback(
@@ -289,6 +320,9 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
       try {
         const dag = await createDag(name);
         addDag(dag);
+        setActiveDagId(dag.id);
+        setLocalActiveDagId(dag.id);
+        setCenterView("detail");
         setActiveDagDetail({...dag, nodes: [], edges: []});
       } catch (error) {
         console.error("[dag-mode] failed to create dag", error);
@@ -468,6 +502,27 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
     [activeDagDetail, selectedNodeId],
   );
 
+  const handleDeleteComponent = useCallback(
+    async (component: Component) => {
+      const ok = await confirm(`删除组件「${component.name}」？此操作不可恢复。`, {
+        title: "删除组件",
+      });
+      if (!ok) return;
+      try {
+        await deleteComponent(component.id);
+        removeComponent(component.id);
+        // Drop any open edit/view panel bound to the now-deleted component so
+        // the right panel doesn't keep showing a stale, unresolvable form.
+        if (editingComponent?.id === component.id) setEditingComponent(null);
+        if (viewingComponent?.id === component.id) setViewingComponent(null);
+      } catch (error) {
+        console.error("[dag-mode] failed to delete component", error);
+        await message(String(error), {kind: "error", title: "删除失败"});
+      }
+    },
+    [editingComponent, viewingComponent],
+  );
+
   const handleUpdateNode = useCallback(
     (updated: DagNode) => {
       if (!activeDagDetail) return;
@@ -524,6 +579,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
         updateComponentStore(updated);
         setRegistering(false);
         setEditingComponent(null);
+        setSuccessToast(`「${updated.name}」修改成功`);
       } catch (error) {
         console.error("[dag-mode] failed to update component", error);
         await message(String(error), {kind: "error", title: "修改组件失败"});
@@ -566,6 +622,31 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
           : "component-mode-shell"
       }
     >
+      {successToast && (
+        <div
+          style={{
+            position: "fixed",
+            top: 18,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 80,
+            border: "1px solid #bbf7d0",
+            borderRadius: 999,
+            padding: "8px 14px",
+            background: "#f0fdf4",
+            color: "#166534",
+            fontSize: 13,
+            fontWeight: 750,
+            boxShadow: "0 12px 30px rgba(15, 23, 42, 0.16)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <span style={{fontSize: 14, lineHeight: 1}}>✓</span>
+          {successToast}
+        </div>
+      )}
       <aside className="component-mode-sidebar">
         <div className="component-mode-mode">
           <ModeToggle
@@ -589,14 +670,26 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
           onStartRegister={() => setRegistering(true)}
           onEditComponent={handleEditComponent}
           onViewComponent={handleViewComponent}
+          onDeleteComponent={handleDeleteComponent}
           onOpenServerSettings={() => setShowConnect(true)}
         />
       </aside>
       <main className="component-mode-main">
         <header className="component-mode-toolbar">
-          {activeDagDetail ? (
+          {centerView === "list" ? (
+            <span className="component-mode-dag">DAG 列表</span>
+          ) : activeDagDetail ? (
             <div className="dag-toolbar">
-              <span className="component-mode-dag">{activeDagDetail.name}</span>
+              <div className="dag-toolbar-left">
+                <button
+                  type="button"
+                  className="dag-back-btn"
+                  onClick={() => setCenterView("list")}
+                >
+                  ← DAG 列表
+                </button>
+                <span className="component-mode-dag">{activeDagDetail.name}</span>
+              </div>
               <button
                 type="button"
                 className={`dag-history-btn${showExecHistory ? " active" : ""}`}
@@ -667,7 +760,9 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
           )}
         </header>
         <div className="component-mode-canvas">
-          {activeDagDetail ? (
+          {centerView === "list" ? (
+            <DagListView dags={dags} onEnter={handleEnterDag} />
+          ) : activeDagDetail ? (
             componentsLoaded ? (
               <ComponentCanvas
                 dagId={activeDagDetail.id}
@@ -696,6 +791,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
             key={editingComponent?.id ?? viewingComponent?.id ?? "new"}
             editing={editingComponent ?? undefined}
             viewing={viewingComponent ?? undefined}
+            existingComponents={components}
             onRegister={handleRegisterComponent}
             onUpdate={handleUpdateRegistered}
             onCancel={handleCancelRegister}

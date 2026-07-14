@@ -317,6 +317,134 @@
   position: relative;
 }
 
+/* ── 已发布 DAG 目录表（dag mode 中间默认视图）── */
+.dag-list-view {
+  position: absolute;
+  inset: 0;
+  padding: 28px 32px;
+  overflow: auto;
+}
+
+.dag-list-view-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.dag-list-view-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.dag-list-view-count {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.dag-list-view-empty {
+  margin: 8px 0;
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.dag-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.dag-table thead th {
+  text-align: left;
+  padding: 11px 16px;
+  background: #f3f4f6;
+  color: #4b5563;
+  font-weight: 600;
+  border-bottom: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+.dag-table tbody td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f1f3f5;
+  color: #374151;
+  vertical-align: middle;
+}
+
+.dag-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.dag-table tbody tr:hover td {
+  background: #f9fafb;
+}
+
+.dag-table-col-cron {
+  width: 200px;
+}
+
+.dag-table-col-action {
+  width: 96px;
+  text-align: center;
+}
+
+.dag-table-name {
+  font-weight: 500;
+  color: #111827;
+}
+
+.dag-table-desc {
+  color: #6b7280;
+  max-width: 420px;
+}
+
+.dag-table-cron {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.dag-enter-btn {
+  padding: 5px 16px;
+  border: 1px solid #2563eb;
+  border-radius: 4px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dag-enter-btn:hover {
+  background: #1d4ed8;
+}
+
+.dag-back-btn {
+  padding: 4px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #374151;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dag-back-btn:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+.dag-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .component-mode-canvas > p {
   position: absolute;
   top: 50%;
@@ -1134,6 +1262,23 @@
   padding: 1px 6px;
   margin-top: 4px;
   display: inline-block;
+}
+
+/* Port handles: solid = file (data) port, hollow = status (control-flow) port.
+   The hollow ring makes it obvious at a glance that a status edge carries no
+   data — only a task dependency. */
+.react-flow__handle.component-port--file {
+  width: 9px;
+  height: 9px;
+  background: #6366f1;
+  border: 1px solid #4338ca;
+}
+
+.react-flow__handle.component-port--status {
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border: 2px solid #6366f1;
 }
 
 /* Generic component configuration form (right panel). */
