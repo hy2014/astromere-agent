@@ -2,10 +2,11 @@ import {useState} from "react";
 import type {Component, DagNode} from "../../types";
 import {GenericComponentForm} from "./GenericComponentForm";
 import {InstanceConfigForm} from "./InstanceConfigForm";
+import {SystemConfigForm} from "./SystemConfigForm";
 import {NodeNameField} from "./NodeNameField";
 import {ComponentSessionPanel} from "./ComponentSessionPanel";
 
-type TabKey = "config" | "explore";
+type TabKey = "config" | "system" | "explore";
 
 export type PropertiesPanelProps = {
   node: DagNode | null;
@@ -73,6 +74,15 @@ export function PropertiesPanel({
         >
           探索
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "system"}
+          className={tab === "system" ? "active" : ""}
+          onClick={() => setTab("system")}
+        >
+          系统配置
+        </button>
       </div>
       <div className="properties-tab-body">
         {tab === "config" && (
@@ -111,6 +121,12 @@ export function PropertiesPanel({
             <ComponentSessionPanel component={component} onOpenCode={onOpenCode} />
           ) : (
             <ExploreEmpty />
+          ))}
+        {tab === "system" &&
+          (component ? (
+            <SystemConfigForm node={node} onChange={onUpdateNode} />
+          ) : (
+            <p className="explore-empty-title">该节点未关联组件，无法编辑系统配置。</p>
           ))}
       </div>
     </div>
