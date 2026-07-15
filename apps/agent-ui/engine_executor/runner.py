@@ -13,6 +13,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 
@@ -154,26 +155,104 @@ def prepare_env(git_url, git_branch, cache_root, git_ref="", log_fn=None):
     return root
 
 
-def resolve_python(component_root):
+def _pip_index_url():
+    """Mirror used for component installs.
+
+    Defaults to a fast domestic mirror (Tsinghua) so installs aren't bottlenecked
+    on the foreign pypi.org. Override with ``AGENT_UI_PIP_INDEX_URL`` (e.g. set
+    to ``https://pypi.org/simple`` to use the default source).
+    """
+    return os.environ.get("AGENT_UI_PIP_INDEX_URL") or "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+
+def _ensure_pip_mirror(log_fn=None):
+    """Write the chosen mirror into pip's GLOBAL config so every subsequent
+    install (and the venv's own pip) uses it. Idempotent; best-effort."""
+    url = _pip_index_url()
+    if not url:
+        return
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "config", "set", "global.index-url", url],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if log_fn:
+            log_fn("info", f"已写入全局 pip 镜像源: {url}")
+    except Exception as e:  # noqa: BLE001 - best effort; fall back to default source
+        if log_fn:
+            log_fn("warning", f"写入 pip 镜像源失败（将使用默认源）: {e}")
+
+
+def _run_pip_install(target, req, log_fn=None, timeout=1800):
+    """Run ``pip install -r req`` for ``target`` python, streaming every line to
+    ``log_fn`` so the run panel shows live progress. Times out instead of hanging
+    forever on a stuck network."""
+    proc = subprocess.Popen(
+        [target, "-m", "pip", "install", "-r", req],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    def reader(stream, kind):
+        for line in stream:
+            if log_fn:
+                log_fn(kind, line.rstrip("\n"))
+
+    t_out = threading.Thread(target=reader, args=(proc.stdout, "stdout"), daemon=True)
+    t_err = threading.Thread(target=reader, args=(proc.stderr, "stderr"), daemon=True)
+    t_out.start()
+    t_err.start()
+    try:
+        rc = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        t_out.join()
+        t_err.join()
+        raise RuntimeError(
+            f"pip install 超时（>{timeout}s）。可配置 AGENT_UI_PIP_INDEX_URL 指向更快的镜像源后重试。"
+        )
+    t_out.join()
+    t_err.join()
+    if rc != 0:
+        raise RuntimeError("pip install 失败（详见上方日志）")
+
+
+def resolve_python(component_root, skip_venv=False, log_fn=None):
     """Return the python binary to run the component with.
 
-    If ``requirements.txt`` is non-empty we build/use a local ``.venv`` next to
-    the component; otherwise we use the system ``python3``.
+    Behaviour:
+      * ``skip_venv=True``  → use the system ``python3`` directly, never create a
+        venv or install anything (component relies on the server's existing env).
+      * no ``requirements.txt`` → system ``python3``.
+      * otherwise → build/use a local ``.venv`` next to the component and install
+        its requirements (with live logs + a mirror configured globally).
     """
     req = os.path.join(component_root, "requirements.txt")
-    if os.path.exists(req) and os.path.getsize(req) > 0:
-        venv = os.path.join(component_root, ".venv")
-        py = os.path.join(venv, "bin", "python")
-        py_win = os.path.join(venv, "Scripts", "python.exe")
-        if not (os.path.exists(py) or os.path.exists(py_win)):
-            subprocess.run(["python3", "-m", "venv", venv], check=True)
-            target = py if os.path.exists(py) else py_win
-            subprocess.run(
-                [target, "-m", "pip", "install", "-r", req],
-                check=True,
-            )
-        return py if os.path.exists(py) else py_win
-    return "python3"
+    if skip_venv:
+        if log_fn:
+            log_fn("info", "组件已开启「复用系统 Python」，跳过 venv 创建与依赖安装")
+        return "python3"
+    if not (os.path.exists(req) and os.path.getsize(req) > 0):
+        if log_fn:
+            log_fn("info", "无 requirements.txt，使用系统 Python")
+        return "python3"
+    venv = os.path.join(component_root, ".venv")
+    py = os.path.join(venv, "bin", "python")
+    py_win = os.path.join(venv, "Scripts", "python.exe")
+    if not (os.path.exists(py) or os.path.exists(py_win)):
+        if log_fn:
+            log_fn("info", f"创建隔离运行环境 venv: {venv}")
+        subprocess.run(["python3", "-m", "venv", venv], check=True)
+        target = py if os.path.exists(py) else py_win
+        _ensure_pip_mirror(log_fn)
+        if log_fn:
+            log_fn("info", "开始安装依赖: pip install -r requirements.txt")
+        _run_pip_install(target, req, log_fn)
+    return py if os.path.exists(py) else py_win
 
 
 def run_node(
@@ -184,6 +263,7 @@ def run_node(
     cancel_check=None,
     poll=0.25,
     log_fn=None,
+    skip_venv=False,
 ):
     """Execute a single component node.
 
@@ -201,7 +281,7 @@ def run_node(
     with open(input_path, "w") as f:
         json.dump(input_value, f)
 
-    py = resolve_python(component_root)
+    py = resolve_python(component_root, skip_venv=skip_venv, log_fn=log_fn)
     env = dict(os.environ)
     env.update(
         {

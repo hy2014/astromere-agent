@@ -41,6 +41,15 @@ from db import (
 from runner import prepare_env, run_node
 
 
+def _as_bool(v):
+    """Coerce a node-config value (bool / "true" / "False" / 0 / ...) to bool."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "y", "on")
+    return bool(v)
+
+
 class Worker:
     def __init__(self):
         self.stop = False
@@ -149,13 +158,14 @@ class Worker:
         return inp
 
     def resolve_node(self, node, plan, log_fn=None):
-        """Return (component_root, entry_point) for a node.
+        """Return (component_root, entry_point, skip_venv) for a node.
 
         The component definition (``components`` table) is the single source of
         truth for git/branch/ref/entry. ``node.config`` carries only instance
-        params (``node.config.params``), so we read the source straight from the
-        component row — there is no fallback into the node config (that legacy
-        path is gone). ``plan`` is kept for call-site compatibility.
+        params (``node.config.params``), and the "reuse system Python / skip
+        venv" flag is one of those instance params (key ``skip_venv``, alias
+        ``py.skipEnv``) — set per-node from the "系统配置" tab, NOT a column on
+        the component. ``plan`` is kept for call-site compatibility.
         """
         component_id = node.get("component_id") or ""
         comp = get_component(component_id)
@@ -165,10 +175,20 @@ class Worker:
         git_branch = (comp.get("git_branch") or "").strip() or "master"
         git_ref = (comp.get("git_ref") or "").strip() or ""
         entry_point = (comp.get("entry_point") or "").strip() or "run.py"
+        # 「复用系统 Python（跳过 venv）」是节点级系统开关，存于
+        # node.config.params，键名带 `system.` 前缀（system.skip_venv），兼容
+        # 旧别名 skip_venv / py.skipEnv。为真时 run_node 直接用系统 python3，
+        # 不建 venv、不装依赖（组件依赖 server 已有环境）。
+        params = (node.get("config") or {}).get("params") or {}
+        skip_venv = _as_bool(
+            params.get("system.skip_venv")
+            or params.get("skip_venv")
+            or params.get("py.skipEnv")
+        )
         component_root = prepare_env(
             git_url, git_branch, config.cache_root(), git_ref=git_ref, log_fn=log_fn
         )
-        return component_root, entry_point
+        return component_root, entry_point, skip_venv
 
     def process(self, exec_id):
         now = lambda: int(time.time() * 1000)
@@ -225,7 +245,7 @@ class Worker:
                 continue
 
             try:
-                component_root, entry_point = self.resolve_node(node, plan, log_fn=_log)
+                component_root, entry_point, skip_venv = self.resolve_node(node, plan, log_fn=_log)
             except Exception as e:
                 upsert_node_execution(
                     exec_id, node_id, "failed", completed_at_ms=now(), error=str(e)[:2000]
@@ -258,6 +278,7 @@ class Worker:
                 cancel_check=cancel_check,
                 poll=config.cancel_poll(),
                 log_fn=_log,
+                skip_venv=skip_venv,
             )
 
             if result["cancelled"]:

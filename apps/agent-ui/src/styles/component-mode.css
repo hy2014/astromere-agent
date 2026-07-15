@@ -1657,6 +1657,38 @@
   flex-direction: column;
 }
 
+/* 系统配置 tab — node-level key/value editor (writes node.config.params). */
+.system-config {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.system-config h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.system-config-empty {
+  margin: 0;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.system-config-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.system-config-row .instance-input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 /* 探索 tab empty state for a generic node (no componentId). */
 .explore-empty {
   padding: 24px 16px;

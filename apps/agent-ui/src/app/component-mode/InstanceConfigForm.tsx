@@ -1,4 +1,4 @@
-import {useEffect, useState} from "react";
+import {useEffect, useRef, useState} from "react";
 import type {Component, ConfigSchemaItem, DagNode} from "../../types";
 import {isListType, validateInstanceConfig} from "./componentModel";
 
@@ -12,6 +12,10 @@ type InstanceValues = Record<string, unknown>;
 
 type FreePair = {id: string; key: string; value: string};
 
+// System-level knobs are stored with the `system.` prefix (see SystemConfigForm)
+// and owned by the 系统配置 tab; this tab only manages run parameters (no prefix).
+const SYSTEM_PREFIX = "system.";
+
 function pairsFromValues(values: InstanceValues): FreePair[] {
   return Object.entries(values).map(([key, value]) => ({
     id: crypto.randomUUID(),
@@ -24,7 +28,13 @@ function readParams(node: DagNode): InstanceValues {
   const config = node.config as Record<string, unknown> | undefined;
   const raw = config && config.params;
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    return {...(raw as InstanceValues)};
+    const all = raw as Record<string, unknown>;
+    const out: InstanceValues = {};
+    // Drop `system.*` keys — those belong to the 系统配置 tab.
+    for (const [k, v] of Object.entries(all)) {
+      if (!k.startsWith(SYSTEM_PREFIX)) out[k] = v;
+    }
+    return out;
   }
   return {};
 }
@@ -205,6 +215,11 @@ function controlFor(
 export function InstanceConfigForm({node, component, onChange}: InstanceConfigFormProps) {
   const schema = component.configSchema ?? [];
   const [values, setValues] = useState<InstanceValues>(() => readParams(node));
+  // Keep the latest node so a commit here never clobbers keys owned by the
+  // 系统配置 tab (e.g. `skip_venv`): when we re-read existing params we use the
+  // freshest node, not the one captured at mount.
+  const nodeRef = useRef(node);
+  nodeRef.current = node;
 
   // Re-sync when a *different* node is selected (not on every keystroke).
   useEffect(() => {
@@ -217,17 +232,37 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
 
   function commit(next: InstanceValues) {
     setValues(next);
-    const config = (node.config && typeof node.config === "object" ? node.config : {}) as Record<
-      string,
-      unknown
-    >;
+    const config =
+      nodeRef.current.config && typeof nodeRef.current.config === "object"
+        ? (nodeRef.current.config as Record<string, unknown>)
+        : {};
+    const existing =
+      config.params && typeof config.params === "object"
+        ? (config.params as Record<string, unknown>)
+        : {};
+    const out: Record<string, unknown> = {};
+    // Preserve system-level knobs (owned by the 系统配置 tab, stored with the
+    // `system.` prefix) so this tab never clobbers them.
+    for (const [k, v] of Object.entries(existing)) {
+      if (k.startsWith(SYSTEM_PREFIX)) out[k] = v;
+    }
+    // Preserve any other legacy run params this tab does not enumerate (the
+    // structured schema view only lists declared keys; free-form mode already
+    // includes them in `next`).
+    for (const [k, v] of Object.entries(existing)) {
+      if (!k.startsWith(SYSTEM_PREFIX) && !schema.some((s) => s.key === k) && !(k in next)) {
+        out[k] = v;
+      }
+    }
+    // Overlay the run-param values edited in this tab.
+    Object.assign(out, next);
     const updated: DagNode = {
-      ...node,
-      // Persist ONLY the instance params. Any legacy git/IO/name keys that an
-      // older build wrote into node.config are dropped here, keeping the live
-      // node config a pure instance payload (source of truth for metadata is
-      // the components table).
-      config: {params: next},
+      ...nodeRef.current,
+      // Persist the instance params. Any legacy git/IO/name keys that an older
+      // build wrote into node.config are dropped here, keeping the live node
+      // config a pure instance payload (source of truth for metadata is the
+      // components table).
+      config: {params: out},
     };
     onChange(updated);
   }
