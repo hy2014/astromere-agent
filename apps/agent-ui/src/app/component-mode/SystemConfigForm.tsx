@@ -2,7 +2,7 @@ import {useEffect, useRef, useState} from "react";
 import type {DagNode} from "../../types";
 
 // System-level knobs are stored in `node.config.params` with this prefix
-// (e.g. `system.skip_venv`). The 系统配置 tab shows the key WITHOUT the prefix
+// (e.g. `system.python_path`). The 系统配置 tab shows the key WITHOUT the prefix
 // and re-adds it on save. This prefix is the hard boundary between system
 // knobs (this tab) and run parameters (the 配置 tab) — it does NOT depend on
 // the component's config_schema.
@@ -93,13 +93,13 @@ export function SystemConfigForm({node, onChange}: SystemConfigFormProps) {
           <input
             className="instance-input"
             value={p.key}
-            placeholder="key（如 skip_venv）"
+            placeholder="key（如 python_path）"
             onChange={(e) => update(p, {key: e.target.value})}
           />
           <input
             className="instance-input"
             value={p.value}
-            placeholder="value（如 false）"
+            placeholder="value（如 /root/miniconda3/bin/python3.10）"
             onChange={(e) => update(p, {value: e.target.value})}
           />
           <button

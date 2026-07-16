@@ -41,15 +41,6 @@ from db import (
 from runner import prepare_env, run_node
 
 
-def _as_bool(v):
-    """Coerce a node-config value (bool / "true" / "False" / 0 / ...) to bool."""
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, str):
-        return v.strip().lower() in ("1", "true", "yes", "y", "on")
-    return bool(v)
-
-
 class Worker:
     def __init__(self):
         self.stop = False
@@ -158,14 +149,15 @@ class Worker:
         return inp
 
     def resolve_node(self, node, plan, log_fn=None):
-        """Return (component_root, entry_point, skip_venv) for a node.
+        """Return (component_root, entry_point, python_path) for a node.
 
         The component definition (``components`` table) is the single source of
         truth for git/branch/ref/entry. ``node.config`` carries only instance
-        params (``node.config.params``), and the "reuse system Python / skip
-        venv" flag is one of those instance params (key ``skip_venv``, alias
-        ``py.skipEnv``) — set per-node from the "系统配置" tab, NOT a column on
-        the component. ``plan`` is kept for call-site compatibility.
+        params (``node.config.params``), and the "use this exact Python
+        interpreter" setting is one of those instance params (key
+        ``system.python_path``, value = absolute path to the python executable)
+        — set per-node from the "系统配置" tab, NOT a column on the component.
+        ``plan`` is kept for call-site compatibility.
         """
         component_id = node.get("component_id") or ""
         comp = get_component(component_id)
@@ -175,20 +167,18 @@ class Worker:
         git_branch = (comp.get("git_branch") or "").strip() or "master"
         git_ref = (comp.get("git_ref") or "").strip() or ""
         entry_point = (comp.get("entry_point") or "").strip() or "run.py"
-        # 「复用系统 Python（跳过 venv）」是节点级系统开关，存于
-        # node.config.params，键名带 `system.` 前缀（system.skip_venv），兼容
-        # 旧别名 skip_venv / py.skipEnv。为真时 run_node 直接用系统 python3，
-        # 不建 venv、不装依赖（组件依赖 server 已有环境）。
+        # 「指定 Python 解释器路径」是节点级系统配置，存于 node.config.params
+        # （key=system.python_path，值=python 可执行文件绝对路径，如
+        # /root/miniconda3/bin/python3.10）。设了就直接用该解释器跑（不建 venv、
+        # 不装依赖），复用它环境里已有的依赖（如 conda 里 editable 安装的
+        # astromere-infra 的 infra 包）。不设则走默认隔离 venv。
         params = (node.get("config") or {}).get("params") or {}
-        skip_venv = _as_bool(
-            params.get("system.skip_venv")
-            or params.get("skip_venv")
-            or params.get("py.skipEnv")
-        )
+        python_path = params.get("system.python_path")
+        python_path = python_path.strip() if isinstance(python_path, str) else ""
         component_root = prepare_env(
             git_url, git_branch, config.cache_root(), git_ref=git_ref, log_fn=log_fn
         )
-        return component_root, entry_point, skip_venv
+        return component_root, entry_point, python_path
 
     def process(self, exec_id):
         now = lambda: int(time.time() * 1000)
@@ -245,7 +235,7 @@ class Worker:
                 continue
 
             try:
-                component_root, entry_point, skip_venv = self.resolve_node(node, plan, log_fn=_log)
+                component_root, entry_point, python_path = self.resolve_node(node, plan, log_fn=_log)
             except Exception as e:
                 upsert_node_execution(
                     exec_id, node_id, "failed", completed_at_ms=now(), error=str(e)[:2000]
@@ -259,6 +249,9 @@ class Worker:
             upsert_node_execution(exec_id, node_id, "preparing", started_at_ms=now())
             add_log(exec_id, node_id, "info", f"Preparing environment for node {node_id}")
 
+            _log("info", f"节点解析: 组件={node.get('component_id') or ''} 入口={entry_point} "
+                          f"解释器={python_path or '自动探测'} 根目录={component_root}")
+
             if cancel_check():
                 upsert_node_execution(exec_id, node_id, "cancelled", completed_at_ms=now())
                 set_execution_status(exec_id, "cancelled", now())
@@ -268,6 +261,10 @@ class Worker:
             add_log(exec_id, node_id, "info", f"Running node {node_id}")
 
             inp = self.build_input(node, plan, node_outputs)
+            if inp:
+                _log("info", f"构建输入: 键={list(inp.keys())}")
+            else:
+                _log("info", "构建输入: 空（无上游、无实例参数）")
             work_dir = os.path.join(config.cache_root(), "runs", exec_id, node_id)
 
             result = run_node(
@@ -278,7 +275,7 @@ class Worker:
                 cancel_check=cancel_check,
                 poll=config.cancel_poll(),
                 log_fn=_log,
-                skip_venv=skip_venv,
+                python_path=python_path,
             )
 
             if result["cancelled"]:
