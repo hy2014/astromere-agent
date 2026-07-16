@@ -216,8 +216,8 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
   const schema = component.configSchema ?? [];
   const [values, setValues] = useState<InstanceValues>(() => readParams(node));
   // Keep the latest node so a commit here never clobbers keys owned by the
-  // 系统配置 tab (e.g. `skip_venv`): when we re-read existing params we use the
-  // freshest node, not the one captured at mount.
+  // 系统配置 tab (e.g. `system.python_path`): when we re-read existing params
+  // we use the freshest node, not the one captured at mount.
   const nodeRef = useRef(node);
   nodeRef.current = node;
 
