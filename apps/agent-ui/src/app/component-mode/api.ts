@@ -8,9 +8,12 @@
 // 导出同名函数、同参数、同返回类型，调用方只需把 import 从 `../../tauri`
 // 改成 `./api` 即可，业务代码零改动。
 //
-// 连接配置存 webview localStorage（key `agent-ui.dagServer.v1`），复用
-// code mode 的 RemoteProfile / testRemoteHealth / normalizeBaseUrl 机制。
+// 连接配置持久化到磁盘 `<AGENT_UI_HOME>/dag-mode/dagServer.json`
+// （AGENT_UI_HOME 默认 ~/.agent-ui，可由环境变量覆盖），复用 code mode 的
+// RemoteProfile / testRemoteHealth / normalizeBaseUrl 机制。
+// 启动时从磁盘加载；若磁盘尚无配置但旧 localStorage 有，则自动迁移过去。
 
+import { invoke } from "@tauri-apps/api/core";
 import type { RemoteProfile } from "../../runtime/remote";
 import { testRemoteHealth } from "../../runtime/remote";
 import { createRemoteProfileInput } from "../../runtime/profiles";
@@ -28,35 +31,85 @@ import type {
 
 const DAG_SERVER_KEY = "agent-ui.dagServer.v1";
 
-// ─── 连接配置持久化 ──────────────────────────────────────────────────
+// ─── 连接配置持久化（磁盘：~/.agent-ui/dag-mode/dagServer.json）────────
 
-export function loadDagServer(): RemoteProfile | null {
-  const raw = window.localStorage.getItem(DAG_SERVER_KEY);
-  if (!raw) return null;
+// 内存缓存：启动后从磁盘加载，之后同步读取直接走缓存，写入时异步落盘。
+let dagServerCache: RemoteProfile | null = null;
+let dagServerLoaded = false;
+
+/**
+ * 启动时调用：从磁盘加载 DAG server 配置到内存缓存。
+ * - 磁盘已有 → 直接采用；
+ * - 磁盘无、旧 localStorage 有 → 迁移到磁盘并删除旧键；
+ * - invoke 不可用（纯 web / 测试环境）→ 退化为直接读 localStorage。
+ */
+export async function initDagServerConfig(): Promise<void> {
   try {
-    const p = JSON.parse(raw);
-    if (typeof p?.id === "string" && typeof p?.name === "string" && typeof p?.baseUrl === "string") {
-      return {
-        id: p.id,
-        name: p.name,
-        baseUrl: p.baseUrl,
-        token: typeof p.token === "string" ? p.token.trim() || undefined : undefined,
-      };
+    const fromDisk = (await invoke("load_dag_server")) as RemoteProfile | null;
+    if (fromDisk && typeof fromDisk.id === "string" && typeof fromDisk.baseUrl === "string") {
+      dagServerCache = fromDisk;
+      dagServerLoaded = true;
+      return;
+    }
+    // 迁移旧 localStorage 配置
+    const raw = window.localStorage.getItem(DAG_SERVER_KEY);
+    if (raw) {
+      try {
+        const p = JSON.parse(raw);
+        if (typeof p?.id === "string" && typeof p?.name === "string" && typeof p?.baseUrl === "string") {
+          const profile: RemoteProfile = {
+            id: p.id,
+            name: p.name,
+            baseUrl: p.baseUrl,
+            token: typeof p.token === "string" ? p.token.trim() || undefined : undefined,
+          };
+          dagServerCache = profile;
+          await invoke("save_dag_server", { profile }).catch(() => {});
+          window.localStorage.removeItem(DAG_SERVER_KEY);
+        }
+      } catch {
+        // ignore malformed legacy value
+      }
     }
   } catch {
-    return null;
+    // invoke 不可用：退化读 localStorage
+    const raw = window.localStorage.getItem(DAG_SERVER_KEY);
+    if (raw) {
+      try {
+        const p = JSON.parse(raw);
+        if (typeof p?.id === "string" && typeof p?.baseUrl === "string") {
+          dagServerCache = {
+            id: p.id,
+            name: p.name ?? p.baseUrl,
+            baseUrl: p.baseUrl,
+            token: typeof p.token === "string" ? p.token.trim() || undefined : undefined,
+          };
+        }
+      } catch {
+        // ignore
+      }
+    }
+  } finally {
+    dagServerLoaded = true;
   }
-  return null;
+}
+
+export function loadDagServer(): RemoteProfile | null {
+  return dagServerCache;
 }
 
 export function saveDagServer(input: { name: string; baseUrl: string; token?: string }): RemoteProfile {
   const profile = createRemoteProfileInput(input);
-  window.localStorage.setItem(DAG_SERVER_KEY, JSON.stringify(profile));
+  dagServerCache = profile;
+  dagServerLoaded = true;
+  // 异步落盘，失败静默（不影响本次连接）。
+  invoke("save_dag_server", { profile }).catch(() => {});
   return profile;
 }
 
 export function clearDagServer(): void {
-  window.localStorage.removeItem(DAG_SERVER_KEY);
+  dagServerCache = null;
+  invoke("clear_dag_server").catch(() => {});
 }
 
 export function testDagServerHealth(profile: RemoteProfile) {

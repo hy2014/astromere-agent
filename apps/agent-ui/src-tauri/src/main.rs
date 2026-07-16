@@ -14,6 +14,8 @@ use claw_agent_ui::control;
 
 #[cfg(feature = "gui")]
 use claw_agent_ui::dag;
+#[cfg(feature = "gui")]
+use claw_agent_ui::dag_server_config;
 
 #[cfg(feature = "gui")]
 use claw_agent_ui::mcp;
@@ -166,6 +168,9 @@ fn main() {
             scheduler::get_execution_logs,
             scheduler::get_node_executions,
             scheduler::cancel_execution,
+            dag_server_config::load_dag_server,
+            dag_server_config::save_dag_server,
+            dag_server_config::clear_dag_server,
             save_bundle_usage_snapshot,
             load_bundle_usage_snapshot,
             load_bundle_usage_snapshots_for_session,
