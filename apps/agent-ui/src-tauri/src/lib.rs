@@ -28,6 +28,7 @@ pub mod components;
 pub mod control;
 pub mod dag;
 pub mod dag_api;
+pub mod dag_server_config;
 pub mod engine;
 pub mod mcp;
 pub mod mcp_core;
