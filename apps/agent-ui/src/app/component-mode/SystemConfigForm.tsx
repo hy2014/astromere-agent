@@ -99,7 +99,7 @@ export function SystemConfigForm({node, onChange}: SystemConfigFormProps) {
           <input
             className="instance-input"
             value={p.value}
-            placeholder="value（如 /root/miniconda3/bin/python3.10）"
+            placeholder="value（如 ~/miniconda3/bin/python3.10）"
             onChange={(e) => update(p, {value: e.target.value})}
           />
           <button
