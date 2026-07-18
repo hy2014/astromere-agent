@@ -51,14 +51,14 @@ fn dag_server_path() -> PathBuf {
     agent_ui_home().join("dag-mode").join("dagServer.json")
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn load_dag_server() -> Option<RemoteProfileFile> {
     let path = dag_server_path();
     let data = std::fs::read_to_string(&path).ok()?;
     serde_json::from_str(&data).ok()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn save_dag_server(profile: RemoteProfileFile) -> Result<(), String> {
     let dir = dag_mode_dir().map_err(|e| e.to_string())?;
     let path = dir.join("dagServer.json");
@@ -67,7 +67,7 @@ pub fn save_dag_server(profile: RemoteProfileFile) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "gui", tauri::command)]
 pub fn clear_dag_server() -> Result<(), String> {
     let path = dag_server_path();
     if path.exists() {
