@@ -23,8 +23,10 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 
 import config
 from db import (
@@ -44,6 +46,25 @@ from runner import prepare_env, run_node
 class Worker:
     def __init__(self):
         self.stop = False
+        # Per-DAG mutual exclusion (in-process precise guarantee). Two runs of
+        # the same dag never interleave: the scheduler only claims an exec whose
+        # dag_id is not in this set. The SQLite optimistic lock in claim_next is
+        # the cross-instance safety net.
+        self.running_dags = set()
+        self.dag_lock = threading.Lock()
+        # Global cap on concurrently-running component subprocesses. This is the
+        # single real throttle (see docs/parallel-execution.md §2/§4). A node
+        # acquires it right before launching its entry_point Popen and releases
+        # in `finally`, so the number of live component processes never exceeds
+        # min(CPU, 8) across ALL concurrently-running DAG runs.
+        self.component_sem = threading.Semaphore(max(1, min(os.cpu_count() or 4, 8)))
+        # In-process thread pool: the scheduler submits one `process` per claimed
+        # DAG run, so multiple DAG runs execute concurrently. (worker 进程数恒为
+        # 1；崩溃隔离由 Rust 侧负责。)
+        self.executor = ThreadPoolExecutor(
+            max_workers=max(1, min(os.cpu_count() or 4, 8)),
+            thread_name_prefix="dag-run",
+        )
         try:
             signal.signal(signal.SIGTERM, self._on_signal)
             signal.signal(signal.SIGINT, self._on_signal)
@@ -83,6 +104,46 @@ class Worker:
                 if indeg[nxt] == 0:
                     q.append(nxt)
         return out
+
+    @staticmethod
+    def compute_layers(plan):
+        """Group node ids into topological layers.
+
+        Every node in a layer is independent of the others in the same layer
+        (no edges between them), so the layer can be executed concurrently.
+        Layers themselves run strictly in order, which is what makes the
+        per-layer concurrency safe: by the time a downstream layer starts, all
+        of its upstream nodes have already settled.
+        """
+        nodes = plan.get("nodes") or []
+        edges = plan.get("edges") or []
+        node_ids = {n["id"] for n in nodes}
+        indeg = {n["id"]: 0 for n in nodes}
+        adj = {n["id"]: [] for n in nodes}
+        for e in edges:
+            s, t = e.get("source_node_id"), e.get("target_node_id")
+            if s in node_ids and t in node_ids:
+                adj[s].append(t)
+                indeg[t] += 1
+        layers = []
+        remaining = dict(indeg)
+        ready = sorted(nid for nid, d in remaining.items() if d == 0)
+        while ready:
+            layers.append(ready)
+            nxt = []
+            for nid in ready:
+                for t in adj[nid]:
+                    remaining[t] -= 1
+                    if remaining[t] == 0:
+                        nxt.append(t)
+            ready = sorted(nxt)
+        # Any leftover nodes (e.g. due to a cycle) are dumped into a final layer
+        # so we never silently drop them. Cycles are a graph-authoring error and
+        # are not expected in practice.
+        leftover = sorted(nid for nid, d in remaining.items() if d > 0)
+        if leftover:
+            layers.append(leftover)
+        return layers
 
     @staticmethod
     def parse_config(node):
@@ -181,6 +242,17 @@ class Worker:
         return component_root, entry_point, python_path
 
     def process(self, exec_id):
+        """Drive one DAG execution through its state machine.
+
+        Concurrency model (docs/parallel-execution.md §2): nodes are grouped
+        into topological *layers*; nodes within a layer have no dependency on
+        each other and run concurrently on plain threads. Layers run strictly
+        in order (we join a whole layer before starting the next), so every
+        upstream node has already settled before its downstream reads its
+        output. The number of *component subprocesses* running at once is capped
+        by ``self.component_sem`` across ALL in-flight DAG runs (the real
+        throttle), independent of how many layers/DAGs are in flight.
+        """
         now = lambda: int(time.time() * 1000)
         add_log(exec_id, None, "info", f"Worker {config.worker_id()} claimed execution {exec_id}")
 
@@ -199,25 +271,23 @@ class Worker:
                 plan = None
         if not plan:
             plan = get_dag_plan(dag_id)
-        order = self.compute_order(plan)
+        layers = self.compute_layers(plan)
         node_map = {n["id"]: n for n in plan["nodes"]}
+        # Shared across layer threads; writes are guarded by state_lock. Reads of
+        # upstream values happen only in later layers (after join => happens-
+        # before), so they need no lock.
         node_outputs = {}
-        # Per-node control-flow signal: "success" | "failed". Skipped nodes are
-        # recorded as "failed" so the failure keeps propagating downstream. This
-        # drives status gating (see docs/engine-executor.md "status 门控").
         node_status = {}
+        state_lock = threading.Lock()
+        cancel_event = threading.Event()
         any_failed = False
         cancel_check = lambda: is_cancel_requested(exec_id)
 
-        for node_id in order:
-            if self.stop:
-                upsert_node_execution(exec_id, node_id, "cancelled", completed_at_ms=now())
-                set_execution_status(exec_id, "cancelled", now())
-                return
-
+        def run_node_thread(node_id):
+            nonlocal any_failed
             node = node_map.get(node_id)
             if node is None:
-                continue
+                return
 
             def _log(kind, message):
                 add_log(exec_id, node_id, kind, message)
@@ -228,11 +298,14 @@ class Worker:
             upstream_ids = [
                 e["source_node_id"] for e in plan["edges"] if e["target_node_id"] == node_id
             ]
-            if any(node_status.get(uid) == "failed" for uid in upstream_ids):
+            with state_lock:
+                upstream_failed = any(node_status.get(uid) == "failed" for uid in upstream_ids)
+            if upstream_failed:
                 upsert_node_execution(exec_id, node_id, "skipped", completed_at_ms=now())
                 add_log(exec_id, node_id, "info", "上游状态为 failed/skipped，本节点跳过")
-                node_status[node_id] = "failed"  # skipped ⇒ 对下游等价于 failed
-                continue
+                with state_lock:
+                    node_status[node_id] = "failed"  # skipped ⇒ 对下游等价于 failed
+                return
 
             try:
                 component_root, entry_point, python_path = self.resolve_node(node, plan, log_fn=_log)
@@ -242,19 +315,19 @@ class Worker:
                 )
                 add_log(exec_id, node_id, "error", f"Resolve failed: {e}")
                 # 分支隔离：解析失败只标记本节点，不再中止整条 DAG。
-                node_status[node_id] = "failed"
-                any_failed = True
-                continue
+                with state_lock:
+                    node_status[node_id] = "failed"
+                    any_failed = True
+                return
 
             upsert_node_execution(exec_id, node_id, "preparing", started_at_ms=now())
             add_log(exec_id, node_id, "info", f"Preparing environment for node {node_id}")
-
             _log("info", f"节点解析: 组件={node.get('component_id') or ''} 入口={entry_point} "
                           f"解释器={python_path or '自动探测'} 根目录={component_root}")
 
-            if cancel_check():
+            if cancel_event.is_set() or self.stop:
                 upsert_node_execution(exec_id, node_id, "cancelled", completed_at_ms=now())
-                set_execution_status(exec_id, "cancelled", now())
+                cancel_event.set()
                 return
 
             upsert_node_execution(exec_id, node_id, "running", started_at_ms=now())
@@ -267,20 +340,26 @@ class Worker:
                 _log("info", "构建输入: 空（无上游、无实例参数）")
             work_dir = os.path.join(config.cache_root(), "runs", exec_id, node_id)
 
-            result = run_node(
-                component_root,
-                entry_point,
-                inp,
-                work_dir,
-                cancel_check=cancel_check,
-                poll=config.cancel_poll(),
-                log_fn=_log,
-                python_path=python_path,
-            )
+            # 全局并发信号量：限制"同时运行的组件子进程数 ≤ min(CPU,8)"。这是真正的限流
+            # 旋钮，跨所有并发 DAG run 生效（见 docs/parallel-execution.md §2/§4）。
+            self.component_sem.acquire()
+            try:
+                result = run_node(
+                    component_root,
+                    entry_point,
+                    inp,
+                    work_dir,
+                    cancel_check=lambda: cancel_check() or cancel_event.is_set() or self.stop,
+                    poll=config.cancel_poll(),
+                    log_fn=_log,
+                    python_path=python_path,
+                )
+            finally:
+                self.component_sem.release()
 
-            if result["cancelled"]:
+            if result["cancelled"] or cancel_event.is_set():
                 upsert_node_execution(exec_id, node_id, "cancelled", completed_at_ms=now())
-                set_execution_status(exec_id, "cancelled", now())
+                cancel_event.set()
                 return
 
             if not result["success"]:
@@ -291,12 +370,14 @@ class Worker:
                 add_log(exec_id, node_id, "error", f"Node failed: {err[:500]}")
                 # 分支隔离：节点失败不再中止整条 DAG——标记本节点，让下游沿 status 门控
                 # 跳过，其他无依赖分支照常跑完（见 docs/engine-executor.md「status 门控」）。
-                node_status[node_id] = "failed"
-                any_failed = True
-                continue
+                with state_lock:
+                    node_status[node_id] = "failed"
+                    any_failed = True
+                return
 
-            node_outputs[node_id] = result["output_value"]
-            node_status[node_id] = "success"
+            with state_lock:
+                node_outputs[node_id] = result["output_value"]
+                node_status[node_id] = "success"
             upsert_node_execution(
                 exec_id,
                 node_id,
@@ -307,11 +388,44 @@ class Worker:
             )
             add_log(exec_id, node_id, "info", "Node succeeded")
 
-        # 收尾：只要有真正运行失败/解析失败的节点即整体 failed（被门控跳过的节点不单独
-        # 计失败，但导致跳过的那个 failed 上游已置 any_failed）；否则 success。
+        for layer in layers:
+            if self.stop or cancel_event.is_set():
+                break
+            threads = []
+            for node_id in layer:
+                t = threading.Thread(target=run_node_thread, args=(node_id,), name=f"node-{node_id}")
+                threads.append(t)
+                t.start()
+            for t in threads:
+                t.join()
+            if self.stop or cancel_event.is_set():
+                break
+
+        # 收尾：取消/停止 => 未启动的节点标 cancelled；否则按 any_failed 决定 success/failed。
+        if cancel_event.is_set() or self.stop:
+            for nid in node_map:
+                with state_lock:
+                    st = node_status.get(nid)
+                if st is None:
+                    upsert_node_execution(exec_id, nid, "cancelled", completed_at_ms=now())
+            set_execution_status(exec_id, "cancelled", now())
+            add_log(exec_id, None, "info", "Execution cancelled")
+            return
+
         final = "failed" if any_failed else "success"
         set_execution_status(exec_id, final, now(), outputs=node_outputs)
         add_log(exec_id, None, "info", f"Execution {final}")
+
+    def _run_wrapped(self, exec_id, dag_id):
+        """Run ``process`` on an executor thread and always release the per-DAG
+        mutex afterwards so the same DAG can be claimed again.
+        """
+        try:
+            self.process(exec_id)
+        finally:
+            if dag_id is not None:
+                with self.dag_lock:
+                    self.running_dags.discard(dag_id)
 
 
 def main():
@@ -322,17 +436,30 @@ def main():
         f"db={config.db_path()}; poll={config.poll_interval()}s",
         flush=True,
     )
-    while not worker.stop:
-        exec_id = claim_next()
-        if exec_id:
-            try:
-                worker.process(exec_id)
-            except Exception as e:  # pragma: no cover - safety net
-                set_execution_status(exec_id, "failed", int(time.time() * 1000))
-                add_log(exec_id, None, "error", f"Unhandled worker error: {e}")
-        else:
-            time.sleep(config.poll_interval())
-    print("[engine_executor] worker stopped", flush=True)
+    # Concurrent scheduler: claim one exec at a time, but instead of running it
+    # inline we submit it to the in-process thread pool so MULTIPLE DAG runs
+    # execute concurrently (docs/parallel-execution.md §2, solves limitation ①).
+    # Per-DAG mutual exclusion (claim_next exclude_dag_ids + running_dags set)
+    # guarantees two runs of the same DAG never interleave.
+    try:
+        while not worker.stop:
+            with worker.dag_lock:
+                exclude = set(worker.running_dags)
+            exec_id = claim_next(exclude_dag_ids=exclude)
+            if exec_id:
+                row = get_execution(exec_id)
+                dag_id = row["dag_id"] if row else None
+                if dag_id is not None:
+                    with worker.dag_lock:
+                        worker.running_dags.add(dag_id)
+                worker.executor.submit(worker._run_wrapped, exec_id, dag_id)
+            else:
+                time.sleep(config.poll_interval())
+    finally:
+        # Graceful shutdown: stop claiming new work and let in-flight runs finish.
+        # (Crash recovery / orphan reaping is a separate follow-up, see docs.)
+        worker.executor.shutdown(wait=True)
+        print("[engine_executor] worker stopped", flush=True)
 
 
 if __name__ == "__main__":

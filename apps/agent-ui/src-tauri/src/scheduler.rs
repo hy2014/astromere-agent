@@ -1,11 +1,13 @@
 //! Topological scheduling and execution state machine for the component DAG platform.
 
-use crate::dag::get_dag;
+use crate::dag::{get_dag, cron_matches};
 use crate::sqlite::open_sqlite_database;
 use crate::types::{DagDetail, DagExecution, ExecutionLog, NodeExecution};
+use chrono::{Local, Timelike};
 use rusqlite::params;
 use serde::Serialize;
 use serde_json::Value;
+use std::time::Duration;
 
 fn error_to_string(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -137,6 +139,141 @@ pub fn submit_dag_run(dag_id: &str, trigger_kind: &str) -> Result<DagExecution, 
     .map_err(error_to_string)?;
 
     Ok(execution)
+}
+
+/// Background cron scheduler for published DAGs.
+///
+/// Spawns its own thread (mirroring `engine::start_worker_supervisor`) so it can
+/// be launched inline from `run_server` without blocking the HTTP server. Every
+/// minute it scans all `published` DAGs that carry a cron expression, fires
+/// those whose schedule matches the current *local* minute, and records the
+/// fired minute in `dags.last_cron_run_ms` to avoid double-firing within the
+/// same minute. If a previous run is still executing, the due tick is *queued*
+/// behind it (coalesced to at most one waiting run) rather than run in parallel
+/// or dropped — the serial FIFO worker starts it as soon as the current run
+/// finishes. So long-running schedules never overlap and never pile up
+/// unboundedly. Errors are logged, never fatal — the loop keeps running.
+///
+/// Intended to run only on the execution host (called from inside
+/// `if run_worker { ... }` in `server.rs`), so there is exactly one scheduler
+/// per database / worker.
+pub fn start_cron_scheduler() {
+    std::thread::spawn(|| {
+        loop {
+            if let Err(e) = cron_tick_once() {
+                eprintln!("[cron] tick error: {e}");
+            }
+            sleep_until_next_minute();
+        }
+    });
+}
+
+/// True if the DAG already has a run *waiting to start* — i.e. a `submit` row
+/// the worker has not claimed yet. Used to coalesce cron ticks into a queue of
+/// depth 1: while a previous run is executing, the first matching tick enqueues
+/// one waiting run (which the serial FIFO worker picks up as soon as the current
+/// one finishes), and any further ticks are merged until that waiting run
+/// starts. Net effect: never overlap, never drop a due tick, never pile up
+/// unboundedly — at most one running + one queued.
+///
+/// Note: `accepted` / `running` are deliberately NOT counted here — a run that
+/// is already executing must not block the *next* one from being queued behind
+/// it, otherwise a long run would silently drop the following schedule (that
+/// would be the old "skip" behaviour, not queueing).
+fn dag_has_pending_run(conn: &rusqlite::Connection, dag_id: &str) -> bool {
+    conn
+        .query_row(
+            "SELECT 1 FROM dag_executions \
+             WHERE dag_id = ?1 AND status = 'submit' \
+             LIMIT 1",
+            params![dag_id],
+            |_| Ok(()),
+        )
+        .is_ok()
+}
+
+/// One scheduler pass: find DAGs due this minute and enqueue them.
+///
+/// If the DAG is idle it fires immediately. If a previous run is still
+/// executing, the due tick is *queued* behind it (one waiting run max) so the
+/// serial FIFO worker runs it right after the current one finishes — rather than
+/// dropping the tick. Further ticks while a run is already queued are merged.
+fn cron_tick_once() -> Result<(), String> {
+    let (conn, _path) = open_sqlite_database()?;
+
+    // Collect (id, cron, last_cron_run_ms) for every published DAG with a cron.
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, cron, last_cron_run_ms FROM dags \
+             WHERE status = 'published' AND cron IS NOT NULL AND cron != ''",
+        )
+        .map_err(error_to_string)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })
+        .map_err(error_to_string)?;
+
+    let mut due: Vec<(String, String, Option<i64>)> = Vec::new();
+    for r in rows {
+        due.push(r.map_err(error_to_string)?);
+    }
+
+    let now = Local::now();
+    // Epoch-ms of the start of the current *local* minute — used as the dedup key.
+    let total_ns = now.timestamp() as i64 * 1_000_000_000 + now.timestamp_subsec_nanos() as i64;
+    let off_ns = now.offset().local_minus_utc() as i64 * 1_000_000_000;
+    let local_minute_ns = total_ns + off_ns - ((total_ns + off_ns) % (60 * 1_000_000_000));
+    let start_of_minute_ms = local_minute_ns / 1_000_000;
+
+    for (id, cron, last) in due {
+        if !cron_matches(&cron, &now) {
+            continue;
+        }
+        if last == Some(start_of_minute_ms) {
+            // Already fired for this minute.
+            continue;
+        }
+        // Coalesce: if a run is already waiting to start (a `submit` row not yet
+        // claimed), merge this tick into it instead of stacking a second
+        // waiting run. A currently executing (accepted/running) run does NOT
+        // block queueing — the new run is enqueued behind it and the serial
+        // worker picks it up when the current one finishes, so a due tick is
+        // never dropped. Queue depth stays at most 1.
+        if dag_has_pending_run(&conn, &id) {
+            eprintln!("[cron] merge {} (cron '{}'): a run is already queued waiting", id, cron);
+            continue;
+        }
+        match submit_dag_run(&id, "cron") {
+            Ok(_) => {
+                eprintln!("[cron] triggered dag {} (cron '{}')", id, cron);
+                if let Err(e) = conn.execute(
+                    "UPDATE dags SET last_cron_run_ms = ?2 WHERE id = ?1",
+                    params![id, start_of_minute_ms],
+                ) {
+                    eprintln!("[cron] update last_cron_run_ms for {} failed: {}", id, e);
+                }
+            }
+            Err(e) => eprintln!("[cron] submit {} failed: {}", id, e),
+        }
+    }
+
+    Ok(())
+}
+
+/// Sleep until just past the next minute boundary so the next tick lands on a
+/// fresh minute.
+fn sleep_until_next_minute() {
+    let now = Local::now();
+    let secs_into_minute = now.second() as u64;
+    let nanos_into_sec = now.timestamp_subsec_nanos() as u64;
+    let millis_to_next = (60 - secs_into_minute) * 1000 - (nanos_into_sec / 1_000_000) as u64;
+    // small slack so we don't fire a hair early
+    std::thread::sleep(Duration::from_millis(millis_to_next.max(1) + 50));
 }
 
 #[cfg_attr(feature = "gui", tauri::command)]

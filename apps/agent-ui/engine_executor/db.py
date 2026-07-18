@@ -67,22 +67,36 @@ def ensure_executor_schema() -> None:
         conn.close()
 
 
-def claim_next():
+def claim_next(exclude_dag_ids=None):
     """Atomically claim one ``submit`` execution.
 
     Uses a single conditional UPDATE guarded by ``status='submit'`` and checks
     ``rowcount`` so two workers can never claim the same job (optimistic
     locking). Returns the execution id, or ``None`` if nothing is pending.
+
+    ``exclude_dag_ids`` (iterable of dag ids) lets the in-process scheduler skip
+    executions whose DAG already has a run in flight — this is the per-DAG mutual
+    exclusion that keeps two runs of the same DAG from interleaving. The SQLite
+    optimistic lock above is the cross-instance safety net; the in-process check
+    is the precise guarantee.
     """
     conn = connect()
     try:
-        row = conn.execute(
-            "SELECT id FROM dag_executions WHERE status='submit' "
-            "ORDER BY started_at_ms ASC LIMIT 1"
-        ).fetchone()
-        if row is None:
+        rows = conn.execute(
+            "SELECT id, dag_id FROM dag_executions WHERE status='submit' "
+            "ORDER BY started_at_ms ASC"
+        ).fetchall()
+        if not rows:
             return None
-        exec_id = row["id"]
+        chosen = None
+        for row in rows:
+            if exclude_dag_ids and row["dag_id"] in exclude_dag_ids:
+                continue
+            chosen = row
+            break
+        if chosen is None:
+            return None
+        exec_id = chosen["id"]
         cur = conn.execute(
             "UPDATE dag_executions SET status='accepted', worker_id=?, claimed_at_ms=? "
             "WHERE id=? AND status='submit'",

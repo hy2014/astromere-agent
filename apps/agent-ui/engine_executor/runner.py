@@ -19,6 +19,7 @@ import signal
 import subprocess
 import threading
 import time
+import uuid
 
 
 def _git(root, args):
@@ -77,49 +78,71 @@ def _pin_ref(root, branch, git_ref):
     _git(root, ["reset", "--hard", target])
 
 
-def _resync_cached(root, branch, git_ref, log):
-    """Update an existing clone so a freshly pushed commit is picked up.
+def _is_full_sha(ref: str) -> bool:
+    """True iff ``ref`` looks like a full 40-char hex git commit SHA."""
+    return len(ref) == 40 and all(c in "0123456789abcdef" for c in ref.lower())
 
-    If the requested ``branch`` does not exist on the remote, this raises a
-    ``RuntimeError`` — it must NOT silently fall back to another branch, or
-    the executor would run code the user never asked for.
+
+def _resolve_sha(git_url, branch, git_ref, log):
+    """Resolve the target commit SHA for ``(git_url, branch, git_ref)``.
+
+    * A full 40-hex commit => used as-is (no network needed to resolve).
+    * A branch/tag name => resolved via ``git ls-remote`` to its commit SHA.
+
+    Returns the 40-char SHA. Raises ``RuntimeError`` if it cannot be resolved
+    (branch/tag missing, network or auth failure) — never silently falls back.
     """
-    if git_ref:
-        log("info", f"prepare_env: cache exists; pinning to ref {git_ref}")
-        _pin_ref(root, branch, git_ref)
-        return
-    log("info", f"prepare_env: cache exists; re-pulling origin/{branch}")
-    _git(root, ["fetch", "--depth", "1", "origin", branch])
-    _git(root, ["reset", "--hard", f"origin/{branch}"])
-    log("info", f"prepare_env: sync complete in {root}")
+    if git_ref and _is_full_sha(git_ref):
+        return git_ref
+    refspec = git_ref or branch
+    try:
+        r = subprocess.run(
+            ["git", "ls-remote", git_url, refspec],
+            capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"git ls-remote 超时（解析 {refspec} 失败）: {git_url}")
+    if r.returncode != 0 or not r.stdout.strip():
+        raise RuntimeError(
+            f"git ls-remote 解析 '{refspec}' 失败（分支/标签不存在或无法访问）: "
+            f"{r.stderr.strip() or '无输出'}"
+        )
+    sha = r.stdout.split()[0].strip()
+    if not _is_full_sha(sha):
+        raise RuntimeError(f"git ls-remote 返回了非法的 SHA: {sha!r}")
+    return sha
 
 
 def prepare_env(git_url, git_branch, cache_root, git_ref="", log_fn=None):
-    """Resolve a component root directory by cloning/syncing the component's
+    """Resolve a component root directory by cloning the component's git repo
+    into an **immutable, per-commit** cache directory.
 
-    * A git URL (``https://``, ``git@``, or the local ``file:///abs/path``
-      transport) is cloned into ``cache_root/<hash>``. The **same**
-      ``(git_url, branch, git_ref)`` always resolves to the same directory
-      (the cache key), so a re-run reuses the clone — but it is **re-synced
-      first** so a freshly pushed commit is picked up. This is what makes
-      "edit code → push → run dag" work: the executor never runs stale code.
-      ``file://`` goes through the exact same ``git clone`` path as a remote.
-    * ``git_ref`` (optional) pins the clone to a specific commit/tag/branch.
-      When set it is folded into the cache key (a different ref ⇒ a different
-      directory) and the working tree is checked out to it after every sync,
-      so the exact code that ran is reproducible and auditable.
-    * A plain local directory (absolute/relative path, or an existing dir that
-      is not a git URL) is used directly — no clone, no sync. This is the
-      dev-time shortcut for pointing at an already-checked-out component.
+    Cache layout (redesign, see docs/parallel-execution.md §3):
+        cache_root/<key>/<sha>/     # key = sha256(url@branch@ref)[:16]
+                                    # sha = the real commit that was checked out
+    The ``<sha>`` worktree is created once and never ``reset --hard``'d.
+
+    Concurrency-safety across DAGs / workers (no lock needed):
+      * Concurrent clones land in **separate temp dirs** (no shared mutable
+        state), then ``os.rename`` promotes atomically into ``<sha>``. If
+        another worker already promoted the same commit, the loser discards
+        its temp dir and reuses the existing directory — correct without a lock.
+      * A re-run of the *same* commit is a zero-git-operation hit (marker
+        present) — even ``ls-remote`` is skipped.
+      * If the remote advances, ``ls-remote`` resolves a *different* SHA → a
+        different directory, so "edit → push → run" always picks up new code.
+
+    A plain local directory (absolute/relative path, or an existing dir that
+    is not a git URL) is used directly — no clone, no sync (dev-time shortcut).
 
     ``log_fn(kind, message)`` (kind in {"stdout","stderr","info","error"}) is
-    invoked during sync so callers can surface "code changed / re-pulled"
-    events in the run logs.
+    invoked during sync so callers can surface events in the run logs.
     """
     def log(kind, msg):
         if log_fn:
             log_fn(kind, msg)
 
+    # 1) Local directory shortcut (unchanged).
     if git_url and _looks_like_local(git_url):
         local = git_url[7:] if git_url.startswith("file:") else git_url
         if os.path.isdir(local):
@@ -128,38 +151,81 @@ def prepare_env(git_url, git_branch, cache_root, git_ref="", log_fn=None):
 
     branch = git_branch or "master"
     key = _cache_key(git_url or "", branch, git_ref or "")
-    root = os.path.join(cache_root, key)
-    marker = os.path.join(root, ".claw-fetched")
-    if os.path.isdir(root) and os.path.exists(marker):
-        # Clone already exists for this exact (url, branch, ref): re-sync first
-        # so new commits are picked up, then reuse the directory. A missing
-        # branch must raise — never silently fall back to another branch.
-        _resync_cached(root, branch, git_ref or "", log)
-        return root
+    slot = os.path.join(cache_root, key)
 
-    os.makedirs(root, exist_ok=True)
-    # Clone the explicitly requested branch. If it does not exist, fail loudly
-    # instead of silently fetching the default branch.
-    log("info", f"首次克隆组件: {git_url}@{branch} → {root}")
+    # 2) Resolve the target commit SHA, then build the immutable target path.
+    sha = _resolve_sha(git_url, branch, git_ref or "", log)
+    target = os.path.join(slot, sha)
+    marker = os.path.join(target, ".claw-fetched")
+
+    # 3) Immutable hit: directory already exists with a valid marker → reuse
+    #    with ZERO git operations (concurrent-safe, no re-sync).
+    if os.path.isdir(target) and os.path.exists(marker):
+        log("info", f"复用已检出组件（commit {sha[:8]}）: {target}")
+        return target
+
+    # 4) Otherwise check out into a unique temp dir, then atomically promote.
+    os.makedirs(slot, exist_ok=True)
+    tmp = os.path.join(
+        slot, f".tmp-{sha}-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    if os.path.exists(tmp):
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    log("info", f"克隆组件: {git_url}@{branch} (commit {sha[:8]}) → {tmp}")
     r = subprocess.run(
-        ["git", "clone", "--depth", "1", "--branch", branch, git_url, root],
+        ["git", "clone", "--depth", "1", "--branch", branch, git_url, tmp],
         capture_output=True,
         text=True,
     )
     if r.returncode != 0:
         log("error", f"git clone 失败: {r.stderr.strip()}")
+        shutil.rmtree(tmp, ignore_errors=True)
         raise RuntimeError(
             f"git clone failed: requested branch '{branch}' not found "
             f"(or clone error): {r.stderr.strip()}"
         )
-    log("info", f"克隆完成: {root}")
-    if git_ref:
+
+    # Pin to a specific ref (tag/commit) when it differs from the branch tip.
+    if git_ref and git_ref != branch:
         try:
-            _pin_ref(root, branch, git_ref)
+            _pin_ref(tmp, branch, git_ref)
         except RuntimeError as e:
+            shutil.rmtree(tmp, ignore_errors=True)
             raise RuntimeError(f"git checkout ref '{git_ref}' failed: {e}")
-    open(marker, "w").close()
-    return root
+
+    # Use the ACTUAL checked-out commit as the dir name, so the directory name
+    # always equals the real commit (auditable + reproducible).
+    real_sha = _git(tmp, ["rev-parse", "HEAD"]).stdout.strip()
+    if not _is_full_sha(real_sha):
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise RuntimeError(f"无法解析检出组件的 commit SHA（得到 {real_sha!r}）")
+    final_target = os.path.join(slot, real_sha)
+
+    # Another worker may have promoted the same commit concurrently.
+    if os.path.isdir(final_target) and os.path.exists(
+        os.path.join(final_target, ".claw-fetched")
+    ):
+        log("info", f"commit {real_sha[:8]} 已由并发任务检出，直接复用: {final_target}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        return final_target
+
+    # Atomic promote. On any failure (e.g. target created by a racing worker),
+    # fall back to reusing the existing directory if present.
+    try:
+        os.rename(tmp, final_target)
+    except OSError:
+        shutil.rmtree(tmp, ignore_errors=True)
+        if os.path.isdir(final_target) and os.path.exists(
+            os.path.join(final_target, ".claw-fetched")
+        ):
+            log("info", f"commit {real_sha[:8]} 并发提升成功，复用: {final_target}")
+            return final_target
+        raise
+
+    open(os.path.join(final_target, ".claw-fetched"), "w").close()
+    log("info", f"克隆完成（commit {real_sha[:8]}）: {final_target}")
+    return final_target
 
 
 def _pip_index_url():

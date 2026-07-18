@@ -3,6 +3,7 @@
 use crate::components::{get_component, verify_component};
 use crate::sqlite::open_sqlite_database;
 use crate::types::{Dag, DagDetail, DagEdge, DagNode, DagNodePosition};
+use chrono::{DateTime, Datelike, Local, Timelike};
 use rusqlite::params;
 use serde_json::Map;
 use serde_json::Value;
@@ -514,6 +515,78 @@ fn is_uint(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
 }
 
+/// Returns true when the given local time satisfies a standard 5-field cron
+/// expression (`minute hour day-of-month month day-of-week`). Reuses the same
+/// field grammar as `is_valid_cron` (`*`, `a-b`, `a-b/step`, `*/step`, `a,b,c`).
+///
+/// Day-of-month / day-of-week follow Vixie-cron OR semantics: when both are
+/// restricted, the schedule matches if *either* matches. `7` and `0` both
+/// denote Sunday. The expression is matched against the **server's local
+/// timezone** (the timezone of the machine running this process).
+pub fn cron_matches(expr: &str, now: &DateTime<Local>) -> bool {
+    let fields: Vec<&str> = expr.trim().split_whitespace().collect();
+    if fields.len() != 5 {
+        return false;
+    }
+    let minute = now.minute();
+    let hour = now.hour();
+    let dom = now.day();
+    let month = now.month();
+    let dow = now.weekday().num_days_from_sunday() as u32; // 0=Sun..6=Sat
+
+    let m_min = cron_field_matches(fields[0], minute);
+    let m_hour = cron_field_matches(fields[1], hour);
+    let m_month = cron_field_matches(fields[3], month);
+
+    // day-of-month / day-of-week OR semantics (Vixie cron)
+    let dom_wild = fields[2] == "*";
+    let dow_wild = fields[4] == "*";
+    let m_dom = cron_field_matches(fields[2], dom);
+    let m_dow = cron_field_matches(fields[4], dow) || (dow == 0 && cron_field_matches(fields[4], 7));
+    let m_day = if dom_wild && dow_wild {
+        true
+    } else if dom_wild {
+        m_dow
+    } else if dow_wild {
+        m_dom
+    } else {
+        m_dom || m_dow
+    };
+
+    m_min && m_hour && m_month && m_day
+}
+
+/// Does a single cron field (a comma-separated list of items) contain `value`?
+fn cron_field_matches(field: &str, value: u32) -> bool {
+    !field.is_empty() && field.split(',').any(|item| cron_item_matches(item, value))
+}
+
+/// Does one cron item (`*`, `n`, `n-m`, `*/step`, `n-m/step`) contain `value`?
+fn cron_item_matches(item: &str, value: u32) -> bool {
+    let (base, step) = match item.split_once('/') {
+        Some((b, s)) => (b, s.parse::<u32>().ok()),
+        None => (item, None),
+    };
+    let step = match step {
+        Some(s) if s >= 1 => s,
+        Some(_) => return false,
+        None => 1,
+    };
+    if base == "*" {
+        return value % step == 0;
+    }
+    if let Some((a, b)) = base.split_once('-') {
+        if let (Ok(av), Ok(bv)) = (a.parse::<u32>(), b.parse::<u32>()) {
+            return value >= av && value <= bv && (value - av) % step == 0;
+        }
+        return false;
+    }
+    if let Ok(v) = base.parse::<u32>() {
+        return value == v;
+    }
+    false
+}
+
 #[cfg_attr(feature = "gui", tauri::command)]
 pub fn publish_dag(dag_id: String, cron: Option<String>) -> Result<Dag, String> {
     let detail = get_dag(dag_id.clone())?;
@@ -684,5 +757,68 @@ mod tests {
         let edges = vec![edge("e1", "d", "a", "b"), edge("e2", "d", "b", "a")];
         assert!(detect_cycle(&nodes, &edges));
         assert!(topological_order(&nodes, &edges).is_err());
+    }
+}
+
+#[cfg(test)]
+mod cron_match_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    // 2026-07-13 is a Monday, so weekdays are easy to reason about here.
+    fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Local> {
+        Local.with_ymd_and_hms(y, mo, d, h, mi, 0).single().unwrap()
+    }
+
+    #[test]
+    fn weekday_schedule_fires_on_weekday() {
+        // Mon 2026-07-13 18:05 -> fires
+        assert!(cron_matches("5 18 * * 1-5", &at(2026, 7, 13, 18, 5)));
+    }
+
+    #[test]
+    fn weekday_schedule_skips_saturday() {
+        // Sat 2026-07-18 18:05 -> no fire
+        assert!(!cron_matches("5 18 * * 1-5", &at(2026, 7, 18, 18, 5)));
+    }
+
+    #[test]
+    fn weekday_schedule_skips_off_minute() {
+        // Mon 2026-07-13 18:06 -> no fire (minute mismatch)
+        assert!(!cron_matches("5 18 * * 1-5", &at(2026, 7, 13, 18, 6)));
+    }
+
+    #[test]
+    fn weekday_schedule_skips_off_hour() {
+        // Mon 2026-07-13 09:05 -> no fire (hour mismatch)
+        assert!(!cron_matches("5 18 * * 1-5", &at(2026, 7, 13, 9, 5)));
+    }
+
+    #[test]
+    fn every_minute_fires() {
+        assert!(cron_matches("* * * * *", &at(2026, 7, 13, 3, 7)));
+        assert!(cron_matches("*/1 * * * *", &at(2026, 7, 13, 3, 7)));
+    }
+
+    #[test]
+    fn step_minute() {
+        // every 15 minutes: 0,15,30,45
+        assert!(cron_matches("*/15 * * * *", &at(2026, 7, 13, 0, 30)));
+        assert!(!cron_matches("*/15 * * * *", &at(2026, 7, 13, 0, 31)));
+    }
+
+    #[test]
+    fn sunday_as_0_and_7() {
+        // Sun 2026-07-19
+        assert!(cron_matches("0 0 * * 0", &at(2026, 7, 19, 0, 0)));
+        assert!(cron_matches("0 0 * * 7", &at(2026, 7, 19, 0, 0)));
+    }
+
+    #[test]
+    fn dom_dow_or_semantics() {
+        // dom=13 (Mon) restricted, dow=*  -> fires on the 13th regardless of weekday
+        assert!(cron_matches("0 0 13 * *", &at(2026, 7, 13, 0, 0)));
+        // dom=13, dow=5 (Fri) -> 2026-07-13 is Mon, but dom matches so fires (OR)
+        assert!(cron_matches("0 0 13 * 5", &at(2026, 7, 13, 0, 0)));
     }
 }
