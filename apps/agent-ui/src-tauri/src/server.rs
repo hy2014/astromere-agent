@@ -17,6 +17,7 @@ use crate::models_core;
 use crate::permissions;
 use crate::repl;
 use crate::runtime;
+use crate::scheduler;
 use crate::session_core;
 use crate::skills;
 use crate::sqlite;
@@ -979,6 +980,9 @@ pub async fn run_server(app_handle: Option<AppHandle>, run_worker: bool) {
     // 这样 worker 永远与"拥有队列/DB 的执行主机"同机，桌面纯 client 不再起它。
     if run_worker {
         engine::start_worker_supervisor();
+        // Cron scheduler rides along with the worker: both belong to the
+        // execution host, and there must be exactly one of each per database.
+        scheduler::start_cron_scheduler();
     }
 
     let port = http_port();
