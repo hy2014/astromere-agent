@@ -230,7 +230,7 @@ class Worker:
         entry_point = (comp.get("entry_point") or "").strip() or "run.py"
         # 「指定 Python 解释器路径」是节点级系统配置，存于 node.config.params
         # （key=system.python_path，值=python 可执行文件绝对路径，如
-        # /root/miniconda3/bin/python3.10）。设了就直接用该解释器跑（不建 venv、
+        # ~/miniconda3/bin/python3.10）。设了就直接用该解释器跑（不建 venv、
         # 不装依赖），复用它环境里已有的依赖（如 conda 里 editable 安装的
         # astromere-infra 的 infra 包）。不设则走默认隔离 venv。
         params = (node.get("config") or {}).get("params") or {}
