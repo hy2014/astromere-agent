@@ -114,8 +114,9 @@ export function ExecutionPanel({dagId, runSignal = 0}: ExecutionPanelProps) {
 
   const selected = executions.find((e) => e.id === selectedExecutionId) ?? null;
 
-  // node id（UUID）→ 可读名称。快照里带组件名（build_snapshot 注入的
-  // config.name），对历史执行也生效；无快照时回退到原 UUID。
+  // node id (UUID) → human-readable name. The snapshot carries the component
+  // name (config.name injected by build_snapshot), also for historical runs;
+  // falls back to the raw UUID when there is no snapshot.
   const nodeNameOf = (id: string): string => {
     const snap = snapshotNodes?.find((n) => n.id === id);
     return snap?.config?.name || id;

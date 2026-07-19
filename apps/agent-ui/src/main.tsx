@@ -6,12 +6,12 @@ import { initDagServerConfig } from "./app/component-mode/api";
 import "./styles.css";
 
 async function bootstrap() {
-  // 启动前从磁盘加载 DAG server 配置（~/.agent-ui/dag-mode/dagServer.json），
-  // 并自动迁移旧的 localStorage 配置。失败不影响渲染。
+  // Load the DAG server config from disk before startup (~/.agent-ui/dag-mode/dagServer.json),
+  // and auto-migrate the legacy localStorage config. Failure does not block rendering.
   try {
     await initDagServerConfig();
   } catch {
-    // ignore — app falls back to "未连接" state
+    // ignore — app falls back to the "disconnected" state
   }
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

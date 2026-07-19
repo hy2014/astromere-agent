@@ -68,7 +68,7 @@ function safeParseProfiles(raw: string | null): RemoteProfile[] {
 export function loadRemoteProfiles(): RemoteProfile[] {
   const profiles = safeParseProfiles(window.localStorage.getItem(STORAGE_KEY));
 
-  // 一次性清理旧重复记录：同名只保留最后一条。
+  // One-time cleanup of old duplicate records: for the same name, keep only the last one.
   saveRemoteProfiles(profiles);
 
   return profiles;

@@ -21,7 +21,7 @@ export function handleDetailEvent(
   const messageId = modelCallIdFromEvent(event);
   if (!messageId) return null;
 
-  // 只处理 assistant 消息的事件
+  // Only process events for assistant messages
   const rawJson = event.payload?.raw_json as Record<string, unknown> | undefined;
   if (!rawJson || (rawJson as any).type !== "assistant") return null;
 

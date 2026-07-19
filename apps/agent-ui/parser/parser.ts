@@ -1,13 +1,13 @@
 // parser/parser.ts
 //
-// 改进记录（对比原始版本）：
-// 1. WriteState.setXxx 模式检测（全局 setter 对象）
-// 2. Event 绑定精确解析 — events 参数中的名字即文件级函数名，不再猜测 handleXxx
-// 3. Exts 跟踪（第4个 render 参数）
-// 4. Memo 跟踪（第5个 render 参数）
-// 5. render() 调用 → 子 RenderFnNode 的状态/props/ext/memo 传递分析
-// 6. 移除内部重复类型定义，统一使用 types.ts
-// 7. 支持 Fn 调用链追踪（fn 调 fn，透传 WriteState 回调等）
+// Changelog (vs. the original version):
+// 1. WriteState.setXxx pattern detection (global setter object)
+// 2. Precise event binding parsing - the names in the events param are file-level function names; no more guessing handleXxx
+// 3. Exts tracking (4th render param)
+// 4. Memo tracking (5th render param)
+// 5. render() call -> child RenderFnNode state/props/ext/memo propagation analysis
+// 6. Removed internal duplicate type definitions; unified into types.ts
+// 7. Support Fn call-chain tracing (fn calls fn, passing WriteState callbacks, etc.)
 
 import { Project, Node, SyntaxKind, type ArrowFunction, type FunctionExpression, type FunctionDeclaration } from "ts-morph";
 import type {
@@ -26,10 +26,10 @@ const project = new Project({
     tsConfigFilePath: "./tsconfig.json",
 });
 
-// ========== IPC 提取 ==========
+// ========== IPC extraction ==========
 
 /**
- * 从 runtime import 中提取 IPC 方法名
+ * Extract IPC method names from runtime imports
  */
 export function extractIPCMethods(sourceFile: ReturnType<typeof project.getSourceFile>): string[] {
     const methods: string[] = [];
@@ -45,17 +45,17 @@ export function extractIPCMethods(sourceFile: ReturnType<typeof project.getSourc
     return methods;
 }
 
-// ========== State / Props 收集 ==========
+// ========== State / Props collection ==========
 
 /**
- * 收集文件中的所有 useState state 和 Props 类型定义
+ * Collect all useState state and Props type definitions in a file
  */
 export function collectStateAndProps(sourceFile: ReturnType<typeof project.getSourceFile>) {
     const states: StateInfo[] = [];
     const props: PropInfo[] = [];
     if (!sourceFile) return { states, props };
 
-    // --- Props 类型 ---
+    // --- Props type ---
     sourceFile.forEachDescendant((node) => {
         if (Node.isTypeAliasDeclaration(node) && node.getName() === "Props") {
             const typeLiteral = node.getTypeNode();
@@ -69,7 +69,7 @@ export function collectStateAndProps(sourceFile: ReturnType<typeof project.getSo
         }
     });
 
-    // 防兜底：如果没找到 Props 类型，从 View 函数参数中收集
+    // Fallback: if no Props type is found, collect from the View function parameters
     if (props.length === 0) {
         sourceFile.forEachDescendant((node) => {
             if (Node.isFunctionDeclaration(node) && node.isExported()) {
@@ -107,11 +107,11 @@ export function collectStateAndProps(sourceFile: ReturnType<typeof project.getSo
     return { states, props };
 }
 
-// ========== WriteState 检测 ==========
+// ========== WriteState detection ==========
 
 /**
- * 扫描 WriteState 类型声明，提取所有 setter → state field 映射
- * 例如 WriteState.setRows → "rows"
+ * Scan the WriteState type declaration and extract every setter → state field mapping
+ * e.g. WriteState.setRows → "rows"
  */
 export function detectWriteStateFields(sourceFile: ReturnType<typeof project.getSourceFile>): Map<string, string> {
     const map = new Map<string, string>();
@@ -139,7 +139,7 @@ export function detectWriteStateFields(sourceFile: ReturnType<typeof project.get
     return map;
 }
 
-// ========== Caller 分析 ==========
+// ========== Caller analysis ==========
 
 function isSetter(name: string, states: StateInfo[]): boolean {
     return states.some(s => s.setter === name);
@@ -162,9 +162,9 @@ function isIgnoreCall(text: string): boolean {
         "toExponential", "toPrecision", "toLocaleString", "toSource",
     ];
     const pureName = getPureFuncName(text);
-    // 同时也忽略链式调用如 "xxx.split", "xxx.map", "xxx.filter" 等 - 分段检查
+    // also ignore chained calls like "xxx.split", "xxx.map", "xxx.filter" - check per segment
     const parts = text.split(".");
-    // 如果链上最后一个方法名在 ignores 中，跳过
+    // if the last method name in the chain is in ignores, skip
     for (const part of parts) {
         const pn = part.trim();
         if (pn.includes("(") && ignores.includes(pn.split("(")[0].trim())) {
@@ -175,8 +175,8 @@ function isIgnoreCall(text: string): boolean {
 }
 
 /**
- * 对函数体中的一个 CallExpression 进行分类。
- * 新增支持：WriteState.setXxx(...) 检测
+ * Classify a single CallExpression in a function body.
+ * New: WriteState.setXxx(...) detection
  */
 function classifyCall(
     node: Node,
@@ -192,7 +192,7 @@ function classifyCall(
         callText === "renderView" ||
         callText === "useMemo" || callText === "useCallback") return null;
 
-    // IPC 调用
+    // IPC call
     if (callText === "invoke" || callText === "remoteJson" || ipcMethods.includes(callText)) {
         return { type: "ipc", text: callText };
     }
@@ -206,7 +206,7 @@ function classifyCall(
         }
     }
 
-    // 普通 useState setter: setXxx(...)
+    // plain useState setter: setXxx(...)
     if (isSetter(callText, states)) {
         const stateName = states.find(s => s.setter === callText)?.name ?? callText;
         return { type: "write", text: stateName, target: stateName };
@@ -220,7 +220,7 @@ export function getBodyNode(node: ArrowFunction | FunctionExpression): Node | un
 }
 
 /**
- * 从函数体中提取所有的分类调用。只分析顶层 CallExpression（不递归进嵌套函数/方法）
+ * Extract all classified calls from a function body. Only top-level CallExpressions are analyzed (no recursion into nested functions/methods)
  */
 export function extractCallsFromNode(
     node: Node,
@@ -234,7 +234,7 @@ export function extractCallsFromNode(
         const classified = classifyCall(node, states, ipcMethods, writeStateMap);
         if (classified) results.push(classified);
 
-        // 递归分析回调参数（箭头函数 / 函数表达式 / 直接调用中的回调）
+        // recursively analyze callback args (arrow functions / function expressions / callbacks in direct calls)
         node.getArguments().forEach(arg => {
             if (Node.isArrowFunction(arg) || Node.isFunctionExpression(arg)) {
                 const body = getBodyNode(arg);
@@ -245,7 +245,7 @@ export function extractCallsFromNode(
     }
 
     node.forEachDescendant((descendant, traversal) => {
-        // 跳过嵌套的函数声明（避免分析到不相关的内部函数）
+        // skip nested function declarations (avoid analyzing unrelated inner functions)
         if (Node.isFunctionDeclaration(descendant) || Node.isMethodDeclaration(descendant)) { traversal.skip(); return; }
         if (Node.isVariableDeclaration(descendant)) {
             const init = descendant.getInitializer();
@@ -261,17 +261,17 @@ export function extractCallsFromNode(
     return results;
 }
 
-// ========== renderFn 识别与解析 ==========
+// ========== renderFn identification & parsing ==========
 
 /**
- * 判断一个节点是否为 renderFn：
- * - 名字以 "render" 开头
- * - 有 3-5 个参数
+ * Determine whether a node is a renderFn:
+ * - name starts with "render"
+ * - has 3-5 parameters
  * - param[0] (state): ObjectBindingPattern
  * - param[1] (props): ObjectBindingPattern
  * - param[2] (events): ObjectBindingPattern
- * - param[3] (exts): Identifier (可有可无)
- * - param[4] (memo): ObjectBindingPattern (可有可无)
+ * - param[3] (exts): Identifier (optional)
+ * - param[4] (memo): ObjectBindingPattern (optional)
  */
 function isRenderFn(node: Node): boolean {
     let fnNode: Node | undefined;
@@ -315,14 +315,14 @@ function getRenderFnName(node: Node): string {
 }
 
 /**
- * 从 ext 参数的 type annotation 中提取字段名
- * 例如: ext: { envRows: McpEnvDraftRow[]; rowId: string } → ["envRows", "rowId"]
- * 或者从函数体内的解构中提取: const { envRows, rowId } = ext;
+ * Extract field names from the ext param's type annotation
+ * e.g. ext: { envRows: McpEnvDraftRow[]; rowId: string } → ["envRows", "rowId"]
+ * or from destructuring in the function body: const { envRows, rowId } = ext;
  */
 function extractExtFields(fnNode: Node, extParamName: string): string[] {
     const extFields: string[] = [];
 
-    // 方法1：type annotation 中提取
+    // method 1: extract from type annotation
     const params = (fnNode as any).getParameters();
     if (params.length >= 4) {
         const typeNode = params[3].getTypeNode();
@@ -335,7 +335,7 @@ function extractExtFields(fnNode: Node, extParamName: string): string[] {
         }
     }
 
-    // 方法2：如果 type annotation 没有（或没有字段），从函数体解构中提取
+    // method 2: if the type annotation is missing (or has no fields), extract from function-body destructuring
     if (extFields.length === 0) {
         const body = fnNode.getKind() === SyntaxKind.ArrowFunction
             ? (fnNode as ArrowFunction).getBody()
@@ -359,13 +359,13 @@ function extractExtFields(fnNode: Node, extParamName: string): string[] {
     return extFields;
 }
 
-// ========== 为 renderFn 构建 EventBinding ==========
+// ========== Build EventBinding for renderFn ==========
 
 /**
- * 从一个 renderFn 节点的 JSX 中提取 EventBinding。
- * 在 mcp-test.tsx 模式中, events 参数名与文件级函数名一致。
- * 例如 events: { reloadMcpSettings } → JSX 中 onClick={reloadMcpSettings}
- * 这意味着 reloadMcpSettings 就是一个文件级函数。
+ * Extract EventBinding from a renderFn node's JSX.
+ * In the mcp-test.tsx pattern, the events param name matches the file-level function name.
+ * e.g. events: { reloadMcpSettings } → onClick={reloadMcpSettings} in JSX
+ * This means reloadMcpSettings is a file-level function.
  */
 function extractEventBindings(
     fnNode: Node,
@@ -386,7 +386,7 @@ function extractEventBindings(
         let expr = init;
         if (Node.isJsxExpression(init)) expr = init.getExpression() ?? init;
 
-        // 情况1: 直接引用 onClick={handlerName}
+        // case 1: direct reference onClick={handlerName}
         if (Node.isIdentifier(expr) && param2EventNames.has(expr.getText())) {
             bindings.push({
                 id: `${filePath}:${fnName}#${expr.getText()}`,
@@ -394,7 +394,7 @@ function extractEventBindings(
                 handleFnId: `${filePath}:${expr.getText()}`,
             });
         }
-        // 情况2: 箭头适配 onClick={(e) => handlerName(...)}
+        // case 2: arrow adapter onClick={(e) => handlerName(...)}
         else if (Node.isArrowFunction(expr)) {
             const arrowBody = expr.getBody();
             const callExpr = Node.isBlock(arrowBody)
@@ -423,7 +423,7 @@ function extractEventBindings(
                 }
             }
         }
-        // 情况3: 直接调用 onClick={handlerName()}
+        // case 3: direct call onClick={handlerName()}
         else if (Node.isCallExpression(expr)) {
             const callee = expr.getExpression();
             if (Node.isIdentifier(callee) && param2EventNames.has(callee.getText())) {
@@ -434,7 +434,7 @@ function extractEventBindings(
                 });
             }
         }
-        // 情况4: 其他非匿名函数引用
+        // case 4: other non-anonymous function references
         else if (!Node.isArrowFunction(expr) && !Node.isFunctionExpression(expr)) {
             const handlerText = expr.getText();
             const matchesFnName = param2EventNames.has(handlerText);
@@ -449,19 +449,19 @@ function extractEventBindings(
     return bindings;
 }
 
-// ========== render() 调用分析 ==========
+// ========== render() call analysis ==========
 
 interface RenderCallSite {
-    fnName: string;           // 被调用的 renderFn 名字
-    stateFields: string[];    // state: { xxx, yyy } 中传递的字段
-    memoFields: string[];     // memo: { ... } 中传递的字段
-    extFields: string[];      // exts: { ... } 中传递的字段
-    eventNames: string[];     // events: { ... } 中传递的函数名
+    fnName: string;           // name of the invoked renderFn
+    stateFields: string[];    // fields passed in state: { xxx, yyy }
+    memoFields: string[];     // fields passed in memo: { ... }
+    extFields: string[];      // fields passed in exts: { ... }
+    eventNames: string[];     // function names passed in events: { ... }
 }
 
 /**
- * 从 renderFn 函数体中解析所有 render({...}) 调用点
- * 例如:
+ * Parse all render({...}) call sites from a renderFn function body
+ * e.g.:
  *   render({state: { configPath }, props: {}, fn: renderMcpServersViewHero, events: {}})
  *   → RenderCallSite { fnName: "renderMcpServersViewHero", stateFields: ["configPath"], ... }
  */
@@ -473,7 +473,7 @@ function extractRenderCalls(fnNode: Node): RenderCallSite[] {
         const callee = descendant.getExpression();
         const calleeText = callee.getText();
 
-        // 匹配 render({...}) 或 xxx.render({...})
+        // match render({...}) or xxx.render({...})
         const isRenderCall = (Node.isIdentifier(callee) && calleeText === "render")
             || (Node.isPropertyAccessExpression(callee) && callee.getName() === "render");
 
@@ -540,16 +540,16 @@ function extractRenderCalls(fnNode: Node): RenderCallSite[] {
     return sites;
 }
 
-// ========== renderView 提取 ==========
+// ========== renderView extraction ==========
 
 /**
- * 从函数/渲染函数体中找出所有 renderView({view: Xxx, ...}) 调用，
- * 提取目标 View 的组件名。
+ * Find all renderView({view: Xxx, ...}) calls in a function/render function body,
+ * extracting the target View's component name.
  */
 export function extractRenderViewTargets(node: Node): string[] {
     const targets: string[] = [];
 
-    // 检查 node 本身是不是 renderView 调用（处理箭头表达式体）
+    // check whether node itself is a renderView call (handles arrow-expression bodies)
     if (Node.isCallExpression(node)) {
         const callee = node.getExpression();
         if (Node.isIdentifier(callee) && callee.getText() === "renderView") {
@@ -558,7 +558,7 @@ export function extractRenderViewTargets(node: Node): string[] {
         }
     }
 
-    // 检查所有子节点中的 renderView 调用
+    // check renderView calls in all child nodes
     node.forEachDescendant((descendant) => {
         if (!Node.isCallExpression(descendant)) return;
         const callee = descendant.getExpression();
@@ -571,7 +571,7 @@ export function extractRenderViewTargets(node: Node): string[] {
     return [...new Set(targets)];
 }
 
-/** 从 renderView({fn/view: Xxx, ...}) 中提取 View 组件名 */
+/** Extract the View component name from renderView({fn/view: Xxx, ...}) */
 function extractRenderViewViewName(callExpr: Node): string | null {
     const firstArg = callExpr.getArguments()[0];
     if (!firstArg || !Node.isObjectLiteralExpression(firstArg)) return null;
@@ -588,16 +588,16 @@ function extractRenderViewViewName(callExpr: Node): string | null {
     return null;
 }
 
-// ========== 查找 View 组件名 ==========
+// ========== Find View component name ==========
 
 function findViewName(sourceFile: ReturnType<typeof project.getSourceFile>): string {
-    // 尝试找 export function XxxView()
+    // try to find export function XxxView()
     const viewFn = sourceFile?.getFunctions().find(f =>
         f.isExported() && (f.getName()?.endsWith("View"))
     );
     if (viewFn?.getName()) return viewFn.getName();
 
-    // 尝试找 export const XxxView
+    // try to find export const XxxView
     const viewVar = sourceFile?.getVariableDeclarations().find(v =>
         v.isExported() && v.getName().endsWith("View")
     );
@@ -606,10 +606,10 @@ function findViewName(sourceFile: ReturnType<typeof project.getSourceFile>): str
     return "default";
 }
 
-// ========== 构建函数详情 ==========
+// ========== Build function details ==========
 
 /**
- * 收集文件中的所有非 renderFn（EventHandler 和工具函数）
+ * Collect all non-renderFn functions in a file (EventHandlers and utility functions)
  */
 function buildFnDetails(
     sourceFile: ReturnType<typeof project.getSourceFile>,
@@ -638,16 +638,16 @@ function buildFnDetails(
         }
 
         if (!name || !body) return;
-        if (name === viewName) return;  // 跳过 View 组件
+        if (name === viewName) return;  // skip the View component
         if (name === "WriteState" || name === "render" || name.startsWith("_latest")) return;
-        // renderFn 也生成 FnDetail（用于追踪其内部函数调用），不要跳过
+        // renderFn also produces a FnDetail (to trace its internal calls); don't skip
 
         const calls = extractCallsFromNode(body, states, ipcMethods, writeStateMap);
-        // 去重 + 排序
+        // dedupe + sort
         const writes = [...new Set(calls.filter(c => c.type === "write").map(c => c.target!))].sort();
         const ipcs = [...new Set(calls.filter(c => c.type === "ipc").map(c => `ipc:${c.text}`))].sort();
         const funcCalls = [...new Set(calls.filter(c => c.type === "call").map(c => c.text))].sort();
-        // renderView 调用 → 目标 View 名 → ViewNode ID
+        // renderView call → target View name → ViewNode ID
         const renderViewTargets = extractRenderViewTargets(body);
         const views = renderViewTargets.map(t => `${filePath}:${t}`);
 
@@ -663,16 +663,16 @@ function buildFnDetails(
     return fns;
 }
 
-// ========== Memo → State 依赖解析 ==========
+// ========== Memo → State dependency resolution ==========
 
 /**
- * 从 View 函数体中提取所有 memo/派生值 → 原始 state 的依赖映射。
+ * Extract all memo/derived values from the View function body → dependency mapping to original state.
  *
- * 处理两类模式：
- * 1. useMemo 调用: const X = useMemo(() => ..., [stateA, stateB])
- * 2. 非 memo 派生值: const X = stateA !== stateB 或 const X = fn(stateA)
+ * Two patterns are handled:
+ * 1. useMemo call: const X = useMemo(() => ..., [stateA, stateB])
+ * 2. non-memo derived value: const X = stateA !== stateB or const X = fn(stateA)
  *
- * 结果递归解析到原始 state，例如:
+ * Results are recursively resolved to the original state, e.g.:
  *   draftSettings = useMemo(..., [rows])         → "draftSettings" → ["rows"]
  *   draftText = useMemo(..., [draftSettings])     → "draftText" → ["rows"]
  *   hasUnsavedChanges = draftText !== savedText   → "hasUnsavedChanges" → ["rows", "savedText"]
@@ -681,7 +681,7 @@ function buildMemoDepMap(
     sourceFile: ReturnType<typeof project.getSourceFile>,
     stateNameSet: Set<string>,
 ): Map<string, string[]> {
-    const rawMap = new Map<string, string[]>();     // memoName → immediate deps (可能含其他 memo)
+    const rawMap = new Map<string, string[]>();     // memoName → immediate deps (may include other memos)
     const viewFn = sourceFile?.getFunctions().find(f =>
         f.isExported() && (f.getName()?.endsWith("View"))
     );
@@ -690,7 +690,7 @@ function buildMemoDepMap(
     const viewBody = viewFn.getBody();
     if (!viewBody) return rawMap;
 
-    // 1. 找出 useMemo 调用
+    // 1. find useMemo calls
     viewBody.forEachDescendant((node) => {
         if (!Node.isCallExpression(node)) return;
         if (node.getExpression().getText() !== "useMemo") return;
@@ -699,7 +699,7 @@ function buildMemoDepMap(
         if (!Node.isVariableDeclaration(parent)) return;
         const memoName = parent.getName();
 
-        // 第二个参数是依赖数组
+        // second argument is the dependency array
         const args = node.getArguments();
         if (args.length < 2) return;
         const depArray = args[1];
@@ -714,23 +714,23 @@ function buildMemoDepMap(
         rawMap.set(memoName, deps);
     });
 
-    // 2. 找出非 useMemo 的派生值 (const X = expr，其中 expr 引用了 state/memo)
+    // 2. find non-useMemo derived values (const X = expr, where expr references state/memo)
     viewBody.forEachDescendant((node) => {
         if (!Node.isVariableDeclaration(node)) return;
         const name = node.getName();
-        if (rawMap.has(name)) return; // 已经是 useMemo
+        if (rawMap.has(name)) return; // already a useMemo
 
         const init = node.getInitializer();
         if (!init) return;
 
-        // 跳过函数/箭头/hook 调用
+        // skip function/arrow/hook calls
         if (Node.isArrowFunction(init) || Node.isFunctionExpression(init)) return;
         if (Node.isCallExpression(init)) {
             const callee = init.getExpression().getText();
             if (callee.startsWith("use") || callee === "render") return;
         }
 
-        // 从 init 表达式中提取所有 Identifier 引用
+        // extract all Identifier references from the init expression
         const depSet = new Set<string>();
         init.forEachDescendant((sub) => {
             if (Node.isIdentifier(sub)) {
@@ -746,7 +746,7 @@ function buildMemoDepMap(
         }
     });
 
-    // 3. 递归解析：直到所有 deps 都解析为原始 state
+    // 3. recursive resolution: until all deps resolve to the original state
     function resolve(name: string, visited: Set<string>): string[] {
         if (stateNameSet.has(name)) return [name];
         const deps = rawMap.get(name);
@@ -770,13 +770,13 @@ function buildMemoDepMap(
     return resolvedMap;
 }
 
-// ========== useEffect 提取 ==========
+// ========== useEffect extraction ==========
 
 /**
- * 从 View 函数体的 useEffect 回调中，提取调用的 handler 函数名列表。
+ * From the View function body's useEffect callback, extract the list of called handler function names.
  *
- * 例如 useEffect(() => { void reloadMcpSettings(); }, [])
- * → 提取 "reloadMcpSettings" → 返回 ["reloadMcpSettings"]
+ * e.g. useEffect(() => { void reloadMcpSettings(); }, [])
+ * → extract "reloadMcpSettings" → return ["reloadMcpSettings"]
  */
 function extractUseEffectHandlers(viewBody: Node): string[] {
     const handlers: string[] = [];
@@ -794,7 +794,7 @@ function extractUseEffectHandlers(viewBody: Node): string[] {
         const body = getBodyNode(callback);
         if (!body) return;
 
-        // 遍历回调体，找函数调用（如 reloadMcpSettings()）
+        // traverse the callback body to find function calls (e.g. reloadMcpSettings())
         body.forEachDescendant((sub) => {
             if (!Node.isCallExpression(sub)) return;
             const callee = sub.getExpression();
@@ -807,7 +807,7 @@ function extractUseEffectHandlers(viewBody: Node): string[] {
     return [...new Set(handlers)];
 }
 
-// ========== 主函数：buildCodeGraph ==========
+// ========== Main function: buildCodeGraph ==========
 
 export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetail[] } {
     const sourceFile = project.getSourceFile(filePath);
@@ -822,7 +822,7 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
     const stateNameSet = new Set(states.map(s => s.name));
     const memoDepMap = buildMemoDepMap(sourceFile, stateNameSet);
 
-    // 1. 收集所有 renderFn
+    // 1. collect all renderFns
     const renderFnMap = new Map<string, {
         node: Node;
         fnNode: Node;
@@ -848,29 +848,29 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
 
         const params = (fnNode as any).getParameters();
 
-        // param[0] = state 解构
+        // param[0] = state destructuring
         const stateNames = Node.isObjectBindingPattern(params[0].getNameNode())
             ? params[0].getNameNode().getElements().map((e: any) => e.getName())
             : [];
 
-        // param[1] = props 解构
+        // param[1] = props destructuring
         const propNames = Node.isObjectBindingPattern(params[1].getNameNode())
             ? params[1].getNameNode().getElements().map((e: any) => e.getName())
             : [];
 
-        // param[2] = events 解构
+        // param[2] = events destructuring
         const eventsNames = Node.isObjectBindingPattern(params[2].getNameNode())
             ? params[2].getNameNode().getElements().map((e: any) => e.getName())
             : [];
         const eventNameSet = new Set(eventsNames);
 
-        // param[3] = ext (Identifier, 函数体内解构提取字段)
+        // param[3] = ext (Identifier, fields extracted via destructuring in the function body)
         const extParamName = params.length >= 3 && Node.isIdentifier(params[3]?.getNameNode())
             ? params[3].getNameNode().getText()
             : "";
         const extFields = extParamName ? extractExtFields(fnNode, extParamName) : [];
 
-        // param[4] = memo 解构
+        // param[4] = memo destructuring
         const memoNames = params.length >= 5 && Node.isObjectBindingPattern(params[4].getNameNode())
             ? params[4].getNameNode().getElements().map((e: any) => e.getName())
             : [];
@@ -878,7 +878,7 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
         // Event bindings
         const bindings = extractEventBindings(fnNode, eventNameSet, fileSource, name);
 
-        // render() 调用分析
+        // render() call analysis
         const renderCalls = extractRenderCalls(fnNode);
 
         renderFnMap.set(name, {
@@ -894,8 +894,8 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
         });
     });
 
-    // 2. 构建 renderFn 树
-    // 收集所有被其他 renderFn 引用的名字
+    // 2. build the renderFn tree
+    // collect the names referenced by other renderFns
     const allChildNames = new Set<string>();
     for (const [, info] of renderFnMap) {
         for (const rc of info.renderCalls) {
@@ -906,16 +906,16 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
     }
 
     /**
-     * 递归构建 RenderFnNode 树。
-     * 每个节点记录：
-     * - 自身依赖的状态/props/memos/exts
-     * - 事件绑定（含处理函数 ID）
-     * - 子节点
+     * Recursively build the RenderFnNode tree.
+     * Each node records:
+     * - its own state/props/memos/exts dependencies
+     * - event bindings (including handler function IDs)
+     * - child nodes
      */
     function buildRenderFnNode(name: string): RenderFnNode {
         const info = renderFnMap.get(name)!;
 
-        // 将 memo 名字解析为原始 state 名字，合并到 states
+        // resolve memo names to original state names and merge into states
         const resolvedStates = new Set(info.stateNames);
         for (const memoName of info.memoNames) {
             const stateDeps = memoDepMap.get(memoName);
@@ -931,7 +931,7 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
             }
         }
 
-        // 提取 renderView 调用的目标 View 名
+        // extract the target View name from renderView calls
         const renderViewTargets = extractRenderViewTargets(info.fnNode);
         const renderViewViewIds = renderViewTargets.map(t => `${fileSource}:${t}`);
 
@@ -947,7 +947,7 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
         };
     }
 
-    // 根节点 = 没被任何人作为子 renderFn 引用的 renderFn
+    // root nodes = renderFns not referenced as a child by anyone
     const roots: RenderFnNode[] = [];
     for (const [name] of renderFnMap) {
         if (!allChildNames.has(name)) {
@@ -955,17 +955,17 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
         }
     }
 
-    // 3. 提取 useEffect 中调用的 handler 名
+    // 3. extract handler names called in useEffect
     const viewFnNode = sourceFile.getFunctions().find(f => f.getName() === viewName);
     const useEffectHandlerNames = viewFnNode?.getBody()
         ? extractUseEffectHandlers(viewFnNode.getBody())
         : [];
 
-    // 4. 收集函数详情
+    // 4. collect function details
     const renderFnSet = new Set(renderFnMap.keys());
     const fns = buildFnDetails(sourceFile, states, ipcMethods, writeStateMap, viewName, renderFnSet, fileSource);
 
-    // 5. 构建 useEffect 的 FnDetail（描述 effect 回调自身做了什么）
+    // 5. build the useEffect's FnDetail (describes what the effect callback itself does)
     let useEffect: FnDetail | null = null;
     if (useEffectHandlerNames.length > 0) {
         useEffect = {
@@ -976,7 +976,7 @@ export function buildCodeGraph(filePath: string): { view: ViewNode; fns: FnDetai
         };
     }
 
-    // 6. 构建 ViewNode
+    // 6. build ViewNode
     const viewId = `${fileSource}:${viewName}`;
     const view: ViewNode = {
         id: viewId,

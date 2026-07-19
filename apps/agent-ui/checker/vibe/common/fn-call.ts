@@ -46,7 +46,7 @@ export class CalleeVibe extends Vibe {
     );
     if (!found) return null;
 
-    return null; // 暂时不报违规，后续扩展
+    return null; // No violation reported for now; to be extended later
   }
 
   private getCalleeName(): string {

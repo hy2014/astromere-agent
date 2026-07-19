@@ -2,10 +2,10 @@ import * as ts from "typescript";
 import { Vibe, VibeStatus, Rule } from "../vibe";
 
 /**
- * 表达式 Vibe
+ * Expression Vibe
  *
- * TODO: JSX 检查 — 在 FnVibe 上下文中 return/assign 的表达式不能包含 JSX
- * 目前纯透传，match 匹配任意表达式节点。
+ * TODO: JSX check — expressions returned/assigned in a FnVibe context must not contain JSX
+ * Currently a pure pass-through; match accepts any expression node.
  */
 export class ExprVibe extends Vibe {
   static rule(parentVibe: Vibe): Rule {
@@ -31,9 +31,9 @@ export class ExprVibe extends Vibe {
 }
 
 /**
- * return 语句 Vibe
+ * Return-statement Vibe
  *
- * 后续：checkStatus 检查返回值不含 JSX（在 FnVibe 上下文）
+ * Follow-up: checkStatus should verify the return value contains no JSX (in a FnVibe context)
  */
 export class ReturnVibe extends Vibe {
   static rule(parentVibe: Vibe): Rule {

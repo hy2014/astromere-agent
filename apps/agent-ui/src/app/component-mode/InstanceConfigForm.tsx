@@ -13,7 +13,7 @@ type InstanceValues = Record<string, unknown>;
 type FreePair = {id: string; key: string; value: string};
 
 // System-level knobs are stored with the `system.` prefix (see SystemConfigForm)
-// and owned by the 系统配置 tab; this tab only manages run parameters (no prefix).
+// and owned by the System Config tab; this tab only manages run parameters (no prefix).
 const SYSTEM_PREFIX = "system.";
 
 function pairsFromValues(values: InstanceValues): FreePair[] {
@@ -30,7 +30,7 @@ function readParams(node: DagNode): InstanceValues {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     const all = raw as Record<string, unknown>;
     const out: InstanceValues = {};
-    // Drop `system.*` keys — those belong to the 系统配置 tab.
+    // Drop `system.*` keys — those belong to the System Config tab.
     for (const [k, v] of Object.entries(all)) {
       if (!k.startsWith(SYSTEM_PREFIX)) out[k] = v;
     }
@@ -216,8 +216,8 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
   const schema = component.configSchema ?? [];
   const [values, setValues] = useState<InstanceValues>(() => readParams(node));
   // Keep the latest node so a commit here never clobbers keys owned by the
-  // 系统配置 tab (e.g. `system.python_path`): when we re-read existing params
-  // we use the freshest node, not the one captured at mount.
+  // System Config tab (e.g. `system.python_path`): when we re-read existing
+  // params we use the freshest node, not the one captured at mount.
   const nodeRef = useRef(node);
   nodeRef.current = node;
 
@@ -241,8 +241,8 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
         ? (config.params as Record<string, unknown>)
         : {};
     const out: Record<string, unknown> = {};
-    // Preserve system-level knobs (owned by the 系统配置 tab, stored with the
-    // `system.` prefix) so this tab never clobbers them.
+    // Preserve system-level knobs (owned by the System Config tab, stored with
+    // the `system.` prefix) so this tab never clobbers them.
     for (const [k, v] of Object.entries(existing)) {
       if (k.startsWith(SYSTEM_PREFIX)) out[k] = v;
     }

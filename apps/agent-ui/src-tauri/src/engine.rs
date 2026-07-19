@@ -150,3 +150,45 @@ pub fn stop_worker() {
         let _ = child.wait();
     }
 }
+
+/// Arm a SIGTERM listener (Unix) that performs a graceful shutdown: stop the
+/// supervised worker, then exit the process.
+///
+/// The default disposition of SIGTERM on Unix is to terminate the process
+/// immediately, which would leave the `worker.py` child orphaned — and, across
+/// restarts, let stale-code workers compete for the queue. Installing this
+/// handler lets `kill -TERM` (e.g. from `restart_remote_server.sh` or systemd)
+/// clean up the worker before the process goes away. SIGKILL cannot be caught;
+/// for that, the restart script's global `pkill -f engine_executor/worker.py`
+/// is the backstop.
+#[cfg(unix)]
+pub fn install_termination_handler() {
+    std::thread::spawn(|| {
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("[engine] failed to build signal runtime: {e}");
+                return;
+            }
+        };
+        rt.block_on(async {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[engine] failed to install SIGTERM handler: {e}");
+                    return;
+                }
+            };
+            let _ = sigterm.recv().await;
+            eprintln!("[engine] SIGTERM received, shutting down worker");
+            stop_worker();
+            // Grace period for the supervisor loop to observe SHUTDOWN.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::process::exit(0);
+        });
+    });
+}
+
+#[cfg(not(unix))]
+pub fn install_termination_handler() {}

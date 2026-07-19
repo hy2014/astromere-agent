@@ -139,7 +139,7 @@ export function WorkspaceTreeView({
                           return;
                         }
                         if (e.key === "Enter") {
-                          // 只用来确认选中的补全建议，不创建 workspace
+                          // Only used to confirm the selected completion suggestion; does not create a workspace
                           e.preventDefault();
                           e.stopPropagation();
                           if (remotePathHighlightIndex >= 0 && remotePathHighlightIndex < remotePathSuggestions.length) {

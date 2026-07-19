@@ -5,23 +5,23 @@ import { RuleContext } from "../types";
 const USAGE_HINT = "useCallback 仅用于事件绑定，通过 events 槽或子组件 props 透传";
 
 /**
- * 检查 View 函数体内的 useCallback 用法
+ * Checks useCallback usage inside the View function body
  *
- * 允许的唯一模式：
+ * Allowed pattern (only):
  *   const onEventXxx = useCallback((param1, param2?) => {
  *       handleXxx(param1, param2, state1, state2)
  *   }, [state1, state2])
  *
- * 规则：
- *   1. 只能在 View 函数体内（由调用方保证传入正确的 viewFn）
- *   2. 变量名必须以 onEvent 开头
- *   3. callback body 仅限单条 { handleXxx(...) } 语句
- *   4. handleXxx 必须是文件级函数
- *   5. callback 参数必须原封不动传给 handleXxx（顺序/个数一致）
- *   6. deps 必须是 state/memo 变量
- *   7. deps 中 handleXxx 未使用的变量报错（冗余）
- *   8. handleXxx 不得返回非 void 值
- *   9. handleXxx 不得包含 render() / JSX
+ * Rules:
+ *   1. Only inside the View function body (the caller guarantees the correct viewFn is passed)
+ *   2. Variable name must start with onEvent
+ *   3. callback body may contain only a single { handleXxx(...) } statement
+ *   4. handleXxx must be a file-level function
+ *   5. callback params must be passed verbatim to handleXxx (same order/count)
+ *   6. deps must be state/memo variables
+ *   7. variables in deps unused by handleXxx are reported as errors (redundant)
+ *   8. handleXxx must not return a non-void value
+ *   9. handleXxx must not contain render() / JSX
  */
 export function checkUseCallback(
     ctx: RuleContext,
@@ -54,7 +54,7 @@ function inspectUseCallback(
 ): void {
     const args = call.arguments;
 
-    // 规则 2: 变量名必须以 onEvent 开头
+    // Rule 2: variable name must start with onEvent
     if (!varName.startsWith("onEvent")) {
         ctx.addViolation(
             "useCallback 规范",
@@ -75,7 +75,7 @@ function inspectUseCallback(
     const callback = args[0];
     const deps = args[1];
 
-    // 规则 3: 第一个参数必须是箭头函数或函数表达式
+    // Rule 3: the first argument must be an arrow function or function expression
     if (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) {
         ctx.addViolation(
             "useCallback 规范",
@@ -104,7 +104,7 @@ function inspectUseCallback(
             handleCall = stmt0.expression;
         }
     } else if (ts.isCallExpression(cbBody)) {
-        // () => handleXxx(...) 表达式体
+        // () => handleXxx(...) expression body
         handleCall = cbBody;
     }
 
@@ -119,7 +119,7 @@ function inspectUseCallback(
 
     handleName = handleCall.expression.text;
 
-    // 规则 4: handleXxx 必须是文件级函数
+    // Rule 4: handleXxx must be a file-level function
     if (!isFileLevelFunction(ctx, handleName)) {
         ctx.addViolation(
             "useCallback 规范",
@@ -128,7 +128,7 @@ function inspectUseCallback(
         );
     }
 
-    // 规则 5: callback 参数 → handleXxx 传参必须一致
+    // Rule 5: callback params → handleXxx args must match
     const cbParams = callback.parameters;
     const handleArgs = handleCall.arguments;
 
@@ -152,7 +152,7 @@ function inspectUseCallback(
         }
     }
 
-    // deps 必须是数组字面量
+    // deps must be an array literal
     if (!ts.isArrayLiteralExpression(deps)) {
         ctx.addViolation(
             "useCallback 规范",
@@ -162,8 +162,8 @@ function inspectUseCallback(
         return;
     }
 
-    // ── 白名单：逐个检查每个 extra arg ──
-    // 所有传参必须能被 checker 追踪来源，不认识的传参模式直接报错
+    // ── Whitelist: check each extra arg one by one ──
+    // All args must be traceable by the checker; unrecognized arg patterns are reported directly
     const extraArgNames = new Set<string>();
     for (let i = cbParams.length; i < handleArgs.length; i++) {
         const arg = handleArgs[i];
@@ -181,8 +181,8 @@ function inspectUseCallback(
         }
     }
 
-    // ── 白名单：逐个检查每个 dep ──
-    // deps 数组的每个元素必须是解构后的 Identifier
+    // ── Whitelist: check each dep one by one ──
+    // Each element of the deps array must be a destructured Identifier
     const depNamesSet = new Set<string>();
     for (const dep of deps.elements) {
         if (ts.isIdentifier(dep)) {
@@ -196,9 +196,9 @@ function inspectUseCallback(
         }
     }
 
-    // ── 双向校验：extra args ⇄ deps ──
+    // ── Bidirectional check: extra args ⇄ deps ──
 
-    // 方向 A：deps 中的每个变量，handleXxx 必须用了
+    // Direction A: for every variable in deps, handleXxx must use it
     for (const dep of deps.elements) {
         if (!ts.isIdentifier(dep)) continue;
         if (!extraArgNames.has(dep.text)) {
@@ -208,7 +208,7 @@ function inspectUseCallback(
                 dep,
             );
         }
-        // deps 中的变量必须是 state/props
+        // Variables in deps must be state/props
         if (!ctx.stateVars.has(dep.text) && !ctx.propVars.has(dep.text)) {
             ctx.addViolation(
                 "useCallback 规范",
@@ -218,7 +218,7 @@ function inspectUseCallback(
         }
     }
 
-    // 方向 B：handleXxx 的每个 extra arg，必须出现在 deps 中
+    // Direction B: every extra arg of handleXxx must appear in deps
     extraArgNames.forEach(name => {
         if (depNamesSet.has(name)) return;
 
@@ -230,7 +230,7 @@ function inspectUseCallback(
         );
     });
 
-    // 规则 8 & 9: 检查 handleXxx 函数体
+    // Rule 8 & 9: check the handleXxx function body
     checkHandleBody(ctx, handleName, call);
 }
 
@@ -257,7 +257,7 @@ function checkHandleBody(ctx: RuleContext, handleName: string, useCallbackNode: 
     if (!fnBody) return;
 
     walkBodyNoNesting(fnBody, (node) => {
-        // 规则 8: return <value> — handle 不应返回值
+        // Rule 8: return <value> — handle should not return a value
         if (ts.isReturnStatement(node) && node.expression) {
             ctx.addViolation(
                 "useCallback 规范",
@@ -267,7 +267,7 @@ function checkHandleBody(ctx: RuleContext, handleName: string, useCallbackNode: 
             return;
         }
 
-        // 规则 9: 不应调用 render()
+        // Rule 9: should not call render()
         if (ts.isCallExpression(node)) {
             const callee = node.expression;
             if (ts.isIdentifier(callee) && callee.text === "render") {
@@ -280,7 +280,7 @@ function checkHandleBody(ctx: RuleContext, handleName: string, useCallbackNode: 
             }
         }
 
-        // 规则 9: 不应包含 JSX
+        // Rule 9: should not contain JSX
         if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node)) {
             ctx.addViolation(
                 "useCallback 规范",
@@ -302,7 +302,7 @@ function findHandleBody(ctx: RuleContext, name: string): ts.Block | undefined {
                     if (ts.isArrowFunction(decl.initializer) && decl.initializer.body) {
                         return ts.isBlock(decl.initializer.body)
                             ? decl.initializer.body
-                            : undefined; // 表达式体箭头函数没有 block，跳过
+                            : undefined; // Arrow function with expression body has no block, skip
                     }
                     if (ts.isFunctionExpression(decl.initializer) && decl.initializer.body) {
                         return decl.initializer.body;
@@ -315,18 +315,18 @@ function findHandleBody(ctx: RuleContext, name: string): ts.Block | undefined {
 }
 
 /**
- * 遍历 node 子树，不穿透嵌套函数（内层函数有自己的作用域）
+ * Walks the node subtree without descending into nested functions (inner functions have their own scope)
  */
 function walkBodyNoNesting(node: ts.Node, visit: (n: ts.Node) => void): void {
-    // 不穿透内层函数
+    // Do not descend into inner functions
     if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node))) {
-        // 最外层函数本身需要检查，但跳过其内部嵌套的函数
-        // 但我们内部递归时会再次进入，所以需要在递归中跳过
+        // The outermost function itself must be checked, but skip its inner nested functions
+        // But we re-enter it during internal recursion, so it must be skipped within the recursion
     }
     visit(node);
     ts.forEachChild(node, (child) => {
         if (ts.isArrowFunction(child) || ts.isFunctionExpression(child) || ts.isFunctionDeclaration(child)) {
-            // 跳过内层函数
+            // Skip inner function
             return;
         }
         walkBodyNoNesting(child, visit);

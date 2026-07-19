@@ -2,36 +2,36 @@ import { listenAgentReplEvents } from "../runtime";
 import type { AgentReplStreamEvent } from "../types";
 
 /**
- * 纯事件广播层。
+ * Pure event-broadcast layer.
  *
- * 对整个应用只调用一次 listenAgentReplEvents。
+ * listenAgentReplEvents is called only once for the whole application.
  *
- * ── 数据流 ──
+ * ── Data flow ──
  *
  *   App.tsx:
- *     setEventHandle("session", handleSessionEvent)   // 每个 name 只能注册一次
+ *     setEventHandle("session", handleSessionEvent)   // each name can only be registered once
  *     setEventHandle("usage", handleUsageEvent)
  *
  *   View mount:
- *     addCallback("session", (data) => ...)            // 多个 View 可注册多个 callback
+ *     addCallback("session", (data) => ...)            // multiple Views can register multiple callbacks
  *     addCallback("session", (data) => ...)
  *
- *   Tauri 事件:
+ *   Tauri events:
  *     dispatch(event)
  *       └─ for each name,
  *            handle(event) → { sessionId, data }
- *              ├─ data[name][sessionId] = data         ← 全局 store
+ *              ├─ data[name][sessionId] = data         ← global store
  *              └─ for each callback of name:
- *                   callback(data)                     ← 通知 View
+ *                   callback(data)                     ← notify View
  */
 
 type EventHandle = (event: AgentReplStreamEvent, prevData: unknown) => unknown | null;
 type EventCallback = (data: unknown, sessionId: string) => void;
 
-/** 1 name → 1 handler（重复注册报错） */
+/** 1 name → 1 handler (duplicate registration throws) */
 const eventHandles: Record<string, EventHandle> = {};
 
-/** 全局 store: data[name][sessionId] = handlerData */
+/** Global store: data[name][sessionId] = handlerData */
 const data: Record<string, Record<string, unknown>> = {};
 if (typeof window !== "undefined") (window as any).__eventBusData = data;
 
@@ -39,9 +39,9 @@ if (typeof window !== "undefined") (window as any).__eventBusData = data;
 const eventCallbacks: Record<string, Set<EventCallback>> = {};
 
 /**
- * 注册一个命名事件处理器。
- * 同一个 name 只能注册一次，重复注册会 throw Error。
- * 通常在 App.tsx 中调用一次。
+ * Register a named event handler.
+ * The same name can only be registered once; duplicate registration throws an Error.
+ * Typically called once in App.tsx.
  */
 export function setEventHandle(name: string, handle: EventHandle): void {
   if (eventHandles[name]) {
@@ -52,9 +52,9 @@ export function setEventHandle(name: string, handle: EventHandle): void {
 }
 
 /**
- * 注册一个命名回调。
- * 同一个 name 可以有多个 callback（不同 View 各自注册）。
- * 返回 unsubscribe 函数，可在 useEffect cleanup 中调用。
+ * Register a named callback.
+ * The same name can have multiple callbacks (each View registers its own).
+ * Returns an unsubscribe function, callable in a useEffect cleanup.
  */
 export function addCallback(name: string, callback: EventCallback): () => void {
   if (!eventCallbacks[name]) {
@@ -67,16 +67,16 @@ export function addCallback(name: string, callback: EventCallback): () => void {
 }
 
 /**
- * 获取某个 session 下指定 handler 的数据。
- * sessionId: 会话 ID
- * key: handler name（如 "usage"、"detail"）
+ * Get the data for a given handler under a specific session.
+ * sessionId: session ID
+ * key: handler name (e.g. "usage", "detail")
  */
 export function getSessionData<T = unknown>(sessionId: string, key: string): T | null {
   return (data[key]?.[sessionId] as T) ?? null;
 }
 
 let started = false;
-/** 启动底层 Tauri 事件监听（幂等）。应用初始化时调用一次即可。 */
+/** Start the underlying Tauri event listener (idempotent). Call once during app initialization. */
 export function startStreamEventListener(): void {
   if (started) return;
   started = true;

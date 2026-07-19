@@ -57,7 +57,7 @@ export class TryVibe extends Vibe {
     const children: any[] = [stmt.tryBlock];
 
     if (stmt.catchClause) {
-      // catch 变量先注入 status，再处理 catch block
+      // Inject catch var into status first, then process catch block
       children.push(stmt.catchClause.variableDeclaration ?? null);
       children.push(stmt.catchClause.block);
     }

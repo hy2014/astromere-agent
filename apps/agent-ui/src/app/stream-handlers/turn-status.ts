@@ -11,20 +11,21 @@ export type SessionStatusData = {
 // ── Handler ────────────────────────────────────────────────────────────
 
 /**
- * session-status handler: 管理 turn 状态机。
+ * session-status handler: manages the turn state machine.
  *
- * 状态流转：
+ * State transitions:
  *   submit prompt ─────────→ "running"
  *                              ├── permission/control_request → "ctrl_block"
- *                              │     └── 用户确认 → "running"（UI 侧设）
- *                              ├── interrupt 事件 → "idle"
+ *                              │     └── user confirms → "running" (set on UI side)
+ *                              ├── interrupt event → "idle"
  *                              └── turn_complete / error → "idle"
- *   click STOP ─────────────→ "interrupt"（UI 侧设）
- *                              └── interrupt 事件 → "idle"
- *   click Fork ─────────────→ "forking"（UI 侧设，用户点击 Fork 按钮到新 session 创建完成之间）
- *                              └── fork 完成/失败 → "idle"
+ *   click STOP ─────────────→ "interrupt" (set on UI side)
+ *                              └── interrupt event → "idle"
+ *   click Fork ─────────────→ "forking" (set on UI side, between the user clicking Fork and the new session finishing creation)
+ *                              └── fork completes/fails → "idle"
  *
- * handler 只处理流事件。UI 操作（submit/interrupt/fork/确认权限）由 View 层通过 WriteState 直接设置。
+ * The handler only processes stream events. UI actions (submit/interrupt/fork/confirm permission)
+ * are set directly by the View layer via WriteState.
  */
 export function handleSessionStatusEvent(
   event: AgentReplStreamEvent,
@@ -39,8 +40,8 @@ export function handleSessionStatusEvent(
     return { turnStatus: "ctrl_block" };
   }
 
-  // turn_complete / error / interrupt / process_exit → 无条件 idle
-  // 不检查 prev，因为 prev 可能被无关事件（如 startup）残留的旧数据污染
+  // turn_complete / error / interrupt / process_exit → always idle
+  // Don't check prev, because prev may be polluted by stale data left by unrelated events (e.g. startup)
   if (
     eventType === "turn_complete" ||
     eventType === "error" ||

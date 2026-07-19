@@ -25,7 +25,7 @@ export function checkSlots(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
         const body = getFunctionBody(rf.node);
         if (!body) continue;
 
-        // ── state 检查 ──
+        // ── state check ──
         const unusedState = rf.stateParams.filter(v => !isIdentifierUsed(body, v));
         if (unusedState.length > 0) {
             ctx.addViolation(
@@ -44,7 +44,7 @@ export function checkSlots(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
             );
         }
 
-        // ── props 检查 ──
+        // ── props check ──
         const unusedProps = rf.propsParams.filter(v => !isIdentifierUsed(body, v));
         if (unusedProps.length > 0) {
             ctx.addViolation(
@@ -65,7 +65,7 @@ export function checkSlots(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
             }
         }
 
-        // ── memo 检查 ──
+        // ── memo check ──
         if (rf.memoParams.length > 0) {
             const unknownMemos = rf.memoParams.filter(v => !ctx.memoVars.has(v));
             if (unknownMemos.length > 0) {
@@ -77,7 +77,7 @@ export function checkSlots(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
             }
         }
 
-        // ── ext 作弊检查 ──
+        // ── ext slot misuse check ──
         if (rf.extParamName) {
             const params = rf.node.parameters;
             if (params.length >= 4) {

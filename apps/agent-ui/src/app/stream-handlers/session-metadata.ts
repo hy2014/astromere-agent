@@ -9,7 +9,7 @@ export function handleSessionMetadataEvent(
   event: AgentReplStreamEvent,
   _prevData: unknown,
 ): SessionMetadataEvent {
-  // startup / process_status → 更新进程状态和 pid
+  // startup / process_status → update process status and pid
   if (event.eventType === "startup" || event.eventType === "process_status") {
     const running = event.eventType === "startup" ? true : event.payload.running === true;
     return {
@@ -18,12 +18,12 @@ export function handleSessionMetadataEvent(
     };
   }
 
-  // process_exit → 标记停止
+  // process_exit → mark as stopped
   if (event.eventType === "process_exit") {
     return { processStatus: "stopped" };
   }
 
-  // stderr "repl process stdout closed" → 标记停止
+  // stderr "repl process stdout closed" → mark as stopped
   if (event.eventType === "stderr") {
     const detail = String(event.payload?.text ?? event.payload?.message ?? "").toLowerCase();
     if (detail.includes("repl process stdout closed")) {
@@ -31,6 +31,6 @@ export function handleSessionMetadataEvent(
     }
   }
 
-  // 其他事件 → 无变化
+  // Other events → no change
   return {};
 }

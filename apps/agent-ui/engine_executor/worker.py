@@ -59,8 +59,8 @@ class Worker:
         # min(CPU, 8) across ALL concurrently-running DAG runs.
         self.component_sem = threading.Semaphore(max(1, min(os.cpu_count() or 4, 8)))
         # In-process thread pool: the scheduler submits one `process` per claimed
-        # DAG run, so multiple DAG runs execute concurrently. (worker 进程数恒为
-        # 1；崩溃隔离由 Rust 侧负责。)
+        # DAG run, so multiple DAG runs execute concurrently. (the worker process
+        # count is always 1; crash isolation is handled by the Rust side.)
         self.executor = ThreadPoolExecutor(
             max_workers=max(1, min(os.cpu_count() or 4, 8)),
             thread_name_prefix="dag-run",
@@ -228,11 +228,13 @@ class Worker:
         git_branch = (comp.get("git_branch") or "").strip() or "master"
         git_ref = (comp.get("git_ref") or "").strip() or ""
         entry_point = (comp.get("entry_point") or "").strip() or "run.py"
-        # 「指定 Python 解释器路径」是节点级系统配置，存于 node.config.params
-        # （key=system.python_path，值=python 可执行文件绝对路径，如
-        # ~/miniconda3/bin/python3.10）。设了就直接用该解释器跑（不建 venv、
-        # 不装依赖），复用它环境里已有的依赖（如 conda 里 editable 安装的
-        # astromere-infra 的 infra 包）。不设则走默认隔离 venv。
+        # "Specify Python interpreter path" is a node-level system config, stored
+        # in node.config.params (key=system.python_path, value=absolute path to
+        # the python executable, e.g. ~/miniconda3/bin/python3.10). When set, run
+        # directly with that interpreter (no venv, no dependency install), reusing
+        # the deps already present in its environment (e.g. the infra package from
+        # astromere-infra installed editable in conda). When unset, use the default
+        # isolated venv.
         params = (node.get("config") or {}).get("params") or {}
         python_path = params.get("system.python_path")
         python_path = python_path.strip() if isinstance(python_path, str) else ""
@@ -292,9 +294,11 @@ class Worker:
             def _log(kind, message):
                 add_log(exec_id, node_id, kind, message)
 
-            # status 门控（分支隔离）：本节点若有任一上游（沿任意入边，data 或 status）
-            # 已 failed/skipped，则跳过本节点、不 clone/不运行，并让失败沿边继续传播。
-            # 门控与端口 kind 无关——只看上游节点状态 + 图的边（见 docs/engine-executor.md）。
+            # status gating (branch isolation): if any upstream node (along any
+            # incoming edge, data or status) is failed/skipped, skip this node -
+            # do not clone/run it, and let the failure continue propagating along
+            # the edges. Gating is independent of the port kind - it only looks at
+            # upstream node status + the graph's edges (see docs/engine-executor.md).
             upstream_ids = [
                 e["source_node_id"] for e in plan["edges"] if e["target_node_id"] == node_id
             ]
@@ -304,7 +308,7 @@ class Worker:
                 upsert_node_execution(exec_id, node_id, "skipped", completed_at_ms=now())
                 add_log(exec_id, node_id, "info", "上游状态为 failed/skipped，本节点跳过")
                 with state_lock:
-                    node_status[node_id] = "failed"  # skipped ⇒ 对下游等价于 failed
+                    node_status[node_id] = "failed"  # skipped => equivalent to failed for downstream
                 return
 
             try:
@@ -314,7 +318,7 @@ class Worker:
                     exec_id, node_id, "failed", completed_at_ms=now(), error=str(e)[:2000]
                 )
                 add_log(exec_id, node_id, "error", f"Resolve failed: {e}")
-                # 分支隔离：解析失败只标记本节点，不再中止整条 DAG。
+                # branch isolation: on resolve failure, only mark this node; do not abort the whole DAG.
                 with state_lock:
                     node_status[node_id] = "failed"
                     any_failed = True
@@ -340,8 +344,9 @@ class Worker:
                 _log("info", "构建输入: 空（无上游、无实例参数）")
             work_dir = os.path.join(config.cache_root(), "runs", exec_id, node_id)
 
-            # 全局并发信号量：限制"同时运行的组件子进程数 ≤ min(CPU,8)"。这是真正的限流
-            # 旋钮，跨所有并发 DAG run 生效（见 docs/parallel-execution.md §2/§4）。
+            # Global concurrency semaphore: caps "number of concurrently running
+            # component subprocesses ≤ min(CPU,8)". This is the real throttle,
+            # spanning all in-flight DAG runs (see docs/parallel-execution.md §2/§4).
             self.component_sem.acquire()
             try:
                 result = run_node(
@@ -368,8 +373,10 @@ class Worker:
                     exec_id, node_id, "failed", completed_at_ms=now(), error=err
                 )
                 add_log(exec_id, node_id, "error", f"Node failed: {err[:500]}")
-                # 分支隔离：节点失败不再中止整条 DAG——标记本节点，让下游沿 status 门控
-                # 跳过，其他无依赖分支照常跑完（见 docs/engine-executor.md「status 门控」）。
+            # branch isolation: a node failure no longer aborts the whole DAG -
+            # mark this node and let downstream nodes skip via status gating,
+            # while other dependency-free branches run to completion normally
+            # (see docs/engine-executor.md "status gating").
                 with state_lock:
                     node_status[node_id] = "failed"
                     any_failed = True
@@ -401,7 +408,7 @@ class Worker:
             if self.stop or cancel_event.is_set():
                 break
 
-        # 收尾：取消/停止 => 未启动的节点标 cancelled；否则按 any_failed 决定 success/failed。
+        # Wrap-up: on cancel/stop => unstarted nodes are marked cancelled; otherwise success/failed is decided by any_failed.
         if cancel_event.is_set() or self.stop:
             for nid in node_map:
                 with state_lock:

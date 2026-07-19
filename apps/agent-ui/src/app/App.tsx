@@ -141,7 +141,7 @@ export function App() {
     setEventHandle("detail", handleDetailEvent as any);
   }, []);
 
-  // 订阅 session-metadata：更新 session 进程状态（会话列表显示用）
+  // Subscribe to session-metadata: update session process status (used by the session list display)
   useEffect(() => {
     return addCallback("session-metadata", (data, sessionId) => {
       const meta = data as SessionMetadataEvent;
@@ -201,7 +201,7 @@ export function App() {
     [],
   );
 
-  // 订阅 session-status：更新 turn 状态
+  // Subscribe to session-status: update turn status
   useEffect(() => {
     return addCallback("session-status", (data, sessionId) => {
       if (sessionId !== activeSessionId) return;
@@ -284,7 +284,7 @@ export function App() {
       await clientDebugLog("info", "initialLoad.registry", { count: registry.workspaces.length });
       if (cancelled) return;
 
-      // 如果注册表为空，尝试使用默认 workspace（当前目录）并注册它
+      // If the registry is empty, try using the default workspace (current directory) and register it
       if (registry.workspaces.length === 0) {
         try {
           await clientDebugLog("info", "initialLoad.getDefaultWorkspace");
@@ -294,7 +294,7 @@ export function App() {
           registry.workspaces = [{ root: defaultWs.root, name: defaultWs.name }];
         } catch (e) {
           await clientDebugLog("error", "initialLoad.defaultWorkspaceFailed", { error: String(e) });
-          // 静默失败，让用户通过"+"手动添加
+          // Fail silently and let the user add one manually via "+"
         }
       }
 
@@ -420,7 +420,7 @@ export function App() {
 
       await clientDebugLog("info", "handleAddProject.start", { remoteMode, activeProfile: activeRemoteProfile?.name ?? null });
       if (remoteMode) {
-        // remote mode: 弹出自定义输入框让用户输入远程服务器路径，支持子目录自动补全
+        // remote mode: show a custom input box for the user to enter the remote server path, with subdirectory autocomplete
         selected = await new Promise<string | null>((resolve) => {
           remotePathPromptResolve.current = resolve;
           setRemotePathPrompt("Enter the remote project path (must exist on the remote server):");
@@ -434,7 +434,7 @@ export function App() {
         setRemotePathPrompt(null);
         await clientDebugLog("info", "handleAddProject.path", { selected });
       } else {
-        // local mode: 使用 Tauri 本地目录选择器
+        // local mode: use the Tauri native directory picker
         selected = await openDialog({
           directory: true,
           multiple: false,

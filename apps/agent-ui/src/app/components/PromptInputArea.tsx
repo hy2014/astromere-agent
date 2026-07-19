@@ -55,7 +55,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     onOpenPreviewLink,
   } = props;
 
-  // ── 本地 controlCard state（来自 event bus） ──
+  // ── Local controlCard state (from event bus) ──
   const [controlCard, setControlCard] = useState<PendingPermission | null>(null);
   useEffect(() => {
     return addCallback("control-request", (data, _sessionId) => {
@@ -65,11 +65,11 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     });
   }, []);
 
-  // ref 用于 submitWithPrompt 的 guard（避免依赖 cycle）
+  // ref used as a guard for submitWithPrompt (avoids a dependency cycle)
   const controlCardRef = useRef(controlCard);
   controlCardRef.current = controlCard;
 
-  // ── 权限响应处理 ──
+  // ── Permission response handling ──
   const handlePermissionDecision = useCallback(
     (approved: boolean, answers: Record<string, string> | undefined, permission: PendingPermission) => {
       setControlCard(null);
@@ -107,12 +107,12 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     selectedIndex: 0, skills: [], commands: [], isLoadingSkills: false,
   });
 
-  // ── Context usage state (自管理：切换 session 时取，turn 完成时刷新) ──
+  // ── Context usage state (self-managed: fetched on session switch, refreshed on turn completion) ──
   const [activeContextUsage, setActiveContextUsage] = useState<AgentContextUsage | null>(null);
   const [contextUsageError, setContextUsageError] = useState<string | null>(null);
   const [isCompacting, setIsCompacting] = useState(false);
 
-  // 切换 session 时拉取 context usage
+  // Fetch context usage when switching session
   useEffect(() => {
     if (!activeSessionId || !activeProject || isNewSessionId(activeSessionId)) return;
     getAgentContextUsage(activeProject, activeSessionId)
@@ -123,7 +123,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
       .catch((reason) => setContextUsageError(String(reason)));
   }, [activeSessionId, activeProject]);
 
-  // 订阅 event bus：turn_complete/startup 刷新 context usage
+  // Subscribe to event bus: refresh context usage on turn_complete/startup
   useEffect(() => {
     return addCallback("context-usage", (data, sessionId) => {
       const signal = data as ContextUsageSignal;
@@ -138,7 +138,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     });
   }, [activeProject, activeSessionId]);
 
-  // 订阅 event bus：system status.compacting → 更新压缩状态
+  // Subscribe to event bus: system status.compacting → update compaction state
   useEffect(() => {
     return addCallback("compacting", (data, _sessionId) => {
       setIsCompacting(data as boolean);
@@ -152,7 +152,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     return `${input} / ${total}`;
   };
 
-  // ── 用 ref 稳定回调，避免每次 keystroke 重建 onSubmitPrompt → handlePromptSubmit → handlePromptKeyDown ──
+  // ── Stabilize callbacks with refs, avoid rebuilding onSubmitPrompt → handlePromptSubmit → handlePromptKeyDown on every keystroke ──
   const promptRef = useRef(prompt);
   promptRef.current = prompt;
   const fileReferencesRef = useRef(fileReferences);
@@ -169,7 +169,7 @@ export function PromptInputAreaView(props: PromptInputAreaProps) {
     promptInputRef.current?.closeFileSuggestions();
   }, []);
 
-  // ── 稳定对象引用，避免 usePromptInput 内 useEffect 无限循环 ──
+  // ── Stabilize object references, avoid infinite useEffect loop inside usePromptInput ──
   const activeProjectObj = useMemo(
     () => activeProject ? { root: activeProject } : null,
     [activeProject],

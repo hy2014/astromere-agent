@@ -742,8 +742,8 @@ export function contextUsageLabel(usage: AgentContextUsage | null | undefined): 
 
 // ── Aggregate ModelCallUsage[] from DB ────────────────────────────────
 //
-// 从 Rust DB 加载的 ModelCallUsage[] 聚合成 overlay 可直接使用的格式。
-// 使用方式和之前 BundleUsageSnapshot 一样。
+// Aggregate ModelCallUsage[] loaded from the Rust DB into a format the overlay
+// can consume directly. Used the same way as the previous BundleUsageSnapshot.
 
 export type AggregatedUsage = {
   usages: ModelCallUsage[];

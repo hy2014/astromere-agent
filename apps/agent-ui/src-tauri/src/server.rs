@@ -68,7 +68,7 @@ impl From<String> for AppError {
 
 // ─── HTTP Server config ────────────────────────────────────────────────
 
-/// 默认端口（由 AGENT_UI_HTTP_PORT 环境变量覆盖）
+/// Default port (overridden by the AGENT_UI_HTTP_PORT environment variable).
 const DEFAULT_HTTP_PORT: u16 = 7421;
 
 fn http_port() -> u16 {
@@ -105,7 +105,7 @@ pub fn sse_broadcast_sender() -> &'static broadcast::Sender<String> {
     })
 }
 
-/// 向 SSE 订阅者广播事件（由 repl.rs 的事件分发调用）
+/// Broadcast an event to SSE subscribers (called by the event dispatch in repl.rs).
 pub fn broadcast_sse_event(event_json: String) {
     let _ = sse_broadcast_sender().send(event_json);
 }
@@ -717,7 +717,7 @@ async fn sqlite_info_handler() -> Result<Json<sqlite::SqliteDatabaseInfo>, AppEr
 async fn sse_handler() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = sse_broadcast_sender().subscribe();
     let stream = async_stream::stream! {
-        // 发送连接确认
+        // Send connection confirmation.
         yield Ok(Event::default().data(r#"{"eventType":"connected","payload":{"ok":true}}"#));
         loop {
             match rx.recv().await {
@@ -925,8 +925,9 @@ mod tests {
     // - anything else → true
 }
 
-/// 测试用 router：仅包含不需要 Tauri AppHandle 的 stateless handler。
-/// 用于集成测试中验证路由完备性和 HTTP 状态码行为。
+/// Router for tests: only contains stateless handlers that do not need a
+/// Tauri AppHandle. Used in integration tests to verify route coverage and
+/// HTTP status-code behavior.
 #[allow(dead_code)]
 pub fn stateless_test_router() -> Router {
     Router::new()
@@ -965,7 +966,7 @@ pub fn stateless_test_router() -> Router {
     //        not included in stateless test router.
 }
 
-/// 启动 HTTP server（在独立 tokio runtime 上运行）。
+/// Start the HTTP server (runs on a dedicated tokio runtime).
 /// `app_handle` is None in --remote mode.
 /// `run_worker` = whether this process is the DAG execution host and should
 /// launch + supervise `engine_executor/worker.py`. The desktop GUI (pure
@@ -976,8 +977,10 @@ pub async fn run_server(app_handle: Option<AppHandle>, run_worker: bool) {
         return;
     }
 
-    // 执行引擎（worker.py）随 server 启动并托管：崩溃自重启、退出时回收。
-    // 这样 worker 永远与"拥有队列/DB 的执行主机"同机，桌面纯 client 不再起它。
+    // The execution engine (worker.py) starts and is hosted alongside the
+    // server: it auto-restarts on crash and is reclaimed on exit.
+    // This keeps the worker always on the same machine as the "execution host
+    // that owns the queue/DB"; the desktop pure client no longer launches it.
     if run_worker {
         engine::start_worker_supervisor();
         // Cron scheduler rides along with the worker: both belong to the

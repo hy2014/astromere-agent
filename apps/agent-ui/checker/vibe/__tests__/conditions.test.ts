@@ -66,7 +66,7 @@ test("ConditionsVibe: no leak outer var", () => {
   const vibe = rule.make(DUMMY_PARENT, stmt!);
   const r = vibe.resolve();
   if ("violations" in r) throw new Error(`violation: ${r.violations[0].message}`);
-  // block scope: a 不应泄漏
+  // block scope: a should not leak
   if (r.results.length !== 0) throw new Error(`expected empty, got ${r.results.length}`);
 });
 

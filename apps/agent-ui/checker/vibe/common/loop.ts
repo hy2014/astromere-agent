@@ -71,7 +71,7 @@ export class LoopVibe extends Vibe {
   resolveSubContents(): any[] {
     const node = this.content as ts.IterationStatement;
     const body = node.statement;
-    // 提取循环变量声明
+    // Extract loop variable declaration
     const initializer = ts.isForStatement(node)
       ? node.initializer
       : ts.isForOfStatement(node) || ts.isForInStatement(node)

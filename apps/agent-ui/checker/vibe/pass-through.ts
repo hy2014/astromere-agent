@@ -3,11 +3,11 @@ import { Vibe, VibeStatus, Rule } from "./vibe";
 import { isConstantLiteral } from "../rules/check-no-mutable-module-vars";
 
 /**
- * 透传 Vibe：不抛出错误，不检查子节点，仅是占位让父节点
- * 知道这个子节点是合法的，不需要进一步递归。
+ * Pass-through Vibe: does not throw errors or check child nodes; it is just a
+ * placeholder so the parent node knows this child is valid and needs no further recursion.
  *
- * resolveSubContents → [] → resolve 循环体不会执行
- * computeResults    → [] → 无状态产出
+ * resolveSubContents → [] → the resolve loop body will not execute
+ * computeResults    → [] → no stateful output
  */
 export abstract class PassThroughVibe extends Vibe {
   resolveSubContents(): any[] {
@@ -20,7 +20,7 @@ export abstract class PassThroughVibe extends Vibe {
 }
 
 /**
- * const MAX = 10 / const NAME = "hello" 等模块级字面量常量
+ * module-level literal constants such as const MAX = 10 / const NAME = "hello"
  */
 export class ConstVibe extends PassThroughVibe {
   static rule(parentVibe: Vibe): Rule {
@@ -58,7 +58,7 @@ export class ImportVarVibeStatus extends VibeStatus {
  * import { X, Y } from "./foo"
  * import X from "./foo"
  *
- * 不允许 import * 和 side-effect import
+ * import * and side-effect imports are not allowed
  */
 export class ImportVibe extends Vibe {
   static rule(parentVibe: Vibe): Rule {

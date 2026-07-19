@@ -10,8 +10,8 @@ export type SessionItemsData = {
 // ── Helpers ────────────────────────────────────────────────────────────
 
 /**
- * 从 raw_json 中提取 assistant 消息的文本内容。
- * 只提取 content[].type === "text" 的块，其他类型跳过。
+ * Extract the text content of the assistant message from raw_json.
+ * Only blocks where content[].type === "text" are extracted; other types are skipped.
  */
 function extractAssistantText(rawJson: unknown): string | null {
   if (!isRecord(rawJson)) return null;
@@ -40,13 +40,13 @@ export function handleSessionItemsEvent(
   event: AgentReplStreamEvent,
   prevData: SessionItemsData | null,
 ): SessionItemsData | null {
-  // 只处理 turn_text 事件
+  // Only process turn_text events
   if (event.eventType !== "turn_text") return null;
 
   const text = extractAssistantText(event.payload.raw_json);
   if (text === null) return null;
 
-  // 去重：跟上次一样就不触发更新
+  // Dedupe: if identical to the last value, don't trigger an update
   if (prevData?.runningResponse === text) return null;
 
   return { runningResponse: text };

@@ -166,7 +166,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
     collect(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则: 禁止 const 箭头函数/函数表达式，必须用 function 声明
+    // Rule: forbid const arrow functions / function expressions; must use a function declaration
     // ════════════════════════════════════════════════════════
     for (const stmt of ctx.sourceFile.statements) {
         if (ts.isVariableStatement(stmt)) {
@@ -174,11 +174,11 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
                 if (ts.isIdentifier(decl.name) && decl.initializer) {
                     const init = decl.initializer;
                     let isFn = false;
-                    // 直接是箭头/函数表达式
+                    // Directly an arrow / function expression
                     if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
                         isFn = true;
                     }
-                    // useMemo 返回函数
+                    // useMemo returns a function
                     if (ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === "useMemo" && init.arguments.length > 0) {
                         const callback = init.arguments[0];
                         if (callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) {
@@ -204,38 +204,38 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
     }
 
     // ════════════════════════════════════════════════════════
-    // 规则: 返回 JSX 的函数必须符合 renderFn 规范
-    // 纯 AST 静态分析，不依赖 TypeChecker，不被 `: any` 绕过
+    // Rule: functions returning JSX must conform to the renderFn convention
+    // Pure AST static analysis, does not depend on TypeChecker, cannot be bypassed with `: any`
     // ════════════════════════════════════════════════════════
 
-    // ── Helper: 判断表达式是否包含 JSX ──
+    // ── Helper: determine whether an expression contains JSX ──
     function expressionContainsJSX(expr: ts.Expression): boolean {
         expr = unwrapParenthesized(expr);
         if (ts.isJsxElement(expr) || ts.isJsxSelfClosingElement(expr) || ts.isJsxFragment(expr)) {
             return true;
         }
-        // 三元表达式：递归检查两个分支
+        // Ternary expression: recursively check both branches
         if (ts.isConditionalExpression(expr)) {
             return expressionContainsJSX(expr.whenTrue) || expressionContainsJSX(expr.whenFalse);
         }
         return false;
     }
 
-    // ── Helper: 判断函数体是否返回 JSX（不穿透内层函数） ──
+    // ── Helper: determine whether the function body returns JSX (without descending into inner functions) ──
     function functionReturnsJSX(fn: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): boolean {
         const body = fn.body;
         if (!body) return false;
 
-        // 箭头函数表达式体: () => <div/>
+        // Arrow function expression body: () => <div/>
         if (!ts.isBlock(body)) {
             return expressionContainsJSX(body);
         }
 
-        // 块体：搜索所有 return 语句
+        // Block body: search all return statements
         let found = false;
         function walk(node: ts.Node) {
             if (found) return;
-            // 不穿透内层函数（它们有自己的 return）
+            // Do not descend into inner functions (they have their own return)
             if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node)) && node !== fn) {
                 return;
             }
@@ -252,13 +252,13 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
     const renderFnNamesSet = new Set(renderFns.map(rf => rf.name));
 
     function checkReturnType(node: ts.Node, name?: string) {
-        // 跳过 View 组件（React 组件，不需要 renderFn 签名）
+        // Skip View components (React components, no renderFn signature needed)
         if (viewFn) {
             if (ts.isFunctionDeclaration(node) && node === viewFn) return;
             if (ts.isVariableDeclaration(node) && node.initializer === viewFn) return;
         }
 
-        // 跳过已识别的 renderFn
+        // Skip already-recognized renderFn
         if (name && renderFnNamesSet.has(name)) return;
 
         let fn: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | undefined;
@@ -292,11 +292,11 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
         }
     }
 
-    // ── 调用位置检查（无需 renderFn 被识别也执行） ──
+    // ── Call-site check (executes even if the renderFn is not recognized) ──
 
     const renderFnNames = new Set(renderFns.map(rf => rf.name));
 
-    // 收集文件中所有函数名（用于校验 events 引用）
+    // Collect all function names in the file (used to validate events references)
     const knownFnNames = new Set(renderFnNames);
     function collectFnNames(node: ts.Node) {
         if (ts.isFunctionDeclaration(node) && node.name) {
@@ -312,7 +312,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
     }
     collectFnNames(ctx.sourceFile);
 
-    // renderFn 直接调用检查
+    // renderFn direct-call check
     function checkDirectRenderFnCall(node: ts.Node) {
         if (ts.isCallExpression(node)) {
             const callee = node.expression;
@@ -328,7 +328,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
     }
     checkDirectRenderFnCall(ctx.sourceFile);
 
-    // render() fn 引用校验
+    // render() fn reference validation
     function checkRenderFnRef(node: ts.Node) {
         if (ts.isCallExpression(node)) {
             const callee = node.expression;
@@ -357,7 +357,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
     }
     checkRenderFnRef(ctx.sourceFile);
 
-    // render() events 配置检查
+    // render() events config check
     function checkEventsConfig(node: ts.Node) {
         if (ts.isCallExpression(node)) {
             const callee = node.expression;
@@ -401,8 +401,8 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
     checkEventsConfig(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则: render() 的 state/props/events/memo 必须是调用者的子集
-    // 层层检查：renderFn1 调 renderFn2 时，传的值必须在 renderFn1 的对应参数中存在
+    // Rule: render()'s state/props/events/memo must be a subset of the caller's
+    // Layered check: when renderFn1 calls renderFn2, passed values must exist in renderFn1's corresponding parameters
     // ════════════════════════════════════════════════════════
     function checkRenderSlotSubsets(node: ts.Node) {
         if (ts.isCallExpression(node)) {
@@ -414,7 +414,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
             const arg0 = node.arguments[0];
             if (!arg0 || !ts.isObjectLiteralExpression(arg0)) { ts.forEachChild(node, checkRenderSlotSubsets); return; }
 
-            // 找调用者（向上找最近的函数声明）
+            // Find the caller (walk up to the nearest function declaration)
             let callingFn: ts.Node | null = null;
             let cur: ts.Node | undefined = node.parent;
             while (cur) {
@@ -427,7 +427,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
 
             const inRenderFn = callingFn ? isRenderFn(callingFn) : false;
 
-            // 获取调用者的各槽位可用 key
+            // Get the available keys for each slot of the caller
             let callerStateKeys: Set<string>;
             let callerPropsKeys: Set<string>;
             let callerEventsKeys: Set<string>;
@@ -454,10 +454,10 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
                         ? getBindingNames(params[3].name) : []
                 );
             } else {
-                // View 层：不限制 events 来源，只校验 state/props/memo
+                // View layer: do not restrict events source, only validate state/props/memo
                 callerStateKeys = ctx.stateVars;
                 callerPropsKeys = ctx.propVars;
-                callerEventsKeys = new Set<string>(); // 空集合 = 不校验 events
+                callerEventsKeys = new Set<string>(); // Empty set = do not validate events
                 callerMemoKeys = ctx.memoVars;
             }
 
@@ -469,7 +469,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
             };
 
             for (const [slotName, callerKeys] of Object.entries(slotMap)) {
-                if (callerKeys.size === 0 && slotName === "events") continue; // View 层 events 不校验
+                if (callerKeys.size === 0 && slotName === "events") continue; // View layer: events not validated
                 const slotProp = arg0.properties.find(
                     p => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === slotName
                 ) as ts.PropertyAssignment | undefined;
@@ -478,7 +478,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
                 const slotObj = unwrapParenthesized(slotProp.initializer);
                 if (!slotObj) continue;
 
-                // 所有 slot 值必须是 { key } 或 { key: value } 解构格式
+                // All slot values must be in the destructured format { key } or { key: value }
                 if (!ts.isObjectLiteralExpression(slotObj)) {
                     ctx.addViolation(
                         "render 子集检查",
@@ -518,14 +518,14 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
 
     if (renderFns.length === 0) return;
 
-    // ── 以下为 renderFn 特异检查 ──
-    // 调试
+    // ── The following are renderFn-specific checks ──
+    // Debug
     console.log('\n📋 收集到的 renderFn 列表:');
     renderFns.forEach(rf => console.log(`  - ${rf.name}: className="${rf.rootClassName || '无'}"`));
     if (checkClassNames.length > 0) {
         console.log(`🔍 需要检查的 className: ${checkClassNames.join(', ')}\n`);
     } else if (renderFns.length > 0) {
-        // 有 renderFn 但缺少 @checkFns 注解
+        // Has renderFn but missing @checkFns annotation
         ctx.addViolation(
             "renderFn 注解检查",
             `文件缺少 /* @checkFns ... */ 注解。\n` +
@@ -535,7 +535,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
         );
     }
 
-    // ── @checkFns className 匹配 ──
+    // ── @checkFns className matching ──
     if (checkClassNames.length > 0) {
         for (const cn of checkClassNames) {
             const matched = renderFns.filter(rf =>
@@ -558,9 +558,9 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
 
     }
 
-    // ── 以下为 renderFn 特异检查 ──
+    // ── The following are renderFn-specific checks ──
 
-    // renderFn 内部禁止 hooks
+    // Hooks are forbidden inside renderFn
     const FORBIDDEN_HOOKS = ["useState", "useEffect", "useLayoutEffect", "useRef", "useContext",
         "useImperativeHandle", "useInsertionEffect", "useDebugValue", "useDeferredValue",
         "useTransition", "useSyncExternalStore", "useOptimistic", "useActionState"];
@@ -581,7 +581,7 @@ export function checkRenderFns(ctx: RuleContext, viewFn: ts.FunctionDeclaration 
         checkHooks(rf.node);
     }
 
-    // ── 子规则 ──
+    // ── Sub-rules ──
     checkSlots(ctx, renderFns);
     checkEvents(ctx, renderFns);
 }

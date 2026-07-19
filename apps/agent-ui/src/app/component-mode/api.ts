@@ -1,17 +1,21 @@
 // ─── DAG mode HTTP client ─────────────────────────────────────────────
 //
-// dag mode 是纯 HTTP 远程模式：
-// 所有 dag/component/component-session/execution 请求都打到用户在「首连配置」
-// 里填写的远程 server（axum，端口 7421，路由见 src-tauri/src/dag_api.rs）。
+// dag mode is a pure-HTTP remote mode:
+// all dag/component/component-session/execution requests hit the remote server
+// the user filled in the first-connect config (axum, port 7421; routes in
+// src-tauri/src/dag_api.rs).
 //
-// 本文件是 tauri.ts 中 dag/component 那一组 IPC 包装的**等价 HTTP 替换**——
-// 导出同名函数、同参数、同返回类型，调用方只需把 import 从 `../../tauri`
-// 改成 `./api` 即可，业务代码零改动。
+// This file is the HTTP equivalent of the dag/component IPC wrappers in
+// tauri.ts — it exports functions with the same name, params, and return
+// types, so callers only need to change the import from `../../tauri` to
+// `./api`; no business-code changes required.
 //
-// 连接配置持久化到磁盘 `<AGENT_UI_HOME>/dag-mode/dagServer.json`
-// （AGENT_UI_HOME 默认 ~/.agent-ui，可由环境变量覆盖），复用 code mode 的
-// RemoteProfile / testRemoteHealth / normalizeBaseUrl 机制。
-// 启动时从磁盘加载；若磁盘尚无配置但旧 localStorage 有，则自动迁移过去。
+// Connection config is persisted to disk at
+// `<AGENT_UI_HOME>/dag-mode/dagServer.json` (AGENT_UI_HOME defaults to
+// ~/.agent-ui and can be overridden by an env var), reusing code mode's
+// RemoteProfile / testRemoteHealth / normalizeBaseUrl mechanisms.
+// Loaded from disk at startup; if no disk config exists but old localStorage
+// does, it is migrated over automatically.
 
 import { invoke } from "@tauri-apps/api/core";
 import type { RemoteProfile } from "../../runtime/remote";
@@ -31,17 +35,17 @@ import type {
 
 const DAG_SERVER_KEY = "agent-ui.dagServer.v1";
 
-// ─── 连接配置持久化（磁盘：~/.agent-ui/dag-mode/dagServer.json）────────
+// ─── Connection config persistence (disk: ~/.agent-ui/dag-mode/dagServer.json) ─
 
-// 内存缓存：启动后从磁盘加载，之后同步读取直接走缓存，写入时异步落盘。
+// In-memory cache: loaded from disk at startup; later synchronous reads hit the cache, writes are persisted async.
 let dagServerCache: RemoteProfile | null = null;
 let dagServerLoaded = false;
 
 /**
- * 启动时调用：从磁盘加载 DAG server 配置到内存缓存。
- * - 磁盘已有 → 直接采用；
- * - 磁盘无、旧 localStorage 有 → 迁移到磁盘并删除旧键；
- * - invoke 不可用（纯 web / 测试环境）→ 退化为直接读 localStorage。
+ * Called at startup: loads the DAG server config from disk into the memory cache.
+ * - Disk config present → use it directly;
+ * - Disk absent but old localStorage present → migrate to disk and delete the old key;
+ * - invoke unavailable (pure web / test env) → fall back to reading localStorage directly.
  */
 export async function initDagServerConfig(): Promise<void> {
   try {
@@ -51,7 +55,7 @@ export async function initDagServerConfig(): Promise<void> {
       dagServerLoaded = true;
       return;
     }
-    // 迁移旧 localStorage 配置
+    // Migrate legacy localStorage config
     const raw = window.localStorage.getItem(DAG_SERVER_KEY);
     if (raw) {
       try {
@@ -72,7 +76,7 @@ export async function initDagServerConfig(): Promise<void> {
       }
     }
   } catch {
-    // invoke 不可用：退化读 localStorage
+    // invoke unavailable: fall back to reading localStorage
     const raw = window.localStorage.getItem(DAG_SERVER_KEY);
     if (raw) {
       try {
@@ -102,7 +106,7 @@ export function saveDagServer(input: { name: string; baseUrl: string; token?: st
   const profile = createRemoteProfileInput(input);
   dagServerCache = profile;
   dagServerLoaded = true;
-  // 异步落盘，失败静默（不影响本次连接）。
+  // Persist async; fail silently (does not affect this connection).
   invoke("save_dag_server", { profile }).catch(() => {});
   return profile;
 }
@@ -116,7 +120,7 @@ export function testDagServerHealth(profile: RemoteProfile) {
   return testRemoteHealth(profile);
 }
 
-// ─── 内部请求助手 ────────────────────────────────────────────────────
+// ─── Internal request helper ─────────────────────────────────────────
 
 function getDagProfile(): RemoteProfile {
   const p = loadDagServer();
@@ -128,7 +132,7 @@ function getDagProfile(): RemoteProfile {
 
 async function dagJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const profile = getDagProfile();
-  // profile.baseUrl 在 save/load 时已被 createRemoteProfileInput / loadDagServer 归一化。
+  // profile.baseUrl is normalized by createRemoteProfileInput / loadDagServer at save/load time.
   const baseUrl = profile.baseUrl;
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
@@ -296,7 +300,8 @@ export type OutputPreview = {
   unsupported?: string | null;
 };
 
-// 预览节点某输出端口的前 `limit` 行（默认 100）。文件在服务端磁盘，由 server 读取后返回。
+// Preview the first `limit` rows (default 100) of a node's output port. Files
+// live on the server's disk and are read and returned by the server.
 export function previewNodeOutput(
   executionId: string,
   nodeId: string,
@@ -315,7 +320,8 @@ export function deleteDagNode(dagId: string, nodeId: string): Promise<void> {
   );
 }
 
-// 纯 HTTP 模式暂无 SSE dag 事件订阅；保留签名返回 no-op 以兼容调用方。
+// Pure-HTTP mode has no SSE dag event subscription yet; the signature is kept
+// and returns a no-op for caller compatibility.
 export function listenDagEvents(
   _handler: (event: Record<string, unknown>) => void,
 ): Promise<() => void> {

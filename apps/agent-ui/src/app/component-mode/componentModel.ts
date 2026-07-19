@@ -13,7 +13,7 @@ import type {
 // onto the canvas (vs. the old "create on drop" generic key).
 export const COMPONENT_DRAG_KEY = "application/claw-component";
 
-// dataTransfer key used when dragging the *generic* "通用组件" item from the
+// dataTransfer key used when dragging the *generic* "generic component" item from the
 // sidebar onto the canvas. The handler creates a fresh, non-global component
 // row (global=false) on drop — this is the default, everyday path.
 export const GENERIC_DRAG_KEY = "application/claw-generic";

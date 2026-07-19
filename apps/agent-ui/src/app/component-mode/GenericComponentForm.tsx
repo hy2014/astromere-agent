@@ -7,7 +7,7 @@ export type GenericComponentFormProps = {
   onChange: (component: Component) => void;
 };
 
-// Edits the *component* definition shown in a node's 配置 tab: name / git /
+// Edits the *component* definition shown in a node's Config tab: name / git /
 // branch / ref / IO ports / entry point. It does NOT edit the parameter schema
 // (`config_schema`) — that is declared only at registration time in
 // `RegisterComponentForm` (schema is a global/registered-component concept).
@@ -51,7 +51,7 @@ export function GenericComponentForm({component, onChange}: GenericComponentForm
   // Only generic (global=false) components edit ports here.
   const canEditPorts = !component.global;
   // Registered (global) components are a shared, cross-DAG definition. Their
-  // definition must NOT be editable from a node's 配置 tab (doing so would
+  // definition must NOT be editable from a node's Config tab (doing so would
   // write to the `components` table and silently change every DAG that
   // references it). So for global components the whole definition form is
   // read-only here — only the instance params (InstanceConfigForm → dag_nodes)

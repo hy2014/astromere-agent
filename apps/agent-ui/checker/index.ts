@@ -1,6 +1,6 @@
 // checker/index.ts
 import * as path from "path";
-// checker/index.ts 顶部已有的 import 基础上，确保有这两个
+// On top of the existing imports in checker/index.ts, make sure these two are present
 import * as fs from "fs";
 
 import * as ts from "typescript";
@@ -24,7 +24,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
     const propVars = new Set<string>();
     const memoVars = new Set<string>();
 
-    // 创建 TypeChecker（不解析 node_modules，仅当前文件的类型即可）
+    // Create TypeChecker (do not resolve node_modules; current file types suffice)
     let typeChecker: ts.TypeChecker | undefined;
     if (fsPath) {
         try {
@@ -53,7 +53,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
             const programSf = program.getSourceFile(fsPath);
             if (programSf) sourceFile = programSf;
         } catch {
-            // TypeChecker 不可用时优雅降级
+            // Gracefully degrade when TypeChecker is unavailable
         }
     }
 
@@ -80,7 +80,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
         },
     };
 
-    // 解析 import 的 viewFn（跨文件确认）
+    // Resolve imported viewFn (cross-file verification)
     if (fsPath) {
         const importedViewFns = resolveImportedViewFns(sourceFile, fsPath);
         importedViewFns.forEach(v => ctx.importedViewFns.add(v));
@@ -91,14 +91,14 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
 
     const eventCallbackVars = new Set<string>();
 
-    // 从 View 函数体收集 memo 变量（从 state 派生的 const 变量）
+    // Collect memo vars from the View function body (const vars derived from state)
     if (result.viewFn) {
         const viewBody = ts.isArrowFunction(result.viewFn)
             ? result.viewFn.body
             : (result.viewFn as ts.FunctionDeclaration).body;
         if (viewBody && ts.isBlock(viewBody)) {
             function collectMemoVars(node: ts.Node) {
-                // 不进入嵌套的函数体
+                // Do not enter nested function bodies
                 if ((ts.isFunctionDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
                     node !== viewBody) {
                     return;
@@ -109,7 +109,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
                     const init = node.initializer;
                     if (!init) return;
                     if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return;
-                    // 跳过纯别名：const X = Y（Y 已在 state/memo 中），X 只是别名不是派生值
+                    // Skip pure aliases: const X = Y (Y already in state/memo); X is an alias, not a derived value
                     if (ts.isIdentifier(init) && (stateVars.has(init.text) || memoVars.has(init.text))) return;
                     if (ts.isCallExpression(init) && ts.isIdentifier(init.expression)) {
                         const calleeText = init.expression.text;
@@ -127,7 +127,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
         }
     }
 
-    // 调试打印
+    // Debug print
     console.log(`\n📌 搜集结果:`);
     console.log(`   View layer states: [${[...ctx.stateVars].join(", ")}]`);
     console.log(`   View layer props:  [${[...ctx.propVars].join(", ")}]`);
@@ -153,7 +153,7 @@ export function check(sourceCode: string, fileName: string = "component.tsx", fs
     return violations.slice(0, 100);
 }
 
-// checker/index.ts 末尾加上
+// Add at the end of checker/index.ts
 function main() {
     const args = process.argv.slice(2);
 
@@ -235,7 +235,7 @@ function main() {
     }
 }
 
-// 直接运行时执行
+// Execute when run directly
 if (import.meta.url && process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
     main();
 }

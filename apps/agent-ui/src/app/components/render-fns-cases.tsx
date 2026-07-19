@@ -10,7 +10,7 @@ function renderUserCard(
         <div className="user-card">
             <img src={avatar} />
             <h2>{name}</h2>
-            {isPremium && <span>Premium</span>}  {/* 使用 isPremium */}
+            {isPremium && <span>Premium</span>}  {/* uses isPremium */}
 
             <button onClick={onEdit}>Edit</button>
         </div>

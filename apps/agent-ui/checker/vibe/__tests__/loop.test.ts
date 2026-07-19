@@ -57,7 +57,7 @@ test("LoopVibe: for...of extracts item var", () => {
   const vibe = rule.make(DUMMY_PARENT, stmt!);
   const r = vibe.resolve();
   if ("violations" in r) throw new Error(`violation: ${r.violations[0].message}`);
-  // status 里应该有 item
+  // status should contain item
   const found = vibe.status.some(
     (s) => s instanceof DeclaredVarStatus && s.name === "item",
   );

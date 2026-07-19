@@ -444,7 +444,7 @@ export type ParameterDef = {
 // ─── Component configuration schema (config_schema) ────────────────────────
 // Declared by the user in the UI (definition-level), NOT by the git author.
 // Each item is one parameter the component exposes to its instances. See
-// docs/components.md "配置项 schema (config_schema)".
+// docs/components.md "config-item schema (config_schema)".
 
 export type ConfigFieldBaseType =
   | "string"
@@ -489,7 +489,7 @@ export type Component = {
   configSchema?: ConfigSchemaItem[];
   tags: string[];
   // Registry flag: true = registered/global (reusable across DAGs, shown in the
-  // "组件" list); false = generic, non-global (created by dragging "通用组件",
+  // "component" list); false = generic, non-global (created by dragging a "generic component",
   // not shown in the list).
   global: boolean;
   createdAtMs: number;
@@ -555,7 +555,7 @@ export type DagEdge = {
 //                (PortType was wrongly "file" | "parquet" | "csv").
 //   - "status" : control-flow port. Carries no data; a status edge expresses a
 //                pure task dependency (upstream failed/skipped ⇒ downstream is
-//                skipped). See docs/engine-executor.md "status 门控".
+//                skipped). See docs/engine-executor.md "status gating".
 export type PortType = "file" | "status";
 
 export type PortDef = {
@@ -606,7 +606,7 @@ export type NodeExecution = {
   startedAtMs?: number;
   completedAtMs?: number;
   outputPath?: string;
-  // Per-output-port runtime artifacts (third layer = 运行产物), indexed by
+  // Per-output-port runtime artifacts (third layer = run artifacts), indexed by
   // output port key, e.g. {"data": "/path/a.csv", "metrics": "/path/m.json"}.
   outputs?: Record<string, unknown>;
   error?: string;

@@ -42,7 +42,7 @@ export function getCurrentRuntime(): AgentRuntime {
   return currentRuntime;
 }
 
-// 后面接 RemoteRuntime 时会用到。
+// Used when a RemoteRuntime is wired in later.
 export function setCurrentRuntimeForDev(runtime: AgentRuntime): void {
   currentRuntime = runtime;
 }

@@ -27,7 +27,8 @@ export type ComponentCanvasProps = {
   onChange: (nodes: DagNode[], edges: DagEdge[]) => void;
   onSelectNode?: (nodeId: string) => void;
   onDeleteNode?: (nodeId: string) => void;
-  // 右键节点 → 预览该节点输出数据。label 为节点显示名（label || 组件名）。
+  // Right-click a node → preview that node's output data. `label` is the node's
+  // display name (label || component name).
   onPreviewNode?: (nodeId: string, label: string) => void;
   // Called after a *generic* component is created on drop, so the parent can
   // refresh its component list (enabling node→component lookup on selection).
@@ -99,7 +100,7 @@ function ComponentNode({data}: {data: ComponentNodeData}) {
   // store these ids and round-trip unchanged. There is NO fallback handle: the
   // canvas is a faithful mirror of the component's schema, so 0 declared ports
   // ⇒ 0 dots, for both generic and registered components. To wire a generic
-  // node, declare its ports first in the config tab (+ 输入 / + 输出); the dots
+  // node, declare its ports first in the config tab (+ input / + output); the dots
   // then appear.
   // Render one handle per declared port. A port's *kind* (file | status) drives
   // its look: status handles are hollow (see component-mode.css) and both show
@@ -212,7 +213,8 @@ function ComponentCanvasInner({
   onComponentCreated,
 }: ComponentCanvasProps) {
   const componentMap = new Map(components.map((component) => [component.id, component]));
-  // 节点右键菜单：绝对定位到鼠标处，点「预览数据」触发 onPreviewNode。
+  // Node right-click menu: absolutely positioned at the cursor; clicking
+  // "Preview Data" triggers onPreviewNode.
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -234,10 +236,10 @@ function ComponentCanvasInner({
   // Topology rebuild: only when the node/edge set (or the click/delete
   // handlers) actually changes — NOT on every component-data refresh. Rebuilding
   // the whole array on `components` change was the bug: editing a component
-  // (e.g. clicking "+ 输入") calls updateComponentStore → components changes →
+  // (e.g. clicking "+ input") calls updateComponentStore → components changes →
   // this effect wiped React-Flow's node state and desynced the canvas, making
   // the node drop / fall back to "Unknown" (and briefly unresolving
-  // selectedComponent → "该节点未关联组件").
+  // selectedComponent → "the node has no associated component").
   useEffect(() => {
     setFlowNodes(
       nodes.map((node) =>
@@ -308,9 +310,9 @@ function ComponentCanvasInner({
 
   // Short random suffix (e.g. "a3gf5") used to make generic component default
   // names distinct: every drag previously created a `components` row named the
-  // literal "通用组件", so N dropped generics were indistinguishable on the
+  // literal "generic component", so N dropped generics were indistinguishable on the
   // canvas (title = `label || name`) until manually renamed. We keep the
-  // "通用组件" prefix (recognizable in the palette) and append a random tag.
+  // "generic component" prefix (recognizable in the palette) and append a random tag.
   function randomSuffix(): string {
     return Math.random().toString(36).slice(2, 7);
   }
@@ -333,7 +335,7 @@ function ComponentCanvasInner({
       event.preventDefault();
       const position = screenToFlowPosition({x: event.clientX, y: event.clientY});
       try {
-        // (1) Generic component (default path): dragging "通用组件" creates a
+        // (1) Generic component (default path): dragging "generic component" creates a
         // fresh, NON-SHARED component row on drop — no registration needed.
         const genericRaw = event.dataTransfer.getData(GENERIC_DRAG_KEY);
         if (genericRaw) {
