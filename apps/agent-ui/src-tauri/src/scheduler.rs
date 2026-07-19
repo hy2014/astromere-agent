@@ -13,9 +13,11 @@ fn error_to_string(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-/// 节点输出预览的返回结构（前端表格框按 `columns` + `rows` 渲染）。
-/// `unsupported` 非空表示服务端暂不能预览该格式（如 parquet），此时
-/// `columns`/`rows` 为空，前端改为展示提示文案与文件路径。
+/// Return structure for node-output preview (the frontend table renders by
+/// `columns` + `rows`).
+/// A non-empty `unsupported` means the server cannot preview this format yet
+/// (e.g. parquet); in that case `columns`/`rows` are empty and the frontend
+/// shows a hint message and the file path instead.
 #[derive(Serialize)]
 pub struct OutputPreview {
     pub output_name: String,
@@ -66,7 +68,7 @@ pub(crate) fn build_snapshot(detail: &DagDetail) -> Result<String, String> {
                 config.insert("configSchema".to_string(), component.config_schema.clone());
                 // Live `dag_nodes.config` no longer stores the node name (it lives
                 // in the component definition), so re-inject it here for the
-                // history view's "各节点" snapshot display.
+                // history view's "per-node" snapshot display.
                 config.insert("name".to_string(), serde_json::Value::String(component.name));
             }
             serde_json::json!({
@@ -406,7 +408,8 @@ pub fn get_node_executions(execution_id: String) -> Result<Vec<NodeExecution>, S
     Ok(executions)
 }
 
-/// 取某个节点在指定执行里的单行 `node_executions` 记录（用于定位输出文件路径）。
+/// Fetch the single `node_executions` row for a node within a given execution
+/// (used to locate the output file path).
 pub fn get_node_execution(
     execution_id: String,
     node_id: String,
@@ -441,10 +444,12 @@ pub fn get_node_execution(
     }
 }
 
-/// 预览节点某输出端口的前 `limit` 行数据。
+/// Preview the first `limit` rows of a node's given output port.
 ///
-/// 文件路径来自 DB 中 worker 写入的 `outputs[output_name].path`，`output_name`
-/// 只用作 map 的 key **不参与任何文件系统路径拼接**，因此无路径穿越风险。
+/// The file path comes from `outputs[output_name].path`, which the worker
+/// writes into the DB. `output_name` is only used as a map key and **never
+/// participates in any filesystem path construction**, so there is no path
+/// traversal risk.
 pub fn preview_node_output(
     execution_id: String,
     node_id: String,
@@ -521,7 +526,7 @@ fn preview_csv(path: &str, output_name: &str, limit: usize) -> Result<OutputPrev
 
 fn preview_json(path: &str, output_name: &str, limit: usize) -> Result<OutputPreview, String> {
     let text = std::fs::read_to_string(path).map_err(error_to_string)?;
-    // 支持「JSON 数组」或「JSON Lines」两种布局
+    // Supports both the "JSON array" and "JSON Lines" layouts.
     let objects: Vec<Value> = if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&text) {
         arr
     } else {

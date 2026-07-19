@@ -198,7 +198,7 @@ fn test_executor_runs_generic_node_end_to_end() {
     }
     assert_eq!(final_status, "success", "the generic node should run to success");
 
-    // 6. The node-level state machine must be recorded (方案 B).
+    // 6. The node-level state machine must be recorded (Approach B).
     let node_execs = scheduler::get_node_executions(exec_id.clone()).unwrap();
     assert_eq!(node_execs.len(), 1, "one node => one node_executions row");
     let ne = &node_execs[0];

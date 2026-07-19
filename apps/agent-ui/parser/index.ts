@@ -1,4 +1,4 @@
-// 替换原来的 main 部分
+// replaces the original main section
 // parser/index.ts
 import * as fs from "fs";
 import * as path from "path";
@@ -10,7 +10,7 @@ const project = new Project({
     tsConfigFilePath: "./tsconfig.json",
 });
 
-// 文件遍历、输出 JSON
+// walk files and output JSON
 const args = process.argv.slice(2);
 const dirIndex = args.indexOf("--dir");
 const dIndex = args.indexOf("-d");
@@ -54,7 +54,7 @@ console.error(`   TS 文件: ${files.ts.length}`);
 const allViews: ViewNode[] = [];
 const allFns: FnDetail[] = [];
 
-// 先分析所有 TSX（包含 View + renderFn）
+// first analyze all TSX (containing View + renderFn)
 for (const filePath of files.tsx) {
     try {
         const { view, fns } = buildCodeGraph(filePath);
@@ -65,7 +65,7 @@ for (const filePath of files.tsx) {
     }
 }
 
-// 再分析纯 TS 文件（只提取函数）
+// then analyze plain TS files (extract functions only)
 for (const filePath of files.ts) {
     try {
         const sourceFile = project.getSourceFile(filePath);
@@ -91,7 +91,7 @@ for (const filePath of files.ts) {
             }
 
             if (!name || !body) return;
-            // 跳过 renderFn（TS 文件里不应该有，但万一）
+            // skip renderFn (shouldn't exist in TS files, but just in case)
             if (name.startsWith("render")) return;
 
             const calls = extractCallsFromNode(body, states, ipcMethods, writeStateMap);
@@ -115,7 +115,7 @@ const graph: CodeGraph = {
     fns: allFns,
 };
 
-// 输出到文件
+// output to file
 const outputPath = args.includes("--output")
     ? args[args.indexOf("--output") + 1]
     : "code-graph.json";

@@ -1,14 +1,17 @@
 // ─── DAG / Component / Execution HTTP API ─────────────────────────────
 //
-// dag mode 是纯 HTTP 远程模式。
-// 本模块把 main.rs 中通过 Tauri IPC 暴露的 dag/component/component-session/
-// execution 命令，逐一对映成 axum HTTP 路由，逻辑全部复用现有 handler
-// （components.rs / component_session.rs / dag.rs / scheduler.rs），只包一层
-// JSON 收发包。这些 handler 是纯函数（内部 open_sqlite_database()、无 State
-// 依赖），所以本路由不需要携带 AppState。
+// dag mode is a pure HTTP remote mode.
+// This module maps the dag/component/component-session/execution commands
+// exposed via Tauri IPC in main.rs one-to-one onto axum HTTP routes, reusing
+// the existing handlers (components.rs / component_session.rs / dag.rs /
+// scheduler.rs) and only wrapping them with a JSON request/response layer.
+// These handlers are pure functions (internally call open_sqlite_database(),
+// with no State dependency), so this router does not need to carry AppState.
 //
-// 约定：所有路径以 /api/ 前缀，避免与 code/agent 既有路由冲突。
-// 错误：handler 返回 Result<T, String>，统一经 AppError 转 500 + {"error":..}。
+// Convention: all paths use the /api/ prefix to avoid colliding with the
+// existing code/agent routes.
+// Errors: handlers return Result<T, String>, uniformly converted by AppError
+// to 500 + {"error":..}.
 
 use axum::{
     Json, Router,
@@ -194,7 +197,8 @@ async fn cancel_execution_handler(Path(execution_id): Path<String>) -> Result<Js
     scheduler::cancel_execution(execution_id).map(Json).map_err(AppError::new)
 }
 
-// 节点输出预览：CSV/JSON 前 N 行；parquet 等不支持格式返回 unsupported 提示。
+// Node-output preview: first N rows of CSV/JSON; unsupported formats such as
+// parquet return an "unsupported" hint.
 #[derive(Deserialize)]
 struct PreviewQuery {
     #[serde(default = "default_preview_limit")]
@@ -215,10 +219,11 @@ async fn preview_node_output_handler(
 
 // ─── Router ──────────────────────────────────────────────────────────
 
-/// 把 dag/component/component-session/execution 的 HTTP 路由挂到传入的
-/// `Router<AppState>` 上。以 `Router<AppState>` 入参/出参，避免与主路由的
-/// state 类型（`AppState`）不匹配导致 `merge` 失败；dag handler 本身不提取
-/// State，挂上去后路由的 state 类型保持不变。
+/// Mount the dag/component/component-session/execution HTTP routes onto the
+/// given `Router<AppState>`. Taking and returning `Router<AppState>` avoids a
+/// state-type mismatch (`AppState`) with the main router that would make
+/// `merge` fail; the dag handlers do not extract State, so the router's state
+/// type stays unchanged after mounting.
 pub fn register_dag_routes(router: Router<AppState>) -> Router<AppState> {
     router
         // components

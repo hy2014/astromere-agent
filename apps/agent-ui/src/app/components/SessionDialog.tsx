@@ -59,7 +59,7 @@ export type PendingPermission = {
   }>;
 };
 
-// ─── WriteState (被 PromptInputArea 导入用于权限响应) ─────────────────
+// ─── WriteState (imported by PromptInputArea for permission responses) ──
 
 export const WriteState: {
   setTurnInfo: (status: "idle" | "running" | "interrupt" | "ctrl_block" | "forking") => void;
@@ -68,7 +68,7 @@ export const WriteState: {
   setRunningProcess: (updater: DebugStreamEvent[] | ((prev: DebugStreamEvent[]) => DebugStreamEvent[])) => void;
 } = {} as any;
 
-// ─── PendingSubmit — 信号：通知 MessagesStreamView 添加 user + assistant pending items ──
+// ─── PendingSubmit — signal: tells MessagesStreamView to add user + assistant pending items ──
 export type PendingSubmit = {
   key: number;
   displayPrompt: string;
@@ -143,14 +143,14 @@ async function handleSubmitPromptAction(
   console.time('[submit] enter-to-sync');
   console.time('[submit] sync: setCurrentInput + setTurnStatus');
 
-  // 通过 currentInput 信号通知 MessagesStreamView 追加 user + pending assistant items
+  // Notify MessagesStreamView via the currentInput signal to append user + pending assistant items
   setCurrentInputFn({ key: Date.now(), displayPrompt });
   onSetTurnInfo("running");
   setErrorFn(null);
   console.timeEnd('[submit] sync: setCurrentInput + setTurnInfo');
   console.timeEnd('[submit] enter-to-sync');
 
-  // Pending session 标题更新
+  // Pending session title update
   if (
     activeProject.sessions.find(
       (session) => session.id === targetSessionId,
@@ -173,7 +173,7 @@ async function handleSubmitPromptAction(
     );
   }
 
-  // 发到后端
+  // Send to the backend
   ensureAgentReplProcess(
     activeProject.root,
     targetSessionId,
@@ -199,8 +199,8 @@ function handleForkFromMessageAction(
   onFork: (item: Extract<StreamItem, { kind: "message" }>) => void,
 ): void {
   WriteState.setTurnInfo("forking");
-  // Fire-and-forget: onFork 是 async function（App.tsx 的 handleForkFromMessage），
-  // 等异步操作完成后自动清除 "forking" 状态
+  // Fire-and-forget: onFork is an async function (App.tsx's handleForkFromMessage),
+  // the "forking" status is cleared automatically once the async operation completes
   Promise.resolve(onFork(item))
     .catch(() => {})
     .finally(() => WriteState.setTurnInfo("idle"));
@@ -217,7 +217,7 @@ function handleInterruptTurnAction(
   interruptAgentTurn(activeProject?.root ?? "", activeSessionIdVal ?? "")
     .catch((reason) => setErrorFn(String(reason)))
     .finally(() => {
-      // turn 被中断后，bus 收到 interrupt 事件时会自动清空 pending permission
+      // After a turn is interrupted, the bus receives the interrupt event and auto-clears the pending permission
       WriteState.setTurnInfo("idle");
     });
 }
@@ -365,10 +365,10 @@ export function SessionDialogView({
   onForkFromMessage,
   turnInfo, setTurnInfo,
 }: SessionDialogProps) {
-  // ── 共享 state ──
+  // ── Shared state ──
   const [currentInput, setCurrentInput] = useState<{ key: number; displayPrompt: string } | null>(null);
 
-  // Process 右侧面板
+  // Process right-side panel
   const [displayDetailBundleId, setDisplayDetailBundleId] = useState<string | null>(null);
   const [runningProcess, setRunningProcess] = useState<DebugStreamEvent[]>([]);
 
@@ -380,10 +380,10 @@ export function SessionDialogView({
 
   // ── Effects ──
 
-  // 启动底层事件监听（新版 event handles 由 App.tsx 注册，这里只负责 start）
+  // Start the underlying event listener (new event handles are registered by App.tsx; this only starts it)
   useEffect(() => { startStreamEventListener(); }, []);
 
-  // ── 事件 bus callback：流式过程事件 ──
+  // ── Event bus callback: streaming process events ──
   useEffect(() => {
     const unsub = addCallback("detail", (data, sessionId) => {
       if (sessionId !== activeSessionId) return;
@@ -395,20 +395,20 @@ export function SessionDialogView({
     return unsub;
   }, [activeSessionId]);
 
-  // 切换 session 时清空残留的过程事件
+  // Clear leftover process events when switching session
   useEffect(() => { setRunningProcess([]); }, [activeSessionId]);
 
-  // 新 turn 开始时清空过程事件（从 idle→running 时才清，权限阻塞后回 running 不清）
+  // Clear process events at the start of a new turn (only on idle→running; not cleared when returning to running after a permission block)
   useEffect(() => {
     if (turnInfo.prev === "idle" && turnInfo.current === "running") {
       setRunningProcess([]);
     }
   }, [turnInfo]);
 
-  // 打开历史消息的过程面板时从 JSONL 加载事件
+  // Load events from JSONL when opening the process panel for historical messages
   useEffect(() => {
     if (!displayDetailBundleId || !activeProject?.root || !activeSessionId) return;
-    if (runningProcess.length > 0) return; // 已有流式数据，不需要加载
+    if (runningProcess.length > 0) return; // already have streaming data, no need to load
     loadTypedRuntimeSession(activeProject.root, activeSessionId)
       .then((detail) => {
         const artifacts = runtimeSessionToArtifacts(detail, activeProject.root);
@@ -439,13 +439,13 @@ export function SessionDialogView({
     [turnInfo, activeSessionId, activeProject, setError],
   );
 
-  // Fork 操作：file-level handleForkFromMessageAction 负责设置/清除 "forking" turnStatus
+  // Fork action: the file-level handleForkFromMessageAction sets/clears the "forking" turnStatus
   const onEventForkFromMessage = useCallback(
     (item: Extract<StreamItem, { kind: "message" }>) =>
       handleForkFromMessageAction(item, onForkFromMessage),
     [onForkFromMessage],
   );
-  // 覆写 prop 变量以匹配 events 简写命名约定
+  // Override the prop variable to match the events shorthand naming convention
   onForkFromMessage = onEventForkFromMessage;
 
   // Session loading effect

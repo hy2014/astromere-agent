@@ -62,7 +62,7 @@ def main():
         _write_output({"exec_status": {"status": "error", "error": f"script not found: {script_path}"}})
         return 1
 
-    # 预检：脚本若没声明 set -e，运行时我们的 -e 包装仍会兜底，这里只告警不拦截。
+    # Pre-check: if the script doesn't declare set -e, our -e wrapper still catches failures at runtime; here we only warn, not block.
     if not _check_set_e(script_path):
         sys.stderr.write(
             "警告：脚本未检测到 `set -e`，已自动以 `bash -e -u -o pipefail` 包装执行，"

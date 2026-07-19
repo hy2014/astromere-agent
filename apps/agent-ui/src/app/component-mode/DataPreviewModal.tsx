@@ -21,10 +21,12 @@ function formatCell(v: unknown): string {
 }
 
 /**
- * 节点输出数据预览弹框：
- *  - 自动定位该节点「最近一次」产出 outputs 的执行（遍历 listExecutions DESC）。
- *  - 顶部 tab = 各输出端口名；点 tab 懒加载该输出的前 100 行。
- *  - 表格列 = 列名，行 = 各列的值。
+ * Node output-data preview modal:
+ *  - Automatically locates the execution that most recently produced this
+ *    node's outputs (iterates listExecutions DESC).
+ *  - Top tab = each output port name; clicking a tab lazily loads the first
+ *    100 rows of that output.
+ *  - Table columns = column names, rows = values per column.
  */
 export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPreviewModalProps) {
   const [outputKeys, setOutputKeys] = useState<string[]>([]);
@@ -36,7 +38,7 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
   const [noOutputs, setNoOutputs] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
 
-  // 定位最近一次产出该节点 outputs 的执行
+  // Locate the execution that most recently produced this node's outputs
   useEffect(() => {
     let cancelled = false;
     (async () => {

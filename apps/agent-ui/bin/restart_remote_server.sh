@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# restart_remote_server.sh — 编译并重启 agent-ui remote 服务器
-# 用法:
-#   ./bin/restart_remote_server.sh                  # 编译 + 重启（默认）
-#   ./bin/restart_remote_server.sh --no-build       # 仅重启，不编译
-#   ./bin/restart_remote_server.sh --stop           # 仅停止
-#   ./bin/restart_remote_server.sh --status         # 查看状态
+# restart_remote_server.sh — compile and restart the agent-ui remote server
+# Usage:
+#   ./bin/restart_remote_server.sh                  # compile + restart (default)
+#   ./bin/restart_remote_server.sh --no-build       # restart only, no compile
+#   ./bin/restart_remote_server.sh --stop           # stop only
+#   ./bin/restart_remote_server.sh --status         # show status
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,7 +36,7 @@ usage() {
 EOF
 }
 
-# 解析参数
+# parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --build)  DO_BUILD=true;                                            shift ;;
@@ -47,12 +47,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ── 工具函数 ─────────────────────────────────────────────────────────
+# ── Utility functions ─────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 pid_running() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 
-# ── 停止 ─────────────────────────────────────────────────────────────
+# ── Stop ──────────────────────────────────────────────────────────────
 do_stop() {
+  # clean up leftover worker subprocesses (prevent stale workers from becoming
+  # orphans and grabbing the queue across restarts).
+  # covers three cases: this instance's worker (when kill -9 is too fast for the
+  # handler to run), and orphan workers left behind by previous crashes/force-kills
+  # (not children of this PID).
+  pkill -f "engine_executor/worker.py" || true
+
   if [[ ! -f "$PID_FILE" ]]; then
     echo "未找到 PID 文件，服务可能未在运行。"
     return 0
@@ -83,7 +90,7 @@ do_stop() {
   log "已停止"
 }
 
-# ── 状态 ───────────────────────────────────────────────────────────
+# ── Status ──────────────────────────────────────────────────────────
 do_status() {
   if [[ -f "$PID_FILE" ]] && pid_running "$(cat "$PID_FILE")"; then
     local pid="$(cat "$PID_FILE")"
@@ -98,7 +105,7 @@ do_status() {
   fi
 }
 
-# ── 编译 ─────────────────────────────────────────────────────────────
+# ── Build ───────────────────────────────────────────────────────────
 do_build() {
   log "编译 --no-default-features..."
   cd "$SRC_DIR"
@@ -106,7 +113,7 @@ do_build() {
   log "编译完成→ $BIN_PATH"
 }
 
-# ── 启动 ───────────────────────────────────────────────────────────
+# ── Start ──────────────────────────────────────────────────────────
 do_start() {
   if [[ -f "$PID_FILE" ]] && pid_running "$(cat "$PID_FILE")"; then
     echo "已在运行 (PID: $(cat "$PID_FILE"))，先执行 --stop 再重启。"
@@ -137,7 +144,7 @@ do_start() {
   echo "$PID" > "$PID_FILE"
   log "已启动 (PID: $PID)"
 
-  # 健康检查
+  # health check
   if command -v curl &>/dev/null; then
     sleep 1
     if curl -sf "http://127.0.0.1:$PORT/health" &>/dev/null; then
@@ -148,7 +155,7 @@ do_start() {
   fi
 }
 
-# ── 主逻辑 ─────────────────────────────────────────────────────────
+# ── Main logic ─────────────────────────────────────────────────────
 case "$ACTION" in
   restart)
     do_stop

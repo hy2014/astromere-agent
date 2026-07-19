@@ -1,7 +1,7 @@
 //! DAG-mode server connection persistence.
 //!
 //! The DAG-mode server address (the `RemoteProfile` the user fills in the
-//! "首连配置" panel, e.g. `http://192.168.1.x:7421`) used to live in the
+//! "first-connection config" panel, e.g. `http://192.168.1.x:7421`) used to live in the
 //! webview `localStorage` (`agent-ui.dagServer.v1`). It is now persisted to
 //! disk under `<AGENT_UI_HOME>/dag-mode/dagServer.json` so the connection
 //! survives cache wipes and is shared across webview reloads.

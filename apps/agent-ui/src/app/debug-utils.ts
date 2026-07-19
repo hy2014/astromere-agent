@@ -71,7 +71,7 @@ export function assistantOutputTimestampMsFromBundle(
     return null;
   }
 
-  // 优先使用 turn_complete 事件的时间戳（标记 assistant 回复真正完成）
+  // Prefer the timestamp of the turn_complete event (marks when the assistant reply truly finished)
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i];
     if (event.eventType === "turn_complete") {
@@ -79,7 +79,7 @@ export function assistantOutputTimestampMsFromBundle(
     }
   }
 
-  // 回退：找最后一个 turn_text / assistant_tool_use 事件
+  // Fallback: find the last turn_text / assistant_tool_use event
   let lastMatch: number | null = null;
   for (const event of events) {
     if (event.eventType !== "turn_text" && event.eventType !== "assistant_tool_use") {
@@ -228,7 +228,7 @@ export function createHistoricalDebugEvent(
     return null;
   }
 
-  // 优先从 raw_json.timestamp 读取真实时间戳（JSONL 原始行里的 timestamp 字段）
+  // Prefer reading the real timestamp from raw_json.timestamp (the timestamp field in the raw JSONL line)
   let receivedAt: number;
   const rawTimestamp = (message as any).raw_json?.timestamp;
   if (typeof rawTimestamp === "string" && !isNaN(new Date(rawTimestamp).getTime())) {

@@ -681,7 +681,7 @@ pub fn load_model_call_usages(
         return Err("model call usages missing sessionId".to_string());
     }
 
-    // 构建动态 IN 查询
+    // Build the dynamic IN query.
     let placeholders: Vec<String> = model_call_ids
         .iter()
         .enumerate()
@@ -706,7 +706,7 @@ pub fn load_model_call_usages(
 
     let mut statement = conn.prepare(&sql).map_err(error_to_string)?;
 
-    // 绑定 session_id 到 ?1
+    // Bind session_id to ?1.
     let rows = statement
         .query_map(
             rusqlite::params_from_iter(std::iter::once(&session_id as &dyn rusqlite::types::ToSql).chain(
@@ -934,7 +934,7 @@ pub fn ensure_component_tables(conn: &Connection) -> Result<(), String> {
         }
     }
 
-    // Registry flag: 0 = generic/non-global (drag "通用组件" onto the canvas),
+    // Registry flag: 0 = generic/non-global (drag "generic component" onto the canvas),
     // 1 = registered/global (reusable across DAGs). Added without wiping rows;
     // legacy NULLs are read as 0 by components.rs::row_to_component.
     add_column_if_missing(conn, "components", "global", "INTEGER")?;

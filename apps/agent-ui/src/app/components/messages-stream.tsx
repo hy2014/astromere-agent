@@ -12,7 +12,7 @@ import {loadTypedRuntimeSession,} from "../../runtime";
 import {runtimeSessionToArtifacts,} from "../debug-utils";
 import {welcomeStream} from "../session";
 
-// ─── WriteState（模块级单例）─────────────────────────────────────────
+// ─── WriteState (module-level singleton) ───────────────────────────
 const WriteState: {
   setSessionStreamItems: (updater: StreamItem[] | ((prev: StreamItem[]) => StreamItem[])) => void;
 } = {} as any;
@@ -109,7 +109,7 @@ export interface MessagesStreamProps {
   onForkFromMessage: (item: Extract<StreamItem, { kind: "message" }>) => void;
 }
 
-// ─── File-level function: 从 Rust 后端加载历史消息 ─────────────────────
+// ─── File-level function: load history messages from the Rust backend ─
 
 function loadHistoryStreamItems(
   root: string,
@@ -149,14 +149,14 @@ export function MessagesStreamView({
 }: MessagesStreamProps) {
   const streamRef = useRef<HTMLDivElement | null>(null);
 
-  // ── 内部 state（event bus callback + 离线加载共用） ──
+  // ── Internal state (shared by event bus callback + offline load) ──
   const [sessionStreamItems, setSessionStreamItems] = useState<StreamItem[]>(() => []);
-  // 注册 setter 供 WriteState 写入
+  // Register the setter so WriteState can write into it
   WriteState.setSessionStreamItems = setSessionStreamItems;
 
   const projectRoot = activeProject?.root ?? "";
 
-  // ── 流式响应文本（运行时实时更新，turn 完成时清空） ──
+  // ── Streaming response text (updated live at runtime, cleared on turn completion) ──
   const [runningResponse, setRunningResponse] = useState("");
 
   // ── Session Usage overlay state ──
@@ -168,11 +168,11 @@ export function MessagesStreamView({
     if (sessionUsageLoading || !activeSessionId) return;
     setSessionUsageLoading(true);
     try {
-      // 从 session JSONL 加载 bundle 数据（始终可靠，历史/流式都支持）
+      // Load bundle data from the session JSONL (always reliable; works for both history and streaming)
       const detail = await loadTypedRuntimeSession(projectRoot, activeSessionId);
       const artifacts = runtimeSessionToArtifacts(detail, projectRoot);
       
-      // 只取当前 stream items 中存在的 assistant bundle
+      // Only take the assistant bundles that already exist in the current stream items
       const assistantIds = new Set(
         sessionStreamItems
           .filter(
@@ -200,7 +200,7 @@ export function MessagesStreamView({
     }
   }, [activeSessionId, sessionStreamItems, sessionUsageLoading, projectRoot]);
 
-  // ── 消费 currentInput：SessionDialog 提交后通知我们追加 user + pending items ──
+  // ── Consume currentInput: SessionDialog appends user + pending items after submit ──
   useEffect(() => {
     if (!currentInput) return;
     const pendingId = `assistant-pending-${Date.now()}`;
@@ -224,7 +224,7 @@ export function MessagesStreamView({
     ]);
   }, [currentInput]);
 
-  // ── 事件 bus callback：提取流式文本 ──
+  // ── Event bus callback: extract streaming text ──
   useEffect(() => {
     const unsub = addCallback("session-items", (data, sessionId) => {
       if (sessionId !== activeSessionId) return;
@@ -235,10 +235,10 @@ export function MessagesStreamView({
     return unsub;
   }, [activeSessionId]);
 
-  // 切换 session 时清空残留的流式文本
+  // Clear leftover streaming text when switching session
   useEffect(() => { setRunningResponse(""); }, [activeSessionId]);
 
-  // ── turn 完成时：从 JSONL 重新加载完整会话 ──
+  // ── On turn completion: reload the full session from JSONL ──
   useEffect(() => {
     if (turnInfo.prev !== "idle" && turnInfo.current === "idle" && runningResponse) {
       setRunningResponse("");
@@ -256,7 +256,7 @@ export function MessagesStreamView({
     }
   }, [turnInfo, activeSessionId, activeProject?.root, runningResponse]);
 
-  // ── 从 Rust 后端加载历史消息 ──
+  // ── Load history messages from the Rust backend ──
   useEffect(() => {
     if (!activeSessionId || !activeProject?.root) return;
     const session = activeProject.sessions.find((s) => s.id === activeSessionId);
@@ -268,14 +268,14 @@ export function MessagesStreamView({
       sessionTitle,
       (items) => setSessionStreamItems(items),
       (_err) => {
-        // pending session / 无 JSONL 文件时回退到欢迎页
+        // Fall back to the welcome page for a pending session / when no JSONL file exists
         setSessionStreamItems(welcomeStream(activeProject.name, sessionTitle));
       },
     );
   }, [activeSessionId, activeProject?.root]);
 
   // ── Auto-scroll ──
-  // 使用 sessionStreamItems 确保 callback 更新的数据也能触发滚动
+  // Use sessionStreamItems so callback-updated data also triggers scrolling
   useEffect(() => {
     if (turnInfo.current === "idle" && streamRef.current) {
       streamRef.current.scrollTop = streamRef.current.scrollHeight;

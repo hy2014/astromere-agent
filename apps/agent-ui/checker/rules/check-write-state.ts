@@ -3,8 +3,8 @@ import * as ts from "typescript";
 import { RuleContext } from "../types";
 
 /**
- * 收集 View 函数体内 useState 的 setter 名
- * 用于 WriteState 注册检查、useEffect 检查、events/exts 检查
+ * Collect the useState setter names inside the View function body
+ * Used for WriteState registration checks, useEffect checks, and events/exts checks
  */
 function collectStateSetters(viewBody: ts.Block): Set<string> {
     const setters = new Set<string>();
@@ -28,8 +28,8 @@ function collectStateSetters(viewBody: ts.Block): Set<string> {
 }
 
 /**
- * 检查 useEffect 回调是否足够简单
- * 只允许：() => { void fn(); } 或 () => { fn(); } 或 () => fn()
+ * Check whether the useEffect callback is simple enough
+ * Only allowed: () => { void fn(); }, () => { fn(); }, or () => fn()
  */
 function isUseEffectCallbackSimple(
     callback: ts.ArrowFunction | ts.FunctionExpression,
@@ -38,12 +38,12 @@ function isUseEffectCallbackSimple(
 ): { ok: boolean; reason?: string } {
     const body = callback.body;
 
-    // (没有 body) — 不合法
+    // (no body) — invalid
     if (!body) return { ok: false, reason: "useEffect 回调不能为空" };
 
-    // () => expr — 只有一个表达式
+    // () => expr — only a single expression
     if (!ts.isBlock(body)) {
-        // 必须是函数调用
+        // Must be a function call
         if (ts.isCallExpression(body)) {
             return checkCallExpression(body, setterNames, stateVars);
         }
@@ -64,7 +64,7 @@ function isUseEffectCallbackSimple(
 
     const stmt = stmts[0];
 
-    // () => { void fn(); } 或 () => { fn(); }
+    // () => { void fn(); } or () => { fn(); }
     if (ts.isExpressionStatement(stmt)) {
         const expr = stmt.expression;
         if (ts.isVoidExpression(expr) && ts.isCallExpression(expr.expression)) {
@@ -80,7 +80,7 @@ function isUseEffectCallbackSimple(
 }
 
 /**
- * 检查 CallExpression 是否引用了 state/setter
+ * Check whether the CallExpression references state/setter
  */
 function checkCallExpression(
     call: ts.CallExpression,
@@ -89,17 +89,17 @@ function checkCallExpression(
 ): { ok: boolean; reason?: string } {
     const callee = call.expression;
 
-    // 必须是 Identifier，不能是 WriteState.setXxx
+    // Must be an Identifier, not WriteState.setXxx
     if (!ts.isIdentifier(callee)) {
         return { ok: false, reason: "useEffect 只能调用文件级函数，不能调用 WriteState 方法或复杂表达式" };
     }
 
-    // 函数名不能是 setter
+    // The function name must not be a setter
     if (setterNames.has(callee.text)) {
         return { ok: false, reason: `useEffect 不能直接调用 setter "${callee.text}"` };
     }
 
-    // 检查参数中是否引用了 state
+    // Check whether the arguments reference state
     for (const arg of call.arguments) {
         let hasStateRef = false;
         function checkArg(n: ts.Node) {
@@ -133,8 +133,8 @@ export function checkWriteState(
     const writeStateKeys = new Set<string>();
 
     // ════════════════════════════════════════════════════════
-    // 规则 1: useState → WriteState.setXxx 注册完整性
-    // 每个 useState 的 setter 都必须在 WriteState 中注册
+    // Rule 1: useState → WriteState.setXxx registration completeness
+    // Every useState setter must be registered in WriteState
     // ════════════════════════════════════════════════════════
     for (const stmt of bodyStmts) {
         if (!ts.isExpressionStatement(stmt)) continue;
@@ -148,7 +148,7 @@ export function checkWriteState(
             const key = left.name.text;
             writeStateKeys.add(key);
 
-            // 规则 1b: WriteState 的值必须是 useState 的 setter 引用
+            // Rule 1b: WriteState value must be a useState setter reference
             const right = expr.right;
             if (!ts.isIdentifier(right) || right.text !== key) {
                 ctx.addViolation(
@@ -178,7 +178,7 @@ export function checkWriteState(
     }
 
     // ════════════════════════════════════════════════════════
-    // 规则 2a: View 内禁止定义函数
+    // Rule 2a: Forbid defining functions inside the View
     // ════════════════════════════════════════════════════════
     for (const stmt of bodyStmts) {
         // function foo() {} — FunctionDeclaration
@@ -191,16 +191,16 @@ export function checkWriteState(
             continue;
         }
 
-        // const foo = () => {} 或 const foo = function() {}
+        // const foo = () => {} or const foo = function() {}
         if (ts.isVariableStatement(stmt)) {
             for (const decl of stmt.declarationList.declarations) {
                 if (!ts.isIdentifier(decl.name) || !decl.initializer) continue;
 
-                // const [x, setX] = useState() — 解构赋值放行
+                // const [x, setX] = useState() — destructuring assignment allowed
                 if (!ts.isIdentifier(decl.name)) continue;
                 if (!decl.initializer) continue;
 
-                // 规则 2a: 箭头函数/函数表达式 → 禁止
+                // Rule 2a: arrow function / function expression → forbidden
                 if (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) {
                     ctx.addViolation(
                         "WriteState 规范",
@@ -210,14 +210,14 @@ export function checkWriteState(
                     continue;
                 }
 
-                // 规则 2c: View 内 const 必须是 useMemo / useCallback / useState 之一
-                // 其他 hook（useRef、useEffect、useContext 等）同样禁止
+                // Rule 2c: View-internal const must be one of useMemo / useCallback / useState
+                // Other hooks (useRef, useEffect, useContext, etc.) are likewise forbidden
                 const hookName = ts.isCallExpression(decl.initializer) &&
                     ts.isIdentifier(decl.initializer.expression)
                     ? decl.initializer.expression.text
                     : null;
                 if (hookName && (hookName === "useMemo" || hookName === "useCallback")) {
-                    continue; // ✅ 允许
+                    continue; // ✅ allowed
                 }
 
                 ctx.addViolation(
@@ -234,7 +234,7 @@ export function checkWriteState(
     }
 
     // ════════════════════════════════════════════════════════
-    // 规则 2b: useEffect 回调必须简单（只调用一个文件级函数）
+    // Rule 2b: useEffect callback must be simple (only calls one file-level function)
     // ════════════════════════════════════════════════════════
     function checkEffectCalls(node: ts.Node) {
         if (ts.isCallExpression(node) &&
@@ -253,14 +253,14 @@ export function checkWriteState(
     checkEffectCalls(bodyNode);
 
     // ════════════════════════════════════════════════════════
-    // 规则 3(全局): WriteState.setXxx 只能调用或赋值，不能作为值传递
-    // 允许：
-    //   WriteState.setRows(...)          — 直接调用
-    //   WriteState.setRows = setRows     — 赋值目标
-    // 禁止：
-    //   doSomething(WriteState.setRows)  — 传参
-    //   const x = WriteState.setRows     — 赋值给变量
-    //   { a: WriteState.setRows }        — 放进对象
+    // Rule 3 (global): WriteState.setXxx may only be called or assigned, not passed as a value
+    // Allowed:
+    //   WriteState.setRows(...)          — direct call
+    //   WriteState.setRows = setRows     — assignment target
+    // Forbidden:
+    //   doSomething(WriteState.setRows)  — passed as argument
+    //   const x = WriteState.setRows     — assigned to a variable
+    //   { a: WriteState.setRows }        — placed in an object
     // ════════════════════════════════════════════════════════
     function checkWriteStateUsage(node: ts.Node) {
         if (ts.isPropertyAccessExpression(node) &&
@@ -268,13 +268,13 @@ export function checkWriteState(
             node.expression.text === "WriteState") {
             const parent = node.parent;
 
-            // 允许：WriteState.setRows(...) — 作为调用目标
+            // Allowed: WriteState.setRows(...) — as the call target
             if (parent && ts.isCallExpression(parent) && parent.expression === node) {
                 ts.forEachChild(node, checkWriteStateUsage);
                 return;
             }
 
-            // 允许：WriteState.setRows = setRows — 作为赋值目标
+            // Allowed: WriteState.setRows = setRows — as the assignment target
             if (parent && ts.isBinaryExpression(parent) &&
                 parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
                 parent.left === node) {
@@ -282,7 +282,7 @@ export function checkWriteState(
                 return;
             }
 
-            // 其他所有用法都是违规
+            // All other usages are violations
             ctx.addViolation(
                 "WriteState 规范",
                 `WriteState.${node.name.text} 只能作为调用 (WriteState.${node.name.text}()) 或赋值目标 (WriteState.${node.name.text} = ...)，不能作为值传递`,
@@ -294,8 +294,8 @@ export function checkWriteState(
     checkWriteStateUsage(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则 3b: render() 的 events/exts 禁止原始 setter 引用
-    // （WriteState.setXxx 已被规则 3 全局覆盖，这里只检原始 setter）
+    // Rule 3b: render()'s events/exts forbid raw setter references
+    // (WriteState.setXxx is already covered globally by Rule 3; here we only check raw setters)
     // ════════════════════════════════════════════════════════
     function checkRawSetterInRender(node: ts.Node) {
         if (ts.isCallExpression(node) &&
@@ -317,7 +317,7 @@ export function checkWriteState(
                 if (!slotObj || !ts.isObjectLiteralExpression(slotObj)) continue;
 
                 for (const prop of slotObj.properties) {
-                    // 简写: { setRows }
+                    // shorthand: { setRows }
                     if (ts.isShorthandPropertyAssignment(prop)) {
                         if (stateSetters.has(prop.name.text)) {
                             ctx.addViolation(
@@ -329,7 +329,7 @@ export function checkWriteState(
                         continue;
                     }
 
-                    // 显式: { key: setRows }
+                    // explicit: { key: setRows }
                     if (ts.isPropertyAssignment(prop)) {
                         const val = prop.initializer;
                         if (ts.isIdentifier(val) && stateSetters.has(val.text)) {
@@ -348,11 +348,11 @@ export function checkWriteState(
     checkRawSetterInRender(bodyNode);
 
     // ════════════════════════════════════════════════════════
-    // 规则 5: 文件级函数体禁止引用外部变量
-    // 允许：参数、局部变量、WriteState、函数调用(callee)、JSX 标签
+    // Rule 5: File-level function bodies forbid referencing external variables
+    // Allowed: parameters, local variables, WriteState, function calls (callee), JSX tags
     // ════════════════════════════════════════════════════════
 
-    // 递归收集 binding pattern 中的变量名（处理解构）
+    // Recursively collect variable names in binding patterns (handles destructuring)
     function collectBindingNames(name: ts.BindingName, names: Set<string>) {
         if (ts.isIdentifier(name)) {
             names.add(name.text);
@@ -367,7 +367,7 @@ export function checkWriteState(
         }
     }
 
-    // 收集当前函数的参数名（包括解构） + 局部变量名
+    // Collect the current function's parameter names (including destructuring) + local variable names
     function collectLocalNames(fn: ts.FunctionDeclaration | ts.ArrowFunction): Set<string> {
         const names = new Set<string>();
         for (const p of fn.parameters) {
@@ -387,7 +387,7 @@ export function checkWriteState(
 
     const viewFnName = viewFn && (ts.isFunctionDeclaration(viewFn) ? viewFn.name?.text : undefined);
 
-    // 收集模块级函数名（允许被引用）
+    // Collect module-level function names (allowed to be referenced)
     const moduleFnNames = new Set<string>();
     for (const stmt of ctx.sourceFile.statements) {
         if (ts.isFunctionDeclaration(stmt) && stmt.name) {
@@ -403,16 +403,16 @@ export function checkWriteState(
         }
     }
 
-    // 收集模块级非函数变量（let / var / const 非函数），这些不能作为调用目标
+    // Collect module-level non-function variables (let / var / const non-functions); these cannot be call targets
     const moduleNonFnVars = new Set<string>();
     for (const stmt of ctx.sourceFile.statements) {
         if (ts.isVariableStatement(stmt)) {
             for (const decl of stmt.declarationList.declarations) {
                 if (ts.isIdentifier(decl.name)) {
                     const init = decl.initializer;
-                    // 跳过函数表达式 const fn = () => {} (已被 check-render-fns 禁止)
+                    // Skip function expressions const fn = () => {} (forbidden by check-render-fns)
                     if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) continue;
-                    // 跳过 useCallback/useMemo 包装
+                    // Skip useCallback/useMemo wrappers
                     if (init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) &&
                         (init.expression.text === "useCallback" || init.expression.text === "useMemo")) continue;
                     moduleNonFnVars.add(decl.name.text);
@@ -421,7 +421,7 @@ export function checkWriteState(
         }
     }
 
-    // 扫描文件级函数（不包括 View）
+    // Scan file-level functions (excluding the View)
     for (const stmt of ctx.sourceFile.statements) {
         let fn: ts.FunctionDeclaration | ts.ArrowFunction | undefined;
         let fnName: string | undefined;
@@ -429,7 +429,7 @@ export function checkWriteState(
         // function foo() {}
         if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body) {
             fnName = stmt.name.text;
-            if (fnName === viewFnName) continue; // 跳过 View
+            if (fnName === viewFnName) continue; // Skip View
             fn = stmt;
         }
 
@@ -438,7 +438,7 @@ export function checkWriteState(
             for (const decl of stmt.declarationList.declarations) {
                 if (!decl.initializer) continue;
                 if (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) {
-                    // 跳过 View 箭头函数
+                    // Skip View arrow function
                     if (ts.isArrowFunction(viewFn) && viewFn === decl.initializer) continue;
                     fn = decl.initializer as ts.ArrowFunction;
                     if (ts.isIdentifier(decl.name)) fnName = decl.name.text;
@@ -451,7 +451,7 @@ export function checkWriteState(
         const localNames = collectLocalNames(fn);
 
         function checkExternalRef(node: ts.Node, scope: Set<string> = localNames) {
-            // 穿透到内层函数：合并父级作用域，保留链式参数引用
+            // Descend into inner functions: merge parent scope, preserve chained parameter references
             if (node !== fn && (ts.isArrowFunction(node) || ts.isFunctionExpression(node))) {
                 const nestedScope = collectScope(node);
                 const combined = new Set([...scope, ...nestedScope]);
@@ -466,10 +466,10 @@ export function checkWriteState(
             if (ts.isIdentifier(node)) {
                 const name = node.text;
 
-                // 放行：WriteState
+                // Allow: WriteState
                 if (name === "WriteState") return;
 
-                // 放行：模块级函数名（白名单：fn() 调用、foo(fn) 传参、{ key: fn } 值、onClick={fn}、obj.method）
+                // Allow: module-level function names (whitelist: fn() calls, foo(fn) args, { key: fn } values, onClick={fn}, obj.method)
                 if (moduleFnNames.has(name)) {
                     const parent = node.parent;
                     const isCall = parent && ts.isCallExpression(parent);
@@ -477,9 +477,9 @@ export function checkWriteState(
                     const isJsxValue = parent && ts.isJsxExpression(parent);
                     const isPropName = parent && ts.isPropertyAccessExpression(parent) && parent.name === node;
                     if (isCall || isPropValue || isJsxValue || isPropName) {
-                        return; // 白名单内，放行
+                        return; // Within whitelist, allow
                     }
-                    // 不在白名单内
+                    // Not within whitelist
                     ctx.addViolation(
                         "WriteState 规范",
                         `函数 "${name}" 不能当作对象使用`,
@@ -488,15 +488,15 @@ export function checkWriteState(
                     return;
                 }
 
-                // 放行：当前作用域的参数 / 局部变量
+                // Allow: current-scope parameters / local variables
                 if (scope.has(name)) return;
 
-                // 放行：属性访问的 property 名（.map, .trim, .name 等）
+                // Allow: property-access property names (.map, .trim, .name, etc.)
                 if (node.parent && ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) return;
 
-                // 放行：函数调用目标 foo(...)（仅限不可变函数）
+                // Allow: function call target foo(...) (immutable functions only)
                 if (node.parent && ts.isCallExpression(node.parent) && node.parent.expression === node) {
-                    // 如果调用的目标是模块级 mutable 变量（let/var），仍然报违规
+                    // If the call target is a module-level mutable variable (let/var), still report a violation
                     if (moduleNonFnVars.has(name)) {
                         ctx.addViolation(
                             "WriteState 规范",
@@ -508,22 +508,22 @@ export function checkWriteState(
                     return;
                 }
 
-                // 放行：JSX 标签 <div>, <span>, </div>
+                // Allow: JSX tags <div>, <span>, </div>
                 if (node.parent && (ts.isJsxOpeningElement(node.parent) || ts.isJsxSelfClosingElement(node.parent) || ts.isJsxClosingElement(node.parent))) return;
 
-                // 放行：JSX 属性名
+                // Allow: JSX attribute names
                 if (node.parent && ts.isJsxAttribute(node.parent) && node.parent.name === node) return;
 
-                // 放行：类型引用
+                // Allow: type references
                 if (node.parent && (ts.isTypeReferenceNode(node.parent) || ts.isTypeQueryNode(node.parent) || ts.isExpressionWithTypeArguments(node.parent))) return;
 
-                // 放行：对象字面量属性名 { key: value }
+                // Allow: object literal property names { key: value }
                 if (node.parent && ts.isPropertyAssignment(node.parent) && node.parent.name === node) return;
 
-                // 放行：简写属性名 { key }（name 部分）
+                // Allow: shorthand property names { key } (the name part)
                 if (node.parent && ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node) return;
 
-                // 放行：JS 全局内置对象
+                // Allow: JS global built-in objects
                 const GLOBALS = new Set([
                     "undefined", "null", "true", "false", "NaN", "Infinity", "this",
                     "Object", "Array", "String", "Number", "Boolean", "Symbol", "BigInt",
@@ -546,10 +546,10 @@ export function checkWriteState(
                 ]);
                 if (GLOBALS.has(name)) return;
 
-                // 放行：外部 viewFn（经过跨文件解析确认）
+                // Allow: external viewFns (confirmed via cross-file resolution)
                 if (ctx.importedViewFns.has(name)) return;
 
-                // 违规：引用了外部变量
+                // Violation: referenced an external variable
                 ctx.addViolation(
                     "WriteState 规范",
                     `文件级函数引用了外部变量 "${name}"，所有数据必须通过参数传递`,
@@ -561,7 +561,7 @@ export function checkWriteState(
         checkExternalRef(fn.body);
     }
 
-    // 收集任意函数的参数 + 局部变量作为作用域
+    // Collect any function's parameters + local variables as its scope
     function collectScope(node: ts.ArrowFunction | ts.FunctionExpression): Set<string> {
         const names = new Set<string>();
         for (const p of node.parameters) {
@@ -580,7 +580,7 @@ export function checkWriteState(
     }
 
     // ════════════════════════════════════════════════════════
-    // 规则 4: WriteState 禁止 export
+    // Rule 4: WriteState must not be exported
     // ════════════════════════════════════════════════════════
     function checkWriteStateExport(node: ts.Node) {
         // export const WriteState = ...
@@ -614,11 +614,11 @@ export function checkWriteState(
     checkWriteStateExport(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则 6: View 层禁止 onXxx 事件绑定，必须通过 renderFn
+    // Rule 6: View layer forbids onXxx event bindings; must go through renderFn
     // ════════════════════════════════════════════════════════
     if (bodyNode) {
         function checkViewEvents(node: ts.Node) {
-            // JSX 元素：检查 onXxx 属性
+            // JSX element: check onXxx attributes
             if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
                 const opening = ts.isJsxElement(node) ? node.openingElement : node;
                 for (const attr of opening.attributes.properties) {
@@ -638,18 +638,18 @@ export function checkWriteState(
                 return;
             }
 
-            // JSX 表达式 { ... }: 跳过 render() 调用，继续检查其他
+            // JSX expression { ... }: skip render() calls, continue checking the rest
             if (ts.isJsxExpression(node)) {
                 const expr = node.expression;
                 if (expr && ts.isCallExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === "render") {
-                    return; // render() 内部的 JSX 由 renderFn 自己管理
+                    return; // The JSX inside render() is managed by renderFn itself
                 }
             }
 
             ts.forEachChild(node, checkViewEvents);
         }
 
-        // 从 return 语句的表达式开始遍历
+        // Start walking from the return statement's expression
         for (const stmt of bodyNode.statements) {
             if (ts.isReturnStatement(stmt) && stmt.expression) {
                 checkViewEvents(stmt.expression);
@@ -658,7 +658,7 @@ export function checkWriteState(
     }
 
     // ════════════════════════════════════════════════════════
-    // 规则 7: 禁止本地声明 render 函数，必须从 core/dep 导入
+    // Rule 7: Forbid declaring a local render function; it must be imported from core/dep
     // ════════════════════════════════════════════════════════
     for (const stmt of ctx.sourceFile.statements) {
         // function render(...) {}

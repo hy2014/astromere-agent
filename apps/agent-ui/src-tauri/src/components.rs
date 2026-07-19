@@ -42,8 +42,9 @@ fn row_to_component(row: &rusqlite::Row) -> Result<Component, rusqlite::Error> {
     // made rusqlite return InvalidColumnType on NULL and aborted the WHOLE
     // `list_components` / `get_component` call — which left the frontend
     // `components` list empty and made every canvas node render as the
-    // "Unknown" fallback (and selection report "该节点未关联组件") after a
-    // reload. Read it as `Option<String>` and fall back to an empty array.
+    // "Unknown" fallback (and selection reported "this node has no associated
+    // component") after a reload. Read it as `Option<String>` and fall back to
+    // an empty array.
     let config_schema_json: String =
         row.get::<_, Option<String>>("config_schema")?.unwrap_or_else(|| "[]".to_string());
     let config_schema: Value =
@@ -219,11 +220,11 @@ pub fn create_component(component: Component) -> Result<Component, String> {
     // Guard: component *names* must be unique across the whole `components`
     // table (global=true registered AND global=false generic). Generic
     // components dragged onto the canvas now get a random default name
-    // (`通用组件-<suffix>`), so each is already distinct and a second generic
-    // drop no longer collides — global uniqueness is safe. Mirror the
-    // "被引用则拦截" style: a friendly business-layer error, not a DB
+    // (`generic-component-<suffix>`), so each is already distinct and a second
+    // generic drop no longer collides — global uniqueness is safe. Mirror the
+    // "block if referenced" style: a friendly business-layer error, not a DB
     // constraint (which would require a schema migration and break on the
-    // pre-existing duplicate "通用组件" rows).
+    // pre-existing duplicate "generic component" rows).
     let name = component.name.trim();
     if name.is_empty() {
         return Err("组件名称不能为空。".to_string());
@@ -476,8 +477,8 @@ mod tests {
     // / get_component abort. Reading them as a non-optional `String` made
     // rusqlite return InvalidColumnType on NULL, which threw and left the
     // frontend `components` list empty — so every canvas node rendered as the
-    // "Unknown" fallback and selection reported "该节点未关联组件" after a
-    // reload. See the Option<String> fix in `row_to_component`.
+    // "Unknown" fallback and selection reported "this node has no associated
+    // component" after a reload. See the Option<String> fix in `row_to_component`.
     #[test]
     fn test_list_components_tolerates_null_json_columns() {
         let _guard = DB_TEST_LOCK.lock().unwrap();
@@ -586,7 +587,8 @@ mod tests {
     // `components` table — both registered (global=true) and generic
     // (global=false). A second create with an already-used name is rejected
     // with a friendly business-layer error (not a DB UNIQUE violation). Generic
-    // components get a random default name (`通用组件-<suffix>`) on drop, so they
+    // components get a random default name (`generic-component-<suffix>`) on
+    // drop, so they
     // never collide in practice, but the guard still counts them.
     #[test]
     fn test_create_component_rejects_duplicate_name() {

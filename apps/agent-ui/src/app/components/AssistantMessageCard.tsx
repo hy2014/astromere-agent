@@ -63,7 +63,7 @@ export function AssistantMessageCard({
       <div className="message-avatar" aria-hidden="true">spark</div>
       <div className="message-body">
 
-        {/* ═══ Header ═══ 操作栏，只触发不管理 */}
+        {/* ═══ Header ═══ action bar: only triggers, does not manage */}
         <Header
           usageLabel={usageLoading ? "Loading…" : "Usage"}
           isForkDisabled={Boolean(
@@ -74,7 +74,7 @@ export function AssistantMessageCard({
           onForkClick={() => onForkFromMessage(item)}
         />
 
-        {/* ═══ Usage overlay (本地管理) ═══ */}
+        {/* ═══ Usage overlay (locally managed) ═══ */}
         {usagePopup && (
           <AssistantUsageMiniOverlayView
             bundleId={item.id}
@@ -94,7 +94,7 @@ export function AssistantMessageCard({
           </button>
         </div>
 
-        {/* ═══ Response ═══ 回复正文 */}
+        {/* ═══ Response ═══ reply body */}
         <Response
           text={displayText}
           isStreaming={item.status === "streaming"}
@@ -170,13 +170,13 @@ function Response({ text, isStreaming, projectRoot, links, onOpenPreviewLink }: 
         {isStreaming ? "等待最终回答" : "最终回答"}
       </div>
 
-      {/* 富文本正文 */}
+      {/* Rich text body */}
       <RichMarkdownMessage content={text} />
 
-      {/* 图片 */}
+      {/* Images */}
       <MessageImagePreviews root={projectRoot} links={links} onOpen={onOpenPreviewLink} />
 
-      {/* FileReference 链接 / Artifact 入口 */}
+      {/* FileReference links / Artifact entry */}
       {links?.length ? (
         <div className="message-links local-reference-links">
           {links.map((link) => (

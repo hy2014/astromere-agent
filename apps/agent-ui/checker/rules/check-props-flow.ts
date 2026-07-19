@@ -3,16 +3,18 @@ import * as ts from "typescript";
 import { RuleContext } from "../types";
 
 /**
- * 检查 props 槽中的数据透传浪费：
+ * Check for wasteful data tunneling through the props slot:
  *
- * 场景：当前 View 的 props 参数中的某个变量 X，
- * 直接被传递给了 renderFn 的 props 槽，
- * 但 X 在 renderFn 中仅用于 events 回调的参数（不作为渲染/下游传递），
- * 说明 X 不应该走 props 透传，应该由上游 View 用 useCallback 捕获后走 events 槽。
+ * Scenario: a variable X from the current View's props parameters
+ * is passed directly into renderFn's props slot,
+ * but X is only used as an argument to events callbacks inside renderFn
+ * (it is not used for rendering or downstream passing).
+ * This means X should not flow through props; the upstream View should
+ * capture it with useCallback and pass it through the events slot.
  *
- * 豁免情况：
- *   1. X 在 renderFn 的 JSX 中被用于渲染 → 合法透传
- *   2. X 通过 renderView() 传递给下游 → 合法透传
+ * Exemptions:
+ *   1. X is used for rendering in renderFn's JSX → valid pass-through
+ *   2. X is passed downstream via renderView() → valid pass-through
  */
 export function checkPropsFlow(
     ctx: RuleContext,
@@ -25,7 +27,7 @@ export function checkPropsFlow(
         : (viewFn as ts.FunctionDeclaration).body;
     if (!body || !ts.isBlock(body)) return;
 
-    // 在 View body 中递归查找所有 render() 调用
+    // Recursively find all render() calls within the View body
     function findRenderCalls(node: ts.Node) {
         if (ts.isCallExpression(node)) {
             const callee = node.expression;
@@ -42,7 +44,7 @@ function processRenderCall(ctx: RuleContext, renderCall: ts.CallExpression): voi
     const arg0 = renderCall.arguments[0];
     if (!arg0 || !ts.isObjectLiteralExpression(arg0)) return;
 
-    // 找到 props 槽
+    // Locate the props slot
     const propsProp = arg0.properties.find(
         p => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "props",
     ) as ts.PropertyAssignment | undefined;
@@ -51,7 +53,7 @@ function processRenderCall(ctx: RuleContext, renderCall: ts.CallExpression): voi
     const propsObj = propsProp.initializer;
     if (!propsObj || !ts.isObjectLiteralExpression(propsObj)) return;
 
-    // 收集所有传递给 renderFn 的 props key
+    // Collect all props keys passed to renderFn
     const passedProps: { key: string; node: ts.Node }[] = [];
     for (const prop of propsObj.properties) {
         if (ts.isShorthandPropertyAssignment(prop)) {
@@ -63,7 +65,7 @@ function processRenderCall(ctx: RuleContext, renderCall: ts.CallExpression): voi
 
     if (passedProps.length === 0) return;
 
-    // 找到 fn 参数 → 确定目标 renderFn 名
+    // Locate the fn param → determine the target renderFn name
     const fnProp = arg0.properties.find(
         p => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "fn",
     ) as ts.PropertyAssignment | undefined;
@@ -76,24 +78,24 @@ function processRenderCall(ctx: RuleContext, renderCall: ts.CallExpression): voi
     }
     if (!renderFnName) return;
 
-    // 找到 renderFn 节点
+    // Locate the renderFn node
     const renderFnNode = findRenderFnNode(ctx.sourceFile, renderFnName);
     if (!renderFnNode) return;
 
     const renderFnBody = getFnBody(renderFnNode);
     if (!renderFnBody) return;
 
-    // 逐 key 检查
+    // Check key by key
     for (const { key, node } of passedProps) {
-        // 条件 1: key 必须是 View 的 props 参数（上游透传）
+        // Condition 1: key must be a View props parameter (upstream pass-through)
         if (!ctx.propVars.has(key)) continue;
 
         const usage = analyzeUsageInRenderFn(renderFnBody, key);
 
-        // 条件 2: 如果在 JSX 渲染或 renderView 中使用 → 跳过
+        // Condition 2: if used in JSX rendering or renderView → skip
         if (usage.usedInJSX || usage.usedInRenderView) continue;
 
-        // 条件 3: 如果只在 events 回调参数中出现 → 报错
+        // Condition 3: if it only appears in events callback args → report violation
         if (usage.onlyInEventsArgs) {
             ctx.addViolation(
                 "props 透传优化",
@@ -148,8 +150,8 @@ function analyzeUsageInRenderFn(body: ts.Block, varName: string): UsageAnalysis 
     let hasOther = false;
 
     function walk(node: ts.Node) {
-        // 不跳过嵌入式函数：需要检查事件回调中的引用
-        // （内层同名参数导致的误报概率极低）
+        // Do not skip nested functions: need to inspect references inside event callbacks
+        // (risk of false positives from same-named inner params is extremely low)
 
         if (ts.isIdentifier(node) && node.text === varName) {
             const ctx = classifyIdentifierUsage(node);
@@ -174,17 +176,17 @@ function analyzeUsageInRenderFn(body: ts.Block, varName: string): UsageAnalysis 
 }
 
 /**
- * 检查 identifier 在 renderFn 中的使用上下文：
- *   - "render" → 在 JSX 中用于渲染（非 onXxx 属性值 / JSX 文本表达式）
- *   - "event-arg" → 在 JSX onXxx 事件回调的参数中
- *   - "renderView" → 作为参数传给 renderView()
- *   - null → 其他（不在 JSX 中，也不算 renderView）
+ * Inspect the usage context of an identifier within renderFn:
+ *   - "render" → used for rendering in JSX (not an onXxx prop value / JSX text expression)
+ *   - "event-arg" → used as an argument in a JSX onXxx event callback
+ *   - "renderView" → passed as an argument to renderView()
+ *   - null → other (not in JSX, and not counted as renderView)
  */
 function classifyIdentifierUsage(node: ts.Identifier): "render" | "event-arg" | "renderView" | null {
     let current: ts.Node | undefined = node.parent;
 
     while (current) {
-        // 作为 renderView() 的参数
+        // As an argument to renderView()
         if (ts.isCallExpression(current)) {
             const callee = current.expression;
             if (ts.isIdentifier(callee) && callee.text === "renderView") {
@@ -192,7 +194,7 @@ function classifyIdentifierUsage(node: ts.Identifier): "render" | "event-arg" | 
             }
         }
 
-        // 在 JSX 属性中
+        // In a JSX attribute
         if (ts.isJsxAttribute(current) && ts.isIdentifier(current.name)) {
             if (/^on[A-Z]/.test(current.name.text)) {
                 return "event-arg";
@@ -200,7 +202,7 @@ function classifyIdentifierUsage(node: ts.Identifier): "render" | "event-arg" | 
             return "render";
         }
 
-        // 在 JSX 表达式中（如 <div>{items}</div> 或 attr={items}）
+        // In a JSX expression (e.g. <div>{items}</div> or attr={items})
         if (ts.isJsxExpression(current)) {
             const parent = current.parent;
             if (parent) {
@@ -216,7 +218,7 @@ function classifyIdentifierUsage(node: ts.Identifier): "render" | "event-arg" | 
             }
         }
 
-        // 直接作为 JSX 属性值
+        // Directly as a JSX attribute value
         if (ts.isJsxAttribute(current)) {
             if (ts.isIdentifier(current.name) && /^on[A-Z]/.test(current.name.text)) {
                 return "event-arg";

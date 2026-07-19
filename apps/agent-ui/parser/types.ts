@@ -1,44 +1,44 @@
 // parser/types.ts
 //
-// 核心类型定义 — 描述一个 React View 组件的完整结构图
-// 参考 mcp-test.tsx 的 coding style
+// Core type definitions - describe the full structure graph of a React View component
+// Reference mcp-test.tsx coding style
 //
-// renderFn 签名约定:
+// renderFn signature convention:
 //   function renderXxx(
-//     state: { ...fields },       // param[0]: 从 View 传入的状态字段
-//     props: { ...fields },       // param[1]: 从父组件传入的 props
-//     events: { ...handlers },    // param[2]: 事件处理函数（文件级函数）
-//     ext?: { ...fields },        // param[3]: 额外数据 / 上下文
-//     memo?: { ...fields },       // param[4]: 派生值
+//     state: { ...fields },       // param[0]: state fields passed from the View
+//     props: { ...fields },       // param[1]: props passed from the parent component
+//     events: { ...handlers },    // param[2]: event handlers (file-level functions)
+//     ext?: { ...fields },        // param[3]: extra data / context
+//     memo?: { ...fields },       // param[4]: derived values
 //   )
 //
-// 调用方式:
+// Invocation:
 //   render({ state: {...}, props: {...}, fn: renderXxx, events: {...}, exts?: {...}, memo?: {...} })
 
-// ========== ID 类型 ==========
+// ========== ID types ==========
 
-/** renderFn 或 View："文件路径:标识符" */
+/** renderFn or View: "filePath:identifier" */
 export type NodeId = string;
 
-/** EventBinding："renderFnId#事件名" */
+/** EventBinding: "renderFnId#eventName" */
 export type EventBindingId = string;
 
-/** Fn / EventHandler："文件路径:函数名" */
+/** Fn / EventHandler: "filePath:functionName" */
 export type FnId = string;
 
-/** IPC："ipc:通道名" */
+/** IPC: "ipc:channelName" */
 export type IpcId = string;
 
 // ========== State ==========
 
-/** 状态字段信息 */
+/** State field information */
 export interface StateInfo {
-    name: string;                 // 状态字段名，如 "rows"
-    setter: string;               // setter 名称，如 "setRows" / "WriteState.setRows"
-    initialValue: string;         // 初始值
+    name: string;                 // state field name, e.g. "rows"
+    setter: string;               // setter name, e.g. "setRows" / "WriteState.setRows"
+    initialValue: string;         // initial value
 }
 
-/** Props 字段信息 */
+/** Props field information */
 export interface PropInfo {
     name: string;
     type: string;
@@ -48,31 +48,31 @@ export interface PropInfo {
 
 export interface EventBinding {
     id: EventBindingId;           // "ProductView.tsx:renderProductCard#onEdit"
-    bindTo: string;               // 绑定的 DOM 事件属性，如 "onClick"
-    handleFnId: FnId;             // 实际处理函数的 ID
+    bindTo: string;               // bound DOM event attribute, e.g. "onClick"
+    handleFnId: FnId;             // actual handler function ID
 }
 
 // ========== Fn ==========
 
 export interface FnDetail {
     id: FnId;                     // "mcp-test.tsx:handleAddServer"
-    writes: string[];             // 修改的状态字段名，如 ["rows"]
-    ipcs: IpcId[];                // 调用的 IPC，如 ["ipc:loadMcpSettings"]
-    fns: string[];                // 调用的其他函数名，如 ["mcpSettingsFromDraftRows"]
-    views: NodeId[];              // 通过 renderView() 连接的 ViewNode ID
+    writes: string[];             // modified state field names, e.g. ["rows"]
+    ipcs: IpcId[];                // called IPC, e.g. ["ipc:loadMcpSettings"]
+    fns: string[];                // other called function names, e.g. ["mcpSettingsFromDraftRows"]
+    views: NodeId[];              // ViewNode IDs connected via renderView()
 }
 
 // ========== RenderFn ==========
 
 export interface RenderFnNode {
     id: NodeId;                   // "mcp-test.tsx:renderMcpServerTable"
-    fnId: FnId;                   // 对应的 FnDetail ID，包含其内部的函数调用关系
-    states: string[];             // 依赖的 state 字段（已包含 memo 展开）
-    props: string[];              // 依赖的 props 字段
-    exts: string[];               // 依赖的 ext 字段（4th render param）
-    events: EventBinding[];       // 事件绑定列表
-    children: RenderFnNode[];     // 子 renderFn
-    renderViews: NodeId[];        // 通过 renderView() 连接的 ViewNode ID
+    fnId: FnId;                   // corresponding FnDetail ID, including its internal function-call relationships
+    states: string[];             // depended-on state fields (memo already expanded)
+    props: string[];              // depended-on props fields
+    exts: string[];               // depended-on ext fields (4th render param)
+    events: EventBinding[];       // event binding list
+    children: RenderFnNode[];     // child renderFn
+    renderViews: NodeId[];        // ViewNode IDs connected via renderView()
 }
 
 // ========== View ==========
@@ -85,25 +85,25 @@ export interface PropSource {
 
 export interface ViewNode {
     id: NodeId;                   // "mcp-test.tsx:McpServersView"
-    states: string[];             // 声明的 state 变量
-    props: Record<string, PropSource>;  // props 的来源映射
-    useEffect: FnDetail | null;   // useEffect 中调用的 handler，完整的 FnDetail
-    children: RenderFnNode[];     // 顶层 renderFn
+    states: string[];             // declared state variables
+    props: Record<string, PropSource>;  // props source mapping
+    useEffect: FnDetail | null;   // handlers called in useEffect, as a complete FnDetail
+    children: RenderFnNode[];     // top-level renderFn
 }
 
 // ========== Code Graph ==========
 
 export interface CodeGraph {
-    version: string;              // 时间戳
+    version: string;              // timestamp
     views: ViewNode[];
-    fns: FnDetail[];             // 所有 EventHandler + 工具函数
+    fns: FnDetail[];             // all EventHandlers + utility functions
 }
 
-// ========== 内部辅助类型（不导出） ==========
+// ========== Internal helper types (not exported) ==========
 
-/** 函数内部 call 分类 */
+/** Classification of calls inside a function */
 export interface ClassifiedCall {
     type: "write" | "ipc" | "call";
-    text: string;                 // 调用的原文
-    target?: string;              // write 的目标 state 名
+    text: string;                 // original call text
+    target?: string;              // target state name of the write
 }

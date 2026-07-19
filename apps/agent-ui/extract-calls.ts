@@ -19,7 +19,7 @@ interface PropInfo {
   type: string;
 }
 
-// ========== 新增：IPC 方法提取 ==========
+// ========== New: IPC method extraction ==========
 function extractIPCMethods(sourceFile: ReturnType<typeof project.getSourceFile>): string[] {
   const methods: string[] = [];
   if (!sourceFile) return methods;
@@ -148,7 +148,7 @@ function isProp(name: string, props: PropInfo[]): boolean {
   return props.some(p => p.name === name);
 }
 
-// ========== 保留原有 IPC 判断 ==========
+// ========== Preserve the original IPC detection ==========
 function isIPCCall(node: CallExpression): boolean {
   const text = node.getExpression().getText();
   return text === "invoke" || text === "remoteJson";
@@ -177,7 +177,7 @@ function isIgnoreCall(text: string): boolean {
   return ignores.includes(funcName);
 }
 
-// ========== classifyCall 增加 ipcMethods 参数 ==========
+// ========== classifyCall: add ipcMethods parameter ==========
 function classifyCall(node: CallExpression, states: StateInfo[], props: PropInfo[], ipcMethods: string[]): ClassifiedCall | null {
   const expr = node.getExpression();
   const callText = expr.getText();
@@ -187,12 +187,12 @@ function classifyCall(node: CallExpression, states: StateInfo[], props: PropInfo
   if (callText === "useEffect") return { type: "effect_register", text: callText };
   if (callText === "import") return null;
 
-  // 原有的 invoke/remoteJson
+  // existing invoke/remoteJson
   if (isIPCCall(node)) {
     return { type: "ipc", text: callText };
   }
 
-  // 新增：从 runtime import 来的 IPC 方法
+  // new: IPC methods imported from runtime
   if (ipcMethods.includes(callText)) {
     return { type: "ipc", text: callText };
   }
@@ -209,7 +209,7 @@ function classifyCall(node: CallExpression, states: StateInfo[], props: PropInfo
   return { type: "call", text: callText };
 }
 
-// ========== extractCallsFromNode 增加 ipcMethods 参数 ==========
+// ========== extractCallsFromNode: add ipcMethods parameter ==========
 function extractCallsFromNode(node: Node, states: StateInfo[], props: PropInfo[], ipcMethods: string[]): ClassifiedCall[] {
   const results: ClassifiedCall[] = [];
 
@@ -410,7 +410,7 @@ function getBodyNode(node: ArrowFunction | FunctionExpression): Node | undefined
   return node.getBody() ?? undefined;
 }
 
-// ========== extractJSXEvents 增加 ipcMethods 参数 ==========
+// ========== extractJSXEvents: add ipcMethods parameter ==========
 function extractJSXEvents(sourceFile: ReturnType<typeof project.getSourceFile>, states: StateInfo[], props: PropInfo[], ipcMethods: string[]): JSXEventBinding[] {
   const results: JSXEventBinding[] = [];
   if (!sourceFile) return results;
@@ -442,7 +442,7 @@ function extractJSXEvents(sourceFile: ReturnType<typeof project.getSourceFile>, 
   return results;
 }
 
-// ========== extractFunctions 增加 ipcMethods 参数 ==========
+// ========== extractFunctions: added ipcMethods parameter ==========
 function extractFunctions(sourceFile: ReturnType<typeof project.getSourceFile>, states: StateInfo[], props: PropInfo[], componentNames: string[], ipcMethods: string[]): FunctionDef[] {
   const results: FunctionDef[] = [];
   if (!sourceFile) return results;
@@ -472,7 +472,7 @@ function extractFunctions(sourceFile: ReturnType<typeof project.getSourceFile>, 
   return results;
 }
 
-// ========== extractUseEffects 增加 ipcMethods 参数 ==========
+// ========== extractUseEffects: added ipcMethods parameter ==========
 function extractUseEffects(sourceFile: ReturnType<typeof project.getSourceFile>, states: StateInfo[], props: PropInfo[], ipcMethods: string[]): UseEffectDef[] {
   const results: UseEffectDef[] = [];
   if (!sourceFile) return results;
@@ -500,7 +500,7 @@ function extractUseEffects(sourceFile: ReturnType<typeof project.getSourceFile>,
 
 // ========== Main ==========
 
-// 解析命令行参数 --file
+// Parse the --file command-line argument
 const args = process.argv.slice(2);
 const fileIndex = args.indexOf("--file");
 const fIndex = args.indexOf("-f");

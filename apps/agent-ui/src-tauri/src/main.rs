@@ -59,6 +59,10 @@ use terminal::{terminal_kill, terminal_list, terminal_resize, terminal_spawn, te
 fn main() {
     let is_remote = std::env::args().any(|a| a == "--remote");
 
+    // Arm a SIGTERM handler so `kill -TERM` (restart script / systemd) stops the
+    // worker child gracefully instead of orphaning it. (No-op on non-Unix.)
+    claw_agent_ui::engine::install_termination_handler();
+
     #[cfg(not(feature = "gui"))]
     {
         // No Tauri — always headless. This IS the server role: run the worker.
@@ -88,9 +92,10 @@ fn main() {
                     eprintln!("[deepseek-pricing] refresh failed: {error}");
                 }
             });
-            // HTTP server 在独立 tokio runtime 上运行。
-            // 桌面 GUI 是 dag 的纯 client（dag 走远程 HTTP），本机不起 worker
-            // （run_worker=false）；本机 HTTP server 仅服务 code mode。
+            // The HTTP server runs on its own dedicated tokio runtime.
+            // The desktop GUI is a pure client of the dag (the dag talks over
+            // remote HTTP); this machine does not run a worker (run_worker=false),
+            // and the local HTTP server only serves code mode.
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new()
@@ -186,7 +191,8 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Claw Agent UI");
-    // 应用退出后回收执行引擎 worker（stop_worker 会置 SHUTDOWN，supervisor 不再重建）
+    // After the app exits, reclaim the execution engine worker (stop_worker sets
+    // SHUTDOWN so the supervisor will not recreate it).
     claw_agent_ui::engine::stop_worker();
     } // #[cfg(feature = "gui")]
 }

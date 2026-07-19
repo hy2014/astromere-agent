@@ -24,10 +24,11 @@ export function render<S, P, E, M>({
 }
 
 /**
- * renderView — dispatch 到另一个 View 组件
+ * renderView — dispatch to another View component
  *
- * 用于 renderFn 内部需要挂载一个拥有独立 useState/WriteState 的 View 组件时。
- * 语义上等价于 <XxxView {...props} />，但可被 checker 静态分析识别。
+ * Used inside a renderFn when you need to mount a View component that owns
+ * its own independent useState/WriteState. Semantically equivalent to
+ * <XxxView {...props} />, but recognizable by the checker's static analysis.
  *
  * @example
  * function renderContent({ section }, {}, {}) {
@@ -55,10 +56,10 @@ type RenderListItemFn<S = any, P = any, E = any> = (
 ) => JSX.Element;
 
 /**
- * renderList — 列表渲染
+ * renderList — render a list
  *
- * 替代 rows.map((row) => render({ fn, state, props, events, exts: { row } }))。
- * 每条 item 自动作为 ext 传入 renderFn。
+ * Replaces rows.map((row) => render({ fn, state, props, events, exts: { row } })).
+ * Each item is automatically passed as `ext` into the renderFn.
  *
  * @example
  * renderList({

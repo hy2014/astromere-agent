@@ -304,8 +304,8 @@ pub struct Component {
     pub config_schema: Value,
     pub tags: Vec<String>,
     /// Registry flag: `true` => registered/global component (appears in the
-    /// "组件" list, reusable across DAGs); `false` => a generic, non-global
-    /// component created by dragging "通用组件" onto the canvas.
+    /// "component" list, reusable across DAGs); `false` => a generic, non-global
+    /// component created by dragging "generic component" onto the canvas.
     pub global: bool,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -406,7 +406,7 @@ pub struct NodeExecution {
     pub started_at_ms: Option<i64>,
     pub completed_at_ms: Option<i64>,
     pub output_path: Option<String>,
-    /// Per-output-port runtime artifacts (third layer = 运行产物), indexed by
+    /// Per-output-port runtime artifacts (third layer = runtime artifacts), indexed by
     /// output port key, e.g. `{"data": "/path/a.csv", "metrics": "/path/m.json"}`.
     /// Written by the Python execution engine; NOT a user configuration input.
     pub outputs: Option<Value>,

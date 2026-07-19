@@ -1,8 +1,10 @@
-// ─── HTTP 集成测试 ──────────────────────────────────────────────────────────
-// Part A — Plumbing tests: 验证 HTTP 框架层行为（状态码、路由、序列化）
-// Part B — Business tests:   验证业务逻辑 roundtrip（创建→HTTP→验证→清理）
+// ─── HTTP integration tests ───────────────────────────────────────────────
+// Part A — Plumbing tests: verify HTTP framework-layer behavior (status codes,
+// routing, serialization).
+// Part B — Business tests:   verify business-logic roundtrip (create → HTTP →
+// verify → cleanup).
 //
-// 使用 axum test utilities 发送真实 HTTP 请求到 router。
+// Uses axum test utilities to send real HTTP requests to the router.
 
 use axum::body::{Body, to_bytes};
 use axum::{Json, Router, routing::get};
@@ -12,17 +14,17 @@ use std::fs;
 use tower::ServiceExt;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// P0: Err(String) → HTTP 状态码
+// P0: Err(String) → HTTP status code
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// 此测试验证 AppError 返回 HTTP 500（而非 200）。
+/// This test verifies that AppError returns HTTP 500 (not 200).
 ///
-/// 背景：axum 0.7 中 `String::into_response()` 返回 HTTP 200。
-/// 前端 remote.ts 依赖 `response.ok` 判断错误，所以 Err(String) → 200
-/// 会导致业务错误被当作成功处理。
+/// Background: in axum 0.7 `String::into_response()` returns HTTP 200.
+/// The frontend remote.ts relies on `response.ok` to detect errors, so
+/// Err(String) → 200 would cause business errors to be treated as success.
 ///
-/// 修复：定义了 AppError 类型实现 IntoResponse，返回 500 + JSON body。
-/// 当前状态：✅ PASS — AppError 正确返回 500。
+/// Fix: the AppError type implements IntoResponse and returns 500 + a JSON
+/// body. Current status: PASS — AppError correctly returns 500.
 #[tokio::test]
 async fn app_error_returns_500_not_200() {
     async fn error_handler() -> Result<Json<Value>, claw_agent_ui::server::AppError> {
@@ -52,15 +54,15 @@ async fn app_error_returns_500_not_200() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// P0: 路由完备性
+// P0: Route completeness
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// 验证所有 stateless 端点已注册。
+/// Verify that all stateless endpoints are registered.
 #[tokio::test]
 async fn stateless_endpoints_registered() {
     let app = claw_agent_ui::server::stateless_test_router();
 
-    // 无需路径参数或 query 参数即可访问的端点
+    // Endpoints reachable without path or query parameters.
     let direct_endpoints = [
         ("/health", Method::GET),
         ("/models/deepseek-pricing", Method::GET),
@@ -89,13 +91,13 @@ async fn stateless_endpoints_registered() {
     }
 }
 
-/// 验证所有带路径参数的路由已注册（不会 404）。
-/// NOTE: 之前 `{id}` 语法在 matchit 不工作，现已改为 `:id`。
+/// Verify that all path-parameter routes are registered (no 404).
+/// NOTE: the `{id}` syntax used to not work in matchit; it is now `:id`.
 #[tokio::test]
 async fn parameterized_routes_registered() {
     let app = claw_agent_ui::server::stateless_test_router();
 
-    // 带路径参数的路由 — 加上 root query 避免 400（missing field）
+    // Path-parameter routes — add a root query to avoid a 400 (missing field).
     let param_routes = [
         ("/sessions/test-id?root=/tmp", Method::GET),
         ("/usage/bundle/test-sid?root=/tmp", Method::GET),
@@ -124,8 +126,8 @@ async fn parameterized_routes_registered() {
     }
 }
 
-/// 验证 usage/* 和 system/* 端点已注册。
-/// 之前这些路由缺失（返回 404），现已修复注册。
+/// Verify that the usage/* and system/* endpoints are registered.
+/// These routes used to be missing (returned 404); registration is now fixed.
 #[tokio::test]
 async fn usage_and_system_routes_registered() {
     let app = claw_agent_ui::server::stateless_test_router();
@@ -184,15 +186,15 @@ async fn usage_and_system_routes_registered() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HTTP 方法与 Content-Type
+// HTTP method and Content-Type
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// 用错 HTTP 方法应返回 405 Method Not Allowed。
+/// Using the wrong HTTP method should return 405 Method Not Allowed.
 #[tokio::test]
 async fn wrong_method_returns_405() {
     let app = claw_agent_ui::server::stateless_test_router();
 
-    // /health 是 GET-only，POST 应返回 405
+    // /health is GET-only, so POST should return 405.
     let response = app
         .clone()
         .oneshot(
@@ -211,7 +213,7 @@ async fn wrong_method_returns_405() {
     );
 }
 
-/// /events 端点必须返回 text/event-stream Content-Type。
+/// The /events endpoint must return Content-Type: text/event-stream.
 #[tokio::test]
 async fn events_endpoint_returns_sse_content_type() {
     let app = claw_agent_ui::server::stateless_test_router();
@@ -233,7 +235,7 @@ async fn events_endpoint_returns_sse_content_type() {
     );
 }
 
-/// 不存在的路径应返回 404（而非 200 错误字符串）。
+/// A non-existent path should return 404 (not a 200 error string).
 #[tokio::test]
 async fn nonexistent_path_returns_404() {
     let app = claw_agent_ui::server::stateless_test_router();
@@ -256,10 +258,10 @@ async fn nonexistent_path_returns_404() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// JSON 序列化/反序列化格式验证
+// JSON serialization/deserialization format verification
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// /health 响应格式：{"ok": true}
+/// /health response format: {"ok": true}.
 #[tokio::test]
 async fn health_response_format() {
     let app = claw_agent_ui::server::stateless_test_router();
@@ -281,7 +283,8 @@ async fn health_response_format() {
     );
 }
 
-/// /models/settings GET 返回合法 JSON（不验证具体内容，内容来自磁盘配置）
+/// /models/settings GET returns valid JSON (content is not verified; it comes
+/// from the on-disk config).
 #[tokio::test]
 async fn models_settings_get_returns_valid_json() {
     let app = claw_agent_ui::server::stateless_test_router();
@@ -301,7 +304,7 @@ async fn models_settings_get_returns_valid_json() {
     let body = to_bytes(response.into_body(), 65536).await.unwrap();
     let json: Value = serde_json::from_slice(&body).expect("response must be valid JSON");
 
-    // NOTE: ModelSettings 未使用 rename_all，字段名为 snake_case
+    // NOTE: ModelSettings does not use rename_all, so fields are snake_case.
     assert!(
         json.get("models").is_some() || json.get("active_model_id").is_some(),
         "model settings must have 'models' or 'active_model_id' field.\n\
@@ -310,7 +313,7 @@ async fn models_settings_get_returns_valid_json() {
     );
 }
 
-/// /mcp/settings GET 返回合法 JSON
+/// /mcp/settings GET returns valid JSON.
 #[tokio::test]
 async fn mcp_settings_get_returns_valid_json() {
     let app = claw_agent_ui::server::stateless_test_router();
@@ -333,13 +336,13 @@ async fn mcp_settings_get_returns_valid_json() {
     match serde_json::from_slice::<Value>(&body) {
         Ok(json) => {
             if json.is_object() {
-                // 成功 — 验证结构
+                // Success — verify the structure.
                 assert!(
                     json.get("settings").is_some() || json.get("servers").is_some(),
                     "MCP settings response should have 'settings' or 'servers' field. Got: {body_str}"
                 );
             } else if json.is_string() {
-                // P0 bug: handler 返回 Err(String) → HTTP 200，body 为纯错误字符串
+                // P0 bug: handler returns Err(String) → HTTP 200, body is a raw error string.
                 eprintln!(
                     "[test] P0 BUG CONFIRMED: /mcp/settings returned 200 OK \
                      but body is error string, not JSON object: {body_str}"
@@ -350,7 +353,7 @@ async fn mcp_settings_get_returns_valid_json() {
     }
 }
 
-/// /client/exit POST 返回 {"ok": true}
+/// /client/exit POST returns {"ok": true}.
 #[tokio::test]
 async fn client_exit_returns_ok() {
     let app = claw_agent_ui::server::stateless_test_router();
@@ -373,11 +376,12 @@ async fn client_exit_returns_ok() {
     assert_eq!(json["ok"], true);
 }
 
-/// POST camelCase body → handler 反序列化为 snake_case Rust 字段。
-/// 验证 server.rs 中所有 `#[serde(rename = "camelCase")]` 注解的正确性。
+/// POST camelCase body → handler deserializes into snake_case Rust fields.
+/// Verifies the correctness of every `#[serde(rename = "camelCase")]` attribute
+/// in server.rs.
 #[tokio::test]
 async fn camelcase_body_deserialization() {
-    // 构造与 server.rs EnsureRequest 等 struct 相同的 rename 模式
+    // Build the same rename pattern as the structs in server.rs (e.g. EnsureRequest).
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct EnsureLike {
@@ -419,17 +423,17 @@ async fn camelcase_body_deserialization() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 错误请求处理
+// Bad-request handling
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// POST JSON body 缺失 → axum 提取器返回反序列化错误。
-/// 应返回 4xx（如 400/422），而非 200 错误字符串。
+/// POST JSON body missing → axum extractor returns a deserialization error.
+/// Should return 4xx (e.g. 400/422), not a 200 error string.
 #[tokio::test]
 async fn post_without_json_body_returns_client_error() {
     let app = claw_agent_ui::server::stateless_test_router();
 
-    // POST /models/test 但 Content-Type 是 text/plain 或无 body →
-    // axum Json 提取器返回 JsonRejection（4xx）
+    // POST /models/test with Content-Type text/plain or no body →
+    // axum Json extractor returns a JsonRejection (4xx).
     let response = app
         .clone()
         .oneshot(
@@ -441,7 +445,7 @@ async fn post_without_json_body_returns_client_error() {
         .await
         .unwrap();
 
-    // JSON 解析失败 → axum Json extractor reject → 422 或 400
+    // JSON parse failure → axum Json extractor reject → 422 or 400.
     assert!(
         response.status().is_client_error(),
         "JSON parse error should return 4xx, got {}.\n\
@@ -449,12 +453,12 @@ async fn post_without_json_body_returns_client_error() {
     );
 }
 
-/// POST 缺少必填字段 → 应返回反序列化错误（4xx）
+/// POST missing a required field → should return a deserialization error (4xx).
 #[tokio::test]
 async fn post_missing_required_field_returns_client_error() {
     let app = claw_agent_ui::server::stateless_test_router();
 
-    // /models/test 需要 models 数组，发送空 body
+    // /models/test requires the models array; send an empty body.
     let response = app
         .clone()
         .oneshot(
@@ -466,7 +470,7 @@ async fn post_missing_required_field_returns_client_error() {
         .await
         .unwrap();
 
-    // models 字段缺失 → serde 报错 → axum JsonRejection → 4xx
+    // models field missing → serde error → axum JsonRejection → 4xx.
     assert!(
         response.status().is_client_error(),
         "Missing required field should return 4xx, got {}",
@@ -475,10 +479,10 @@ async fn post_missing_required_field_returns_client_error() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 并发安全性
+// Concurrency safety
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// 高并发请求不 panic、不返回错误状态。
+/// High-concurrency requests do not panic and do not return error states.
 #[tokio::test]
 async fn concurrent_requests_no_panic() {
     let app = claw_agent_ui::server::stateless_test_router();
@@ -510,15 +514,15 @@ async fn concurrent_requests_no_panic() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SSE broadcast 通道
+// SSE broadcast channel
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// SSE send → receive 链路正确。
+/// SSE send → receive link works correctly.
 #[tokio::test]
 async fn sse_send_receive_works() {
     let mut rx = claw_agent_ui::server::sse_broadcast_sender().subscribe();
 
-    // 排空当前通道中的残留事件（处理 Lagged）
+    // Drain leftover events in the channel (handling Lagged).
     loop {
         match rx.try_recv() {
             Ok(_) => continue,
@@ -539,7 +543,7 @@ async fn sse_send_receive_works() {
     assert_eq!(received, test_event);
 }
 
-/// buffer 溢出时不 panic。
+/// No panic when the buffer overflows.
 #[tokio::test]
 async fn sse_buffer_overflow_no_panic() {
     for i in 0..512u32 {
@@ -561,7 +565,7 @@ async fn sse_buffer_overflow_no_panic() {
     assert!(received.contains("ok"));
 }
 
-/// 多 subscriber 同时接收事件。
+/// Multiple subscribers receive events simultaneously.
 #[tokio::test]
 async fn sse_multiple_subscribers() {
     let mut rx1 = claw_agent_ui::server::sse_broadcast_sender().subscribe();
@@ -601,37 +605,38 @@ async fn sse_multiple_subscribers() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Session core 错误处理
+// Session core error handling
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
 async fn session_core_error_returns_err() {
     use claw_agent_ui::session_core;
 
-    // 不存在的路径 → Err
+    // A non-existent path → Err.
     assert!(session_core::list_sessions("/nonexistent/path/for/testing").is_err());
     assert!(session_core::load_session("/tmp", "nonexistent-session-id").is_err());
 
-    // create_session 格式验证
+    // create_session format validation.
     let created = session_core::create_session("/tmp").unwrap();
     assert!(created.id.starts_with("new-"));
     assert!(!created.title.is_empty());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Part B: 业务 roundtrip 集成测试
-// 模式：准备数据 → 发送 HTTP 请求 → 验证响应 → 清理
+// Part B: business roundtrip integration tests
+// Pattern: prepare data → send HTTP request → verify response → cleanup
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── Business test 1: Model settings no-op roundtrip ────────────────────────
 
-/// GET /models/settings → PUT 相同数据 → GET → 验证不变。
-/// 这是一个无副作用的 roundtrip 测试，不会修改用户实际配置。
+/// GET /models/settings → PUT the same data → GET → verify unchanged.
+/// This is a side-effect-free roundtrip test that does not modify the user's
+/// real configuration.
 #[tokio::test]
 async fn business_model_settings_read_after_write() {
     let app = claw_agent_ui::server::stateless_test_router();
 
-    // Step 1: GET 当前 settings
+    // Step 1: GET the current settings.
     let response = app
         .clone()
         .oneshot(
@@ -645,7 +650,7 @@ async fn business_model_settings_read_after_write() {
     assert_eq!(response.status(), StatusCode::OK);
     let original_bytes = to_bytes(response.into_body(), 65536).await.unwrap();
 
-    // 如果不是 JSON 对象（P0 bug：error string → 200），跳过后面的步骤
+    // If it is not a JSON object (P0 bug: error string → 200), skip the rest.
     let original: Value = serde_json::from_slice(&original_bytes)
         .expect("GET /models/settings must return valid JSON");
     if !original.is_object() {
@@ -653,7 +658,7 @@ async fn business_model_settings_read_after_write() {
         return;
     }
 
-    // Step 2: PUT 相同数据回去
+    // Step 2: PUT the same data back.
     let put_body = original_bytes.clone();
     let response = app
         .clone()
@@ -671,7 +676,7 @@ async fn business_model_settings_read_after_write() {
         response.status()
     );
 
-    // Step 3: GET 再次读取，验证不变
+    // Step 3: GET again and verify nothing changed.
     let response = app
         .clone()
         .oneshot(
@@ -694,12 +699,12 @@ async fn business_model_settings_read_after_write() {
 
 // ── Business test 2: MCP settings no-op roundtrip ─────────────────────────
 
-/// GET /mcp/settings → PUT 相同数据 → GET → 验证不变。
+/// GET /mcp/settings → PUT the same data → GET → verify unchanged.
 #[tokio::test]
 async fn business_mcp_settings_read_after_write() {
     let app = claw_agent_ui::server::stateless_test_router();
 
-    // Step 1: GET 当前 settings
+    // Step 1: GET the current settings.
     let response = app
         .clone()
         .oneshot(
@@ -720,7 +725,7 @@ async fn business_mcp_settings_read_after_write() {
         return;
     }
 
-    // Step 2: PUT 相同数据（只传 settings 字段）
+    // Step 2: PUT the same data (only the settings field).
     let settings_value = original.get("settings").cloned().unwrap_or_default();
     let response = app
         .clone()
@@ -738,7 +743,7 @@ async fn business_mcp_settings_read_after_write() {
         response.status()
     );
 
-    // Step 3: GET 验证
+    // Step 3: GET and verify.
     let response = app
         .clone()
         .oneshot(
@@ -762,7 +767,7 @@ async fn business_mcp_settings_read_after_write() {
 
 // ── Business test 3: Workspace file roundtrip ─────────────────────────────
 
-/// PUT /workspace/file → GET /workspace/file → 内容一致 → 清理文件。
+/// PUT /workspace/file → GET /workspace/file → content matches → clean up file.
 #[tokio::test]
 async fn business_workspace_file_write_then_read() {
     use tempfile::TempDir;
@@ -773,7 +778,7 @@ async fn business_workspace_file_write_then_read() {
     let test_path = "integration-test-file.txt";
     let test_content = "hello from business integration test\nline 2";
 
-    // Step 1: PUT 写文件
+    // Step 1: PUT to write the file.
     let write_body = serde_json::json!({
         "root": root,
         "path": test_path,
@@ -797,7 +802,7 @@ async fn business_workspace_file_write_then_read() {
         response.status()
     );
 
-    // Step 2: GET 读回
+    // Step 2: GET to read it back.
     let uri = format!(
         "/workspace/file?root={}&path={}",
         urlencoding(&root),
@@ -819,8 +824,9 @@ async fn business_workspace_file_write_then_read() {
     let json: Value = serde_json::from_slice(&body)
         .expect("GET /workspace/file must return valid JSON");
 
-    // Step 3: 验证内容
-    // 响应格式取决于 read_workspace_file 的返回值，至少应有 content 或 path 字段
+    // Step 3: verify content.
+    // The response shape depends on read_workspace_file's return value; it
+    // should have at least a content or path field.
     let content_from_api = json
         .get("content")
         .and_then(|v| v.as_str())
@@ -832,13 +838,13 @@ async fn business_workspace_file_write_then_read() {
         "file content should match what we wrote"
     );
 
-    // Step 4: 清理（temp dir 会自动清理，但显式删除确保干净）
+    // Step 4: cleanup (the temp dir auto-cleans, but delete explicitly to be safe).
     let _ = fs::remove_file(tmp.path().join(test_path));
 }
 
 // ── Business test 4: Workspace file edit roundtrip ────────────────────────
 
-/// PUT 文件 → POST edit → GET → 验证修改 → 清理。
+/// PUT file → POST edit → GET → verify the change → clean up.
 #[tokio::test]
 async fn business_workspace_file_edit_then_read() {
     use tempfile::TempDir;
@@ -848,7 +854,7 @@ async fn business_workspace_file_edit_then_read() {
     let root = tmp.path().to_str().unwrap().to_string();
     let test_path = "edit-test-file.txt";
 
-    // Step 1: 先写入原始内容
+    // Step 1: first write the original content.
     let original_content = "line one\nline two\nline three\n";
     let put_body = serde_json::json!({
         "root": root,
@@ -867,7 +873,7 @@ async fn business_workspace_file_edit_then_read() {
         .unwrap();
     assert!(response.status().is_success());
 
-    // Step 2: POST edit — 替换 "line two" → "LINE TWO MODIFIED"
+    // Step 2: POST edit — replace "line two" → "LINE TWO MODIFIED"
     let edit_body = serde_json::json!({
         "root": root,
         "path": test_path,
@@ -891,7 +897,7 @@ async fn business_workspace_file_edit_then_read() {
         response.status()
     );
 
-    // Step 3: GET 验证修改
+    // Step 3: GET and verify the change.
     let uri = format!(
         "/workspace/file?root={}&path={}",
         urlencoding(&root),
@@ -921,14 +927,14 @@ async fn business_workspace_file_edit_then_read() {
     assert!(content.contains("line one"), "edit should not affect other lines");
     assert!(content.contains("line three"), "edit should not affect other lines");
 
-    // Step 4: 清理
+    // Step 4: cleanup
     let _ = fs::remove_file(tmp.path().join(test_path));
 }
 
 
-// ── Business test 5: Session 创建 → 列表 → 加载 → 清理 ───────────
+// ── Business test 5: Session create → list → load → cleanup ───────────
 
-/// 手动创建 JSONL session 文件 → GET /sessions 列表 → GET /sessions/:id 加载 → 清理。
+/// Manually create a JSONL session file → GET /sessions list → GET /sessions/:id load → cleanup.
 #[tokio::test]
 async fn business_session_list_and_load() {
     use claw_agent_ui::{utils, session_core};
@@ -981,8 +987,8 @@ async fn business_session_list_and_load() {
 }
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/// URL 编码 path 片段（用于 query 参数）。
-/// 仅编码需要编码的字符，保持可读性。
+/// URL-encode path segments (used for query params).
+/// Only encode characters that need encoding, preserving readability.
 fn urlencoding(s: &str) -> String {
     s.replace('%', "%25")
         .replace('&', "%26")

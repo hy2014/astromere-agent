@@ -2,10 +2,10 @@ import {useEffect, useRef, useState} from "react";
 import type {DagNode} from "../../types";
 
 // System-level knobs are stored in `node.config.params` with this prefix
-// (e.g. `system.python_path`). The 系统配置 tab shows the key WITHOUT the prefix
-// and re-adds it on save. This prefix is the hard boundary between system
-// knobs (this tab) and run parameters (the 配置 tab) — it does NOT depend on
-// the component's config_schema.
+// (e.g. `system.python_path`). The System Config tab shows the key WITHOUT the
+// prefix and re-adds it on save. This prefix is the hard boundary between
+// system knobs (this tab) and run parameters (the Config tab) — it does NOT
+// depend on the component's config_schema.
 const SYSTEM_PREFIX = "system.";
 
 export type SystemConfigFormProps = {
@@ -37,7 +37,7 @@ function pairsFrom(params: Record<string, unknown>): SysPair[] {
 
 export function SystemConfigForm({node, onChange}: SystemConfigFormProps) {
   const [pairs, setPairs] = useState<SysPair[]>(() => pairsFrom(readParams(node)));
-  // Keep the latest node so a commit in the 配置 tab (which owns run-param
+  // Keep the latest node so a commit in the Config tab (which owns run-param
   // keys) doesn't get clobbered when we re-read existing params here.
   const nodeRef = useRef(node);
   nodeRef.current = node;
@@ -57,7 +57,7 @@ export function SystemConfigForm({node, onChange}: SystemConfigFormProps) {
       config.params && typeof config.params === "object"
         ? (config.params as Record<string, unknown>)
         : {};
-    // Preserve run-param keys (owned by the 配置 tab) — they have no
+    // Preserve run-param keys (owned by the Config tab) — they have no
     // `system.` prefix and must survive this commit untouched.
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(existing)) {

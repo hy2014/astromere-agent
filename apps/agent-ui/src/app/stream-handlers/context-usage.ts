@@ -11,13 +11,13 @@ export function handleContextUsageEvent(
   prevData: unknown,
 ): ContextUsageSignal {
   const prev = prevData as ContextUsageSignal | null;
-  // 非目标事件 → 不刷新，覆盖 store 避免老数据残留
+  // Non-target event → don't refresh; overwrite the store to avoid stale data lingering
   if (event.eventType !== "turn_complete" && event.eventType !== "startup") {
     return { refresh: false, lastRefresh: prev?.lastRefresh ?? 0, sessionId: "" };
   }
 
   const now = Date.now();
-  // 防抖：3 秒内不再重复刷新
+  // Debounce: don't refresh again within 3 seconds
   if (prev && now - prev.lastRefresh < 3000) {
     return { refresh: false, lastRefresh: prev.lastRefresh, sessionId: "" };
   }

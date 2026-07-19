@@ -29,16 +29,16 @@ export type RegisterComponentFormProps = {
   onCancel: () => void;
   // When provided, the form opens in **edit mode**: it is pre-filled from this
   // component and submits via `onUpdate` (writing back to the same id), instead
-  // of creating a new one. The kebab "修改" menu in the sidebar list opens it.
+  // of creating a new one. The kebab "edit" menu in the sidebar list opens it.
   editing?: Component;
   onUpdate?: (component: Component) => void;
   // When provided, the form opens in **view mode**: pre-filled from this
-  // component, all fields read-only, no save action. The kebab "查看" menu in
+  // component, all fields read-only, no save action. The kebab "view" menu in
   // the sidebar list opens it. Mutually exclusive with `editing`.
   viewing?: Component;
   // The full component list (from the store), used to warn about a duplicate
   // *name* before submit. Only registered (global=true) components count —
-  // generic components get a random default name (`通用组件-xxxx`) and are
+  // generic components get a random default name (`generic component-xxxx`) and are
   // never reused across drops, so excluding them keeps dragging a second
   // generic node working. The component being edited (if any) is excluded so
   // renaming to its own current name is fine.
@@ -47,8 +47,8 @@ export type RegisterComponentFormProps = {
 
 // Registers a *new* reusable component (or edits / views an existing one when
 // `editing` / `viewing` is set). This form lives in the right-hand properties
-// panel (opened via the "注册组件" button, or a component's kebab "修改" /
-// "查看"), NOT inline inside the sidebar accordion. A created component is
+// panel (opened via the "register component" button, or a component's kebab "edit" /
+// "view"), NOT inline inside the sidebar accordion. A created component is
 // always `global: true` — that is what makes it appear in the sidebar list and
 // be reusable across DAGs.
 export function RegisterComponentForm({onRegister, onCancel, editing, onUpdate, viewing, existingComponents}: RegisterComponentFormProps) {

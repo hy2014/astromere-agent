@@ -31,13 +31,13 @@ export function handleControlRequestEvent(
   _prevData: unknown,
 ): ControlRequestData | null {
   const prev = _prevData as ControlRequestData | null;
-  // 清除权限：这些事件到来时，清空 pending permission
+  // Clear permission: when these events arrive, clear the pending permission
   if (CLEAR_EVENTS.has(event.eventType)) {
     const prevPerm = prev?.permission ?? null;
     return prevPerm === null ? null : { permission: null };
   }
 
-  // 只处理 permission_request / control_request
+  // Only process permission_request / control_request
   if (event.eventType !== "permission_request" && event.eventType !== "control_request") {
     return null;
   }

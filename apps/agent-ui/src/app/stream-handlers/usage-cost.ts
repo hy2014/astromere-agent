@@ -11,7 +11,7 @@ export type UsageData = {
   records: Record<string, ModelCallUsage>;
 };
 
-// ── Pricing cache（跟原来一样，fire-and-forget 加载一次）────────────
+// ── Pricing cache (same as before, fire-and-forget loaded once) ────────────
 
 let pricingSettings: any = null;
 loadModelSettings()
@@ -24,7 +24,7 @@ export function handleUsageEvent(
   event: AgentReplStreamEvent,
   prevData: UsageData | null,
 ): UsageData | null {
-  // 从 raw_json 提取 assistant 消息
+  // Extract the assistant message from raw_json
   const rawJson = event.payload?.raw_json as Record<string, unknown> | undefined;
   if (!rawJson || rawJson.type !== "assistant") return null;
 
@@ -37,7 +37,7 @@ export function handleUsageEvent(
   const usage = message.usage as Record<string, unknown> | undefined;
   if (!usage) return null;
 
-  // 计算 cost
+  // Calculate cost
   let costAmount: number | null = null;
   if (pricingSettings) {
     const cost = calculateBundleUsageCostFromDeepSeekPricing(
@@ -53,7 +53,7 @@ export function handleUsageEvent(
     costAmount = cost?.costAmount ?? null;
   }
 
-  // 构建新的 record
+  // Build the new record
   const newRecord: ModelCallUsage = {
     modelCallId: messageId,
     sessionId: event.sessionId,
@@ -69,7 +69,7 @@ export function handleUsageEvent(
     costAmount,
   };
 
-  // diff：token 没变化就不写 DB、不更新 store
+  // diff: if tokens are unchanged, don't write to DB or update the store
   const prevRecord = prevData?.records?.[messageId];
   if (
     prevRecord &&
@@ -78,10 +78,10 @@ export function handleUsageEvent(
     prevRecord.cacheReadInputTokens === newRecord.cacheReadInputTokens &&
     prevRecord.cacheCreationInputTokens === newRecord.cacheCreationInputTokens
   ) {
-    return null; // 无变更，bus 会传递 prevData 给 callback
+    return null; // No change; the bus passes prevData to the callback
   }
 
-  // 有变更 -> 写 DB -> 更新 store
+  // Has changes -> write to DB -> update store
   saveModelCallUsage(newRecord);
 
   return {

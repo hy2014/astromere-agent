@@ -6,7 +6,7 @@ export type DagListViewProps = {
 };
 
 // Center landing view in dag mode: a catalog table of every *published* DAG.
-// Columns: name / description / cron / action(进入). Clicking 进入 jumps to
+// Columns: name / description / cron / action(Enter). Clicking Enter jumps to
 // that DAG's detail canvas (handled by the parent via onEnter).
 export function DagListView({dags, onEnter}: DagListViewProps) {
   const published = dags.filter((dag) => dag.status === "published");

@@ -3,24 +3,24 @@ import * as ts from "typescript";
 import { RuleContext } from "../types";
 
 /**
- * 检查 View 层（导出函数）是否包含禁止的条件表达式：
- * 1. 禁止 && 表达式
- * 2. 禁止三元表达式
- * 3. 禁止 if 语句（除了 if (xxx) return null; 这种在 renderFn 内允许，View 层不允许）
+ * Check whether the View layer (exported function) contains forbidden conditional expressions:
+ * 1. Forbid && expressions
+ * 2. Forbid ternary expressions
+ * 3. Forbid if statements (except `if (xxx) return null;`, which is allowed inside renderFn but not in the View layer)
  *
- * View 层只允许直接调用 render(...)
+ * The View layer may only directly call render(...)
  */
 export function checkViewLayer(ctx: RuleContext, viewFn: ts.Node | null): void {
     if (!viewFn) return;
 
-    // 只检查 View 函数本身，不深入 renderFn
+    // Only check the View function itself; do not descend into renderFn
     const body = ts.isArrowFunction(viewFn)
         ? viewFn.body
         : (viewFn as ts.FunctionDeclaration).body;
 
     if (!body) return;
 
-    // ========== 收集 View 层所有 state/派生变量 ==========
+    // ========== Collect all View-layer state/derived variables ==========
     const allStateVars = new Set(ctx.stateVars);
     ctx.memoVars.forEach(v => allStateVars.add(v));
 
@@ -54,7 +54,7 @@ export function checkViewLayer(ctx: RuleContext, viewFn: ts.Node | null): void {
         body.statements.forEach(collectDerivedVars);
     }
 
-    // 2. 禁止 if 语句（View 层不应该有任何条件分支）
+    // 2. Forbid if statements (the View layer should not have any conditional branches)
     function checkStatement(node: ts.Node) {
         if (ts.isIfStatement(node)) {
             ctx.addViolation(
@@ -66,7 +66,7 @@ export function checkViewLayer(ctx: RuleContext, viewFn: ts.Node | null): void {
         ts.forEachChild(node, checkStatement);
     }
 
-    // 2a. 禁止 && 和三元表达式
+    // 2a. Forbid && and ternary expressions
     function checkExpression(node: ts.Node) {
         if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
             ctx.addViolation(
@@ -92,7 +92,7 @@ export function checkViewLayer(ctx: RuleContext, viewFn: ts.Node | null): void {
     }
     checkExpression(body);
 
-    // 3. 检查 View 层 JSX 中是否有直接引用 state/派生变量的非 renderFn 元素
+    // 3. Check whether the View-layer JSX directly references state/derived variables in non-renderFn elements
     function checkJsxStateUsage(node: ts.Node) {
         if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
             const tagName = node.tagName.getText();
@@ -135,10 +135,10 @@ export function checkViewLayer(ctx: RuleContext, viewFn: ts.Node | null): void {
     }
     checkJsxStateUsage(body);
 
-    // 4. 禁止文件内所有函数直接引用子组件（必须通过 render() API）
-    // 全量扫描 sourceFile，覆盖 View 函数和所有 renderFn 的内部
+    // 4. Forbid all file functions from directly referencing sub-components (must go through the render() API)
+    // Scan the entire sourceFile, covering the View function and the internals of all renderFns
     function checkComponentUsage(node: ts.Node) {
-        // 4a. 禁止 <Xxxx /> JSX 标签
+        // 4a. Forbid <Xxxx /> JSX tags
         if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
             const tagName = node.tagName.getText();
             if (tagName === "render" || tagName.endsWith(".render")) return;
@@ -152,7 +152,7 @@ export function checkViewLayer(ctx: RuleContext, viewFn: ts.Node | null): void {
             }
         }
 
-        // 4b. 禁止直接函数调用 {ComponentName(...)}（在 JSX 表达式内部）
+        // 4b. Forbid direct function calls {ComponentName(...)} (inside JSX expressions)
         if (ts.isJsxExpression(node)) {
             const expr = node.expression;
             if (expr && ts.isCallExpression(expr)) {
@@ -160,7 +160,7 @@ export function checkViewLayer(ctx: RuleContext, viewFn: ts.Node | null): void {
             }
         }
 
-        // 4c. 禁止直接函数调用 ComponentName(...)（在 JSX 表达式之外，如 return ComponentName(...)）
+        // 4c. Forbid direct function calls ComponentName(...) (outside JSX expressions, e.g. return ComponentName(...))
         if (ts.isCallExpression(node) && !ts.isJsxExpression(node.parent)) {
             checkUppercaseCall(node, node);
         }

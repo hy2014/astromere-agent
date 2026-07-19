@@ -122,43 +122,48 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   // When true, the right-hand panel shows the "register new component" form
   // instead of the per-node PropertiesPanel.
   const [registering, setRegistering] = useState(false);
-  // The component being edited via the sidebar kebab "修改" (null = creating new).
+  // The component being edited via the sidebar kebab "edit" menu (null = creating new).
   // Reuses the same RegisterComponentForm in edit mode.
   const [editingComponent, setEditingComponent] = useState<Component | null>(null);
-  // The component being viewed read-only via the sidebar kebab "查看" (null =
+  // The component being viewed read-only via the sidebar kebab "view" menu (null =
   // not viewing). Reuses the same RegisterComponentForm in view mode.
   const [viewingComponent, setViewingComponent] = useState<Component | null>(null);
   // Running a DAG is a DAG-level action (lives in the top toolbar, not the
-  // per-node "执行历史" tab). The button is bound to the *real* execution
+  // per-node "execution history" tab). The button is bound to the *real* execution
   // lifecycle: while the latest execution for this DAG is non-terminal the
-  // button is disabled ("已提交，执行中…"); it re-enables only once the run
+  // button is disabled ("submitted, running…"); it re-enables only once the run
   // reaches a terminal state. `runSignal` bumps after each run so the history
   // list refreshes even though it sits in a node tab.
   const [latestExec, setLatestExec] = useState<DagExecution | null>(null);
   const [runSignal, setRunSignal] = useState(0);
 
-  // ── dag pure-HTTP 连接门控 ─────────────────────────────────────────
-  // dag 模式没有 local 模式，必须连上远程 server 才能用。connected=false 时
-  // 整页被连接遮罩挡住，所有 dag 功能不可用。showConnect 用于「设置」里重新修改服务器地址。
+  // ── dag pure-HTTP connection gating ───────────────────────────────
+  // dag mode has no local mode; it must connect to a remote server to work.
+  // When connected=false the whole page is covered by the connection overlay
+  // and all dag features are unavailable. showConnect re-opens the modal from
+  // "Settings" to re-edit the server address.
   const [connected, setConnected] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
-  // 右侧「执行历史」视图开关：点顶部工具栏「执行历史」打开，选中节点时自动退出。
+  // Toggle for the right-hand "Execution History" view: opened via the top
+  // toolbar's "Execution History" button; auto-closes when a node is selected.
   const [showExecHistory, setShowExecHistory] = useState(false);
-  // 节点输出数据预览：点右键菜单「预览数据」时设置；为 null 时不渲染弹框。
+  // Node output-data preview: set when the right-click menu's "Preview Data"
+  // is clicked; when null the modal is not rendered.
   const [previewNode, setPreviewNode] = useState<{nodeId: string; label: string} | null>(null);
   // Center view in dag mode: "list" = published-DAG catalog table (the default
   // landing when entering dag mode), "detail" = the selected DAG's canvas.
-  // Clicking "进入" in the table (or a DAG in the sidebar) switches to detail.
+  // Clicking "enter" in the table (or a DAG in the sidebar) switches to detail.
   const [centerView, setCenterView] = useState<"list" | "detail">("list");
 
-  // 成功提示自动消失
+  // Success toast auto-dismisses.
   useEffect(() => {
     if (!successToast) return;
     const timer = setTimeout(() => setSuccessToast(null), 2500);
     return () => clearTimeout(timer);
   }, [successToast]);
 
-  // 挂载时检查：已有配置则探活，通了才放行；否则弹连接框。
+  // On mount: if a config exists, probe health; only proceed if it responds;
+  // otherwise show the connect modal.
   useEffect(() => {
     const profile = loadDagServer();
     if (!profile) {
@@ -182,7 +187,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
     };
   }, []);
 
-  // Poll the latest execution status so the "运行 DAG" button tracks the real
+  // Poll the latest execution status so the "Run DAG" button tracks the real
   // run lifecycle. Cheap for a single active DAG; only setState when the
   // (id, status) actually changes to avoid a re-render every tick.
   useEffect(() => {
@@ -350,7 +355,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
       // on the first render right after a drop the new node is still absent
       // from activeDagDetail.nodes, so selectedNode (and therefore its
       // component) can't be resolved — the right panel flashes
-      // "该节点未关联组件，无法编辑配置。" until updateDag's callback lands.
+      // "the node has no associated component, so its config can't be edited." until updateDag's callback lands.
       setActiveDagDetail((prev) =>
         prev ? {...prev, nodes, edges, updatedAtMs: updatedDag.updatedAtMs} : null,
       );
@@ -463,7 +468,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
       // Self-heal: if the selected node is bound to a component that isn't in
       // the in-memory store yet (the DB has it, but the store was never seeded
       // for this node), fetch it so the config panel resolves instead of
-      // dead-ending on "该节点未关联组件，无法编辑配置。".
+      // dead-ending on "the node has no associated component, so its config can't be edited.".
       const node = activeDagDetail?.nodes.find((n) => n.id === nodeId);
       if (!node?.componentId) return;
       // Read the store directly (not the React `components` state) so this
@@ -552,7 +557,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   );
 
   // Open the edit-mode form for an existing registered component (sidebar
-  // kebab "修改"). Reuses RegisterComponentForm; submit calls updateComponent,
+  // kebab "edit"). Reuses RegisterComponentForm; submit calls updateComponent,
   // preserving the component_id so canvas references stay intact.
   const handleEditComponent = useCallback((component: Component) => {
     setEditingComponent(component);
@@ -560,7 +565,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   }, []);
 
   // Open the read-only view for an existing registered component (sidebar
-  // kebab "查看"). Reuses RegisterComponentForm in view mode.
+  // kebab "view"). Reuses RegisterComponentForm in view mode.
   const handleViewComponent = useCallback((component: Component) => {
     setViewingComponent(component);
   }, []);

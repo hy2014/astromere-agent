@@ -57,7 +57,7 @@ test("FnVibe: status has params", () => {
   const vibe = rule.make(DUMMY_PARENT, sf.statements[0]);
   const r = vibe.resolve();
   if ("violations" in r) throw new Error(`violation: ${r.violations[0].message}`);
-  // params 在 status 中，body vars 在 BodyVibe.status 中
+  // params are in status; body vars are in BodyVibe.status
   const declared = vibe.status.filter((s): s is DeclaredVarStatus => s instanceof DeclaredVarStatus);
   const names = declared.map((s) => s.name).sort();
   if (JSON.stringify(names) !== JSON.stringify(["a", "b"])) {
@@ -66,7 +66,7 @@ test("FnVibe: status has params", () => {
 });
 
 test("FnVibe: body var assignment finds param", () => {
-  // a 是参数，body 里 a = 5 应该合法
+  // a is a param; a = 5 inside body should be legal
   const sf = parse(`function foo(a: number) { a = 5; }`);
   const rule = FnVibe.rule(DUMMY_PARENT);
   const vibe = rule.make(DUMMY_PARENT, sf.statements[0]);

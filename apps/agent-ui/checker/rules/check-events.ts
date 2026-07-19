@@ -65,10 +65,10 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
 
         const eventNames = new Set(rf.eventsParams);
 
-        // ── 规则 1：onXxx 绑定必须是 events 中解构的标识符 ──
-        // 允许：
-        //   onClick={handleClick}           — 直接引用
-        //   onClick={(e) => handleClick(a)} — 单行参数适配
+        // ── Rule 1: onXxx binding must be an identifier destructured from events ──
+        // Allowed:
+        //   onClick={handleClick}           — direct reference
+        //   onClick={(e) => handleClick(a)} — single-line param adaptation
         function checkEventBindingStyle(node: ts.Node) {
             ts.forEachChild(node, (n) => {
                 if (ts.isJsxAttribute(n) && ts.isIdentifier(n.name) && /^on[A-Z]/.test(n.name.text)) {
@@ -76,12 +76,12 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
                     if (init && ts.isJsxExpression(init) && init.expression) {
                         const expr = init.expression;
 
-                        // 直接引用：onClick={handleClick}
+                        // Direct reference: onClick={handleClick}
                         if (ts.isIdentifier(expr) && eventNames.has(expr.text)) {
                             return;
                         }
 
-                        // 箭头适配：onClick={(e) => handleClick(a, b)}
+                        // Arrow adaptation: onClick={(e) => handleClick(a, b)}
                         if (ts.isArrowFunction(expr)) {
                             const arrowBody = expr.body;
                             if (ts.isCallExpression(arrowBody)) {
@@ -118,11 +118,11 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
         }
         checkEventBindingStyle(body);
 
-        // ── 规则 2：events 一致性 ──
+        // ── Rule 2: events consistency ──
         const usedEvents = new Set<string>();
         function collectUsed(node: ts.Node) {
             if (ts.isIdentifier(node) && eventNames.has(node.text)) {
-                // 排除属性访问 obj.xxx 中的标识符
+                // Exclude identifiers in property access obj.xxx
                 if (!(node.parent && ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)) {
                     usedEvents.add(node.text);
                 }
@@ -134,7 +134,7 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
         const hasChild = hasChildRenderCall(body);
 
         if (!hasChild) {
-            // 收集绑定了的事件（直接引用或箭头适配）
+            // Collect events that were bound (direct reference or arrow adaptation)
             const boundEvents = new Set<string>();
             function collectBound(node: ts.Node) {
                 if (ts.isJsxAttribute(node) && ts.isIdentifier(node.name) && /^on[A-Z]/.test(node.name.text)) {
@@ -205,7 +205,7 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
             }
         }
 
-        // ── 规则 3：未使用的 events ──
+        // ── Rule 3: unused events ──
         const unusedEvents = rf.eventsParams.filter(e => !isIdentifierUsed(body, e));
         if (unusedEvents.length > 0) {
             ctx.addViolation(
@@ -215,7 +215,7 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
             );
         }
 
-        // ── 规则 4：子 render() 调用的 events 必须是当前 events 的子集 ──
+        // ── Rule 4: events passed to child render() calls must be a subset of current events ──
         function checkChildRenderEvents(node: ts.Node) {
             if (ts.isCallExpression(node) &&
                 ts.isIdentifier(node.expression) &&
@@ -235,8 +235,8 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
                 if (!eventsObj || !ts.isObjectLiteralExpression(eventsObj)) return;
 
                 for (const prop of eventsObj.properties) {
-                    // 规则 4：子集检查 — 每个 events 变量必须在当前 renderFn 的 events 参数中
-                    // 只检查简写属性 { a, b }，非简写 { a: xxx } 由规则 5 负责
+                    // Rule 4: subset check — every events variable must be present in the current renderFn's events parameter
+                    // Only shorthand properties { a, b } are checked; non-shorthand { a: xxx } is handled by Rule 5
                     if (!ts.isShorthandPropertyAssignment(prop)) continue;
                     const varName = prop.name.text;
                     if (!eventNames.has(varName)) {
@@ -253,9 +253,9 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
     }  // end checkChildRenderEvents
     }  // end for (const rf of renderFns)
 
-    // ── 规则 5：所有 render() 调用的 events 属性必须使用简写形式 ──
-    // 允许：events: { a, b, c }      简写
-    // 禁止：events: { a: xxx }       显式映射
+    // ── Rule 5: the events property of all render() calls must use shorthand form ──
+    // Allowed: events: { a, b, c }      shorthand
+    // Forbidden: events: { a: xxx }       explicit mapping
     function checkEventsShorthand(node: ts.Node) {
         if (ts.isCallExpression(node) &&
             ts.isIdentifier(node.expression) &&
@@ -291,8 +291,8 @@ export function checkEvents(ctx: RuleContext, renderFns: RenderFnInfo[]): void {
     checkEventsShorthand(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则 6：禁止所有函数参数使用默认值，必须显式传参
-    // 常量默认值（数字、字符串、布尔值等）豁免
+    // Rule 6: forbid default values for all function parameters; arguments must be passed explicitly
+    // Constant default values (numbers, strings, booleans, etc.) are exempt
     // ════════════════════════════════════════════════════════
     function isConstantLiteral(expr: ts.Expression): boolean {
         return ts.isStringLiteral(expr) ||

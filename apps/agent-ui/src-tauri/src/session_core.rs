@@ -1,5 +1,5 @@
 // ─── session_core.rs — Session management pure functions ───────────────
-// Tauri IPC 和 HTTP 共用的核心逻辑，不依赖任何框架。
+// Core logic shared by Tauri IPC and HTTP; does not depend on any framework.
 
 use std::fs;
 
@@ -11,7 +11,7 @@ use crate::utils::{
     now_millis, parse_jsonl_messages,
 };
 
-/// 列出 root 下的所有 session
+/// List all sessions under `root`.
 pub fn list_sessions(root: &str) -> Result<Vec<RuntimeSessionSummary>, String> {
     let root_path = canonical_workspace_root(root)?;
     let sessions_dir = claude_project_sessions_dir(&root_path)?;
@@ -25,7 +25,7 @@ pub fn list_sessions(root: &str) -> Result<Vec<RuntimeSessionSummary>, String> {
     Ok(sessions)
 }
 
-/// 加载指定 session 的完整数据（JSONL messages）
+/// Load the full data (JSONL messages) of the specified session.
 pub fn load_session(root: &str, reference: &str) -> Result<Value, String> {
     let root_path = canonical_workspace_root(root)?;
     let sessions = list_sessions(root)?;
@@ -67,7 +67,7 @@ pub fn load_session(root: &str, reference: &str) -> Result<Value, String> {
     }
 }
 
-/// 创建新 session（仅占位，不创建 JSONL 文件）
+/// Create a new session (placeholder only; does not create a JSONL file).
 pub fn create_session(root: &str) -> Result<RuntimeSessionSummary, String> {
     let root_path = canonical_workspace_root(root)?;
     let id = format!("new-{}", now_millis());
@@ -128,7 +128,7 @@ mod tests {
     fn test_list_sessions_sorts_by_mtime_desc() {
         let (_tmp, root) = setup_temp_root();
         let sessions = list_sessions(&root).unwrap();
-        // 后创建的文件 mtime 更大，应该排前面
+        // The later-created file has a larger mtime and should sort first.
         assert!(sessions[0].modified_epoch_millis >= sessions[1].modified_epoch_millis);
     }
 
@@ -160,7 +160,7 @@ mod tests {
     fn test_session_id_preserved_on_load() {
         let (_tmp, root) = setup_temp_root();
         let detail = load_session(&root, "abc123").unwrap();
-        // sessionId 和 JSONL 文件名一致
+        // sessionId matches the JSONL file name.
         assert_eq!(detail["id"], "abc123");
     }
 
@@ -168,7 +168,7 @@ mod tests {
     fn test_empty_sessions_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap().to_string();
-        // 创建 sessions 目录但不放文件
+        // Create the sessions directory but place no files in it.
         let sessions_dir = claude_project_sessions_dir(Path::new(&root)).unwrap();
         fs::create_dir_all(&sessions_dir).unwrap();
 

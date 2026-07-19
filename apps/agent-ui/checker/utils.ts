@@ -5,7 +5,7 @@ import * as path from "path";
 import {RuleContext} from "./types";
 
 /**
- * 判断 node 是否在 ancestor 的子树内
+ * Check whether node is inside the subtree of ancestor
  */
 export function isNodeInside(node: ts.Node, ancestor: ts.Node): boolean {
     let current: ts.Node | undefined = node;
@@ -17,7 +17,7 @@ export function isNodeInside(node: ts.Node, ancestor: ts.Node): boolean {
 }
 
 /**
- * 判断节点是否在 useEffect/useLayoutEffect 回调内部
+ * Check whether node is inside a useEffect/useLayoutEffect callback
  */
 export function isInsideEffect(node: ts.Node): boolean {
     let current = node.parent;
@@ -40,7 +40,7 @@ export function isInsideEffect(node: ts.Node): boolean {
 }
 
 /**
- * 判断节点是否在事件处理器（onClick 等 onXxx 属性）内部
+ * Check whether node is inside an event handler (onXxx props such as onClick)
  */
 export function isInsideEventHandler(node: ts.Node): boolean {
     let current = node.parent;
@@ -56,7 +56,7 @@ export function isInsideEventHandler(node: ts.Node): boolean {
     return false;
 }
 /**
- * 收集 useState 声明的 state 变量名
+ * Collect state variable names declared via useState
  */
 export function collectStateVars(sourceFile: ts.SourceFile): Set<string> {
     const stateVars = new Set<string>();
@@ -80,12 +80,12 @@ export function collectStateVars(sourceFile: ts.SourceFile): Set<string> {
     return stateVars;
 }
 /**
- * 收集组件 Props 接口的变量名
- * 规则：
- * 1. 只允许一个 export function XxxxView
- * 2. 无参数 → propVars 为空
- * 3. 有参数 → 必须有对应的 interface XxxxProps
- * 返回 { propVars, viewFn }，viewFn 是组件函数节点，用于后续收集 state
+ * Collect variable names from the component's Props interface
+ * Rules:
+ * 1. Only one export function XxxxView is allowed
+ * 2. No params → propVars is empty
+ * 3. Has params → must have a corresponding interface XxxxProps
+ * Returns { propVars, viewFn }, where viewFn is the component function node, used later to collect state
  */
 export function collectPropVars(sourceFile: ts.SourceFile, ctx: RuleContext): {
     propVars: Set<string>;
@@ -97,9 +97,9 @@ export function collectPropVars(sourceFile: ts.SourceFile, ctx: RuleContext): {
     let propsInterfaceCount = 0;
     const propsInterfaces = new Map<string, ts.InterfaceDeclaration>();
 
-    // 第一遍：找 export function 和 interface XxxxProps
+    // Pass 1: find export function and interface XxxxProps
     function collect(node: ts.Node) {
-        // 收集 export function XxxxView
+        // Collect export function XxxxView
         if (ts.isFunctionDeclaration(node) && isExportNode(node) && node.name) {
             exportFnCount++;
             if (/View$/.test(node.name.text)) {
@@ -107,7 +107,7 @@ export function collectPropVars(sourceFile: ts.SourceFile, ctx: RuleContext): {
             }
         }
 
-        // 收集 export const XxxxView = () => {}
+        // Collect export const XxxxView = () => {}
         if (ts.isVariableStatement(node) && isExportNode(node)) {
             for (const decl of node.declarationList.declarations) {
                 if (ts.isIdentifier(decl.name) && /View$/.test(decl.name.text)) {
@@ -119,7 +119,7 @@ export function collectPropVars(sourceFile: ts.SourceFile, ctx: RuleContext): {
             }
         }
 
-        // 收集所有 interface XxxxProps
+        // Collect all interface XxxxProps
         if (ts.isInterfaceDeclaration(node) && /Props$/.test(node.name.text)) {
             propsInterfaceCount++;
             propsInterfaces.set(node.name.text, node);
@@ -129,7 +129,7 @@ export function collectPropVars(sourceFile: ts.SourceFile, ctx: RuleContext): {
     }
     collect(sourceFile);
 
-    // 检查 export function 数量
+    // Check export function count
     if (exportFnCount === 0) {
         ctx.addViolation("Props 定义规范", "文件必须有一个 export function XxxxView 组件。");
     }
@@ -144,14 +144,14 @@ export function collectPropVars(sourceFile: ts.SourceFile, ctx: RuleContext): {
         return { propVars, viewFn }
     }
 
-    // 检查参数
+    // Check parameters
     const params = viewFn.parameters;
     if (!params || params.length === 0) {
-        // 无参数，propVars 为空
+        // No params: propVars is empty
         return { propVars, viewFn };
     }
 
-    // 有参数，必须有对应的 Props 接口
+    // Has params: must have a corresponding Props interface
     if (propsInterfaceCount === 0) {
         ctx.addViolation("Props 定义规范", "组件有参数但未定义 interface XxxxProps。")
         return { propVars, viewFn };
@@ -161,7 +161,7 @@ export function collectPropVars(sourceFile: ts.SourceFile, ctx: RuleContext): {
         return { propVars, viewFn };
     }
 
-    // 从 Props 接口收集属性
+    // Collect properties from the Props interface
     const propsInterface = propsInterfaces.values().next().value;
     for (const member of propsInterface.members) {
         if (ts.isPropertySignature(member) && ts.isIdentifier(member.name)) {
@@ -178,7 +178,7 @@ function isExportNode(node: ts.Node): boolean {
 }
 
 /**
- * 获取指定行的代码文本
+ * Get the code text of the specified line
  */
 export function getCodeLine(sourceCode: string, line: number): string {
     const lines = sourceCode.split(/\r?\n/);
@@ -189,7 +189,7 @@ export function getCodeLine(sourceCode: string, line: number): string {
 }
 
 /**
- * 判断节点是否是 dep() 调用表达式
+ * Check whether node is a dep() call expression
  */
 export function isDepCall(node: ts.Node): boolean {
     return ts.isCallExpression(node) &&
@@ -198,8 +198,8 @@ export function isDepCall(node: ts.Node): boolean {
 }
 
 /**
- * 解析 import 声明，确认导入的组件是否确实是其他文件的 viewFn
- * 只解析相对路径（./ ../），跳过 node_modules
+ * Resolve import declarations, confirming the imported component is indeed a viewFn from another file
+ * Only resolve relative paths (./ ../), skip node_modules
  */
 export function resolveImportedViewFns(sourceFile: ts.SourceFile, fsPath: string): Set<string> {
     const viewFnNames = new Set<string>();
@@ -234,7 +234,7 @@ export function resolveImportedViewFns(sourceFile: ts.SourceFile, fsPath: string
     function resolvePath(modulePath: string, names: string[]) {
         const base = path.resolve(dir, modulePath);
 
-        // 尝试直接文件：.tsx / .ts
+        // Try direct file: .tsx / .ts
         for (const ext of [".tsx", ".ts"]) {
             const target = base + ext;
             for (const name of names) {
@@ -242,10 +242,10 @@ export function resolveImportedViewFns(sourceFile: ts.SourceFile, fsPath: string
                     viewFnNames.add(name);
                 }
             }
-            if ([...viewFnNames].some(n => names.includes(n))) return; // 找到了就不继续
+            if ([...viewFnNames].some(n => names.includes(n))) return; // Stop if found
         }
 
-        // 尝试 index 文件：dir/index.tsx / dir/index.ts
+        // Try index file: dir/index.tsx / dir/index.ts
         for (const ext of [".tsx", ".ts"]) {
             const target = path.join(base, "index" + ext);
             for (const name of names) {
@@ -261,7 +261,7 @@ export function resolveImportedViewFns(sourceFile: ts.SourceFile, fsPath: string
         if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
 
         const modulePath = stmt.moduleSpecifier.text;
-        // 只解析相对路径
+        // Only resolve relative paths
         if (!modulePath.startsWith(".")) continue;
 
         const names: string[] = [];
@@ -287,7 +287,7 @@ export function resolveImportedViewFns(sourceFile: ts.SourceFile, fsPath: string
 }
 
 /**
- * 解析 import 的 viewFn 的目标文件，返回它的 Props 接口字段名
+ * Resolve the target file of the imported viewFn, return its Props interface field names
  */
 export function getViewFnPropNames(
     viewFnName: string,
@@ -313,7 +313,7 @@ export function getViewFnPropNames(
         if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
         if (!stmt.importClause) continue;
 
-        // 检查这个 import 里是否包含目标 viewFn 名
+        // Check whether this import contains the target viewFn name
         let hasName = false;
         if (stmt.importClause.name && stmt.importClause.name.text === viewFnName) hasName = true;
         if (!hasName && stmt.importClause.namedBindings && ts.isNamedImports(stmt.importClause.namedBindings)) {

@@ -403,7 +403,7 @@ def _detect_python(log_fn=None):
     ]
     for base in bases:
         if not os.path.isdir(base):
-            continue  # 基目录不存在则跳过，不写入日志噪音
+            continue  # skip if the base dir does not exist, to avoid log noise
         if log_fn:
             log_fn("info", f"检测到 conda/anaconda 基目录: {base}")
         for sub in ("bin/python3.10", "bin/python3", "Scripts/python.exe", "python3.exe"):

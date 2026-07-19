@@ -20,7 +20,7 @@ export function checkRenderView(
     fsPath?: string,
 ): void {
     // ════════════════════════════════════════════════════════
-    // 规则 1: 禁止本地声明 renderView 函数，必须从 core/dep 导入
+    // Rule 1: forbid locally declaring renderView; it must be imported from core/dep
     // ════════════════════════════════════════════════════════
     for (const stmt of ctx.sourceFile.statements) {
         if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.name.text === "renderView") {
@@ -36,7 +36,7 @@ export function checkRenderView(
     }
 
     // ════════════════════════════════════════════════════════
-    // 规则 2: renderView 只能在 renderFn 函数内调用
+    // Rule 2: renderView may only be called inside a renderFn function
     // ════════════════════════════════════════════════════════
     function checkRenderViewContext(node: ts.Node) {
         if (ts.isCallExpression(node) &&
@@ -66,8 +66,8 @@ export function checkRenderView(
     checkRenderViewContext(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则 3: 禁止使用 createElement 渲染元素/组件
-    // 必须用 JSX 或 renderView 代替
+    // Rule 3: forbid using createElement to render elements/components
+    // Must use JSX or renderView instead
     // ════════════════════════════════════════════════════════
     function checkCreateElement(node: ts.Node) {
         if (ts.isCallExpression(node) && node.arguments.length > 0) {
@@ -79,7 +79,7 @@ export function checkRenderView(
                     callee.name.text === "createElement");
 
             if (isCreateElement) {
-                // 检查是否在 View 函数内（View 的 JSX 编译产物不在此检查范围，因源码不包含 createElement）
+                // Check whether we are inside a View function (the JSX compilation output of a View is out of scope, since the source does not contain createElement)
                 let inView = false;
                 let cur = node.parent;
                 while (cur) {
@@ -108,9 +108,9 @@ export function checkRenderView(
     checkCreateElement(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则 4: renderView 的 fn 必须是直接 import 的 View，不能是本地声明或内联
+    // Rule 4: renderView's fn must be a directly imported View, not a local declaration or inline
     // ════════════════════════════════════════════════════════
-    // 收集所有 import 进来的名称
+    // Collect all imported names
     const importedNames = new Set<string>();
     for (const stmt of ctx.sourceFile.statements) {
         if (ts.isImportDeclaration(stmt) && stmt.importClause) {
@@ -144,19 +144,19 @@ export function checkRenderView(
 
             const fnValue = fnProp.initializer;
 
-            // 内联箭头函数/函数表达式 → 违规
+            // inline arrow function / function expression → violation
             if (ts.isArrowFunction(fnValue) || ts.isFunctionExpression(fnValue)) {
                 ctx.addViolation("renderView 规范", "renderView 的 fn 不能是内联函数，必须使用 import 的 View 组件", fnProp);
                 return;
             }
 
-            // 非标识符（如 CallExpression：getView()）→ 违规
+            // non-identifier (e.g. CallExpression: getView()) → violation
             if (!ts.isIdentifier(fnValue)) {
                 ctx.addViolation("renderView 规范", "renderView 的 fn 必须直接引用 import 的 View 组件，不能使用表达式", fnProp);
                 return;
             }
 
-            // 是标识符但非 import 的 → 本地声明的，违规
+            // is an identifier but not imported → locally declared, violation
             if (!importedNames.has(fnValue.text)) {
                 ctx.addViolation(
                     "renderView 规范",
@@ -170,8 +170,8 @@ export function checkRenderView(
     checkRenderViewFn(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则 5: 已确认的 viewFn（来自其他文件的 import）不能出现在函数参数列表中
-    // 禁止作为参数名、参数默认值、参数类型引用
+    // Rule 5: an already-confirmed viewFn (imported from another file) must not appear in a function parameter list
+    // Forbidden as a parameter name, parameter default value, or parameter type reference
     // ════════════════════════════════════════════════════════
     function checkViewInParams(node: ts.Node) {
         if (ts.isFunctionDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
@@ -188,14 +188,14 @@ export function checkRenderView(
                 }
                 findViewRef(param);
             }
-            return; // 不进入函数体，只检查参数列表
+            return; // Do not enter the function body, only check the parameter list
         }
         ts.forEachChild(node, checkViewInParams);
     }
     checkViewInParams(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则 6: renderView 的 props 必须是调用者 state ∪ events 的子集
+    // Rule 6: renderView's props must be a subset of the caller's state ∪ events
     // ════════════════════════════════════════════════════════
     function checkRenderViewProps(node: ts.Node) {
         if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression) || node.expression.text !== "renderView") {
@@ -203,7 +203,7 @@ export function checkRenderView(
             return;
         }
 
-        // 找调用者
+        // Find the caller
         let callingFn: ts.Node | null = null;
         let cur: ts.Node | undefined = node.parent;
         while (cur) {
@@ -214,12 +214,12 @@ export function checkRenderView(
             cur = cur.parent;
         }
 
-        // 获取调用者的 state ∪ events keys
+        // Get the caller's state ∪ events keys
         let allowedKeys: Set<string>;
         if (callingFn && isRenderFn(callingFn)) {
             const params = (callingFn as ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression).parameters;
             allowedKeys = new Set();
-            // state: 第一个参数
+            // state: first parameter
             if (params.length >= 1 && ts.isObjectBindingPattern(params[0].name)) {
                 for (const elem of params[0].name.elements) {
                     if (ts.isBindingElement(elem) && ts.isIdentifier(elem.name)) {
@@ -227,7 +227,7 @@ export function checkRenderView(
                     }
                 }
             }
-            // props: 第二个参数
+            // props: second parameter
             if (params.length >= 2 && ts.isObjectBindingPattern(params[1].name)) {
                 for (const elem of params[1].name.elements) {
                     if (ts.isBindingElement(elem) && ts.isIdentifier(elem.name)) {
@@ -235,7 +235,7 @@ export function checkRenderView(
                     }
                 }
             }
-            // events: 第三个参数
+            // events: third parameter
             if (params.length >= 3 && ts.isObjectBindingPattern(params[2].name)) {
                 for (const elem of params[2].name.elements) {
                     if (ts.isBindingElement(elem) && ts.isIdentifier(elem.name)) {
@@ -244,7 +244,7 @@ export function checkRenderView(
                 }
             }
         } else {
-            // View 层：state ∪ props（events 来自 props）
+            // View layer: state ∪ props (events come from props)
             allowedKeys = new Set([...ctx.stateVars, ...ctx.propVars]);
         }
 
@@ -287,7 +287,7 @@ export function checkRenderView(
     checkRenderViewProps(ctx.sourceFile);
 
     // ════════════════════════════════════════════════════════
-    // 规则 7: renderView 的 props 必须匹配目标 viewFn 的 Props 接口
+    // Rule 7: renderView's props must match the target viewFn's Props interface
     // ════════════════════════════════════════════════════════
     function checkRenderViewPropMatch(node: ts.Node) {
         if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression) || node.expression.text !== "renderView") {
@@ -300,7 +300,7 @@ export function checkRenderView(
         const arg0 = node.arguments[0];
         if (!arg0 || !ts.isObjectLiteralExpression(arg0)) { ts.forEachChild(node, checkRenderViewPropMatch); return; }
 
-        // 取 fn
+        // Get fn
         const fnProp = arg0.properties.find(
             p => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "fn"
         ) as ts.PropertyAssignment | undefined;
@@ -309,7 +309,7 @@ export function checkRenderView(
         const fnValue = fnProp.initializer;
         if (!ts.isIdentifier(fnValue)) { ts.forEachChild(node, checkRenderViewPropMatch); return; }
 
-        // 取 props
+        // Get props
         const propsProp = arg0.properties.find(
             p => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "props"
         ) as ts.PropertyAssignment | undefined;
@@ -318,7 +318,7 @@ export function checkRenderView(
         const propsObj = unwrapExpression(propsProp.initializer);
         if (!ts.isObjectLiteralExpression(propsObj)) { ts.forEachChild(node, checkRenderViewPropMatch); return; }
 
-        // 解析目标 viewFn 的 Props
+        // Resolve the target viewFn's Props
         const targetProps = getViewFnPropNames(fnValue.text, ctx.sourceFile, fsPath);
         if (!targetProps) { ts.forEachChild(node, checkRenderViewPropMatch); return; }
 

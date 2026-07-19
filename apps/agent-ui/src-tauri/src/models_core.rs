@@ -1,5 +1,5 @@
 // ─── models_core.rs — Model settings pure functions ───────────────────
-// Tauri IPC 和 HTTP 共用的核心逻辑，不依赖任何框架。
+// Core logic shared by Tauri IPC and HTTP; does not depend on any framework.
 
 use crate::types::{
     DeepSeekPricingConfig, ModelConnectionTestResult, ModelEndpointConfig,
@@ -7,13 +7,13 @@ use crate::types::{
 };
 use crate::utils::{error_to_string, model_settings_path};
 
-/// 加载模型配置（从默认路径）
+/// Load model settings (from the default path).
 pub fn load_model_settings() -> Result<ModelSettings, String> {
     let path = model_settings_path()?;
     load_model_settings_from(&path)
 }
 
-/// 加载模型配置（从指定路径，供测试用）
+/// Load model settings (from a given path; used by tests).
 pub fn load_model_settings_from(path: &std::path::Path) -> Result<ModelSettings, String> {
     if !path.is_file() {
         return Ok(default_model_settings());
@@ -26,14 +26,14 @@ pub fn load_model_settings_from(path: &std::path::Path) -> Result<ModelSettings,
     Ok(settings)
 }
 
-/// 保存模型配置
+/// Save model settings.
 pub fn save_model_settings(mut settings: ModelSettings) -> Result<ModelSettings, String> {
     normalize_model_settings(&mut settings)?;
     let path = model_settings_path()?;
     save_model_settings_to(&path, &settings)
 }
 
-/// 保存模型配置（到指定路径，供测试用）
+/// Save model settings (to a given path; used by tests).
 pub fn save_model_settings_to(
     path: &std::path::Path,
     settings: &ModelSettings,
@@ -48,7 +48,7 @@ pub fn save_model_settings_to(
     Ok(settings.clone())
 }
 
-/// 测试模型连接（仅验证配置格式，不发起 HTTP 请求）
+/// Test the model connection (only validates config format; does not make an HTTP request).
 pub fn test_model_config(config: &ModelEndpointConfig) -> ModelConnectionTestResult {
     let model = resolve_model_for_provider(config);
 
@@ -69,13 +69,13 @@ pub fn test_model_config(config: &ModelEndpointConfig) -> ModelConnectionTestRes
     }
 }
 
-/// 测试活跃模型连接
+/// Test the active model connection.
 pub fn test_active_model_connection(settings: &ModelSettings) -> Result<ModelConnectionTestResult, String> {
     let config = active_model_config(settings)?;
     Ok(test_model_config(config))
 }
 
-/// 从 model-settings.json 加载 DeepSeek 定价
+/// Load DeepSeek pricing from model-settings.json.
 pub fn load_deepseek_pricing() -> Result<Option<DeepSeekPricingConfig>, String> {
     let home = std::env::var("HOME").map_err(|e| e.to_string())?;
     let settings_path = std::path::Path::new(&home).join(".agent-ui").join("model-settings.json");
@@ -92,7 +92,7 @@ pub fn load_deepseek_pricing() -> Result<Option<DeepSeekPricingConfig>, String> 
     }
 }
 
-// ─── 纯辅助函数 ────────────────────────────────────────────────────────
+// ─── Pure helper functions ──────────────────────────────────────────────
 
 pub fn default_model_settings() -> ModelSettings {
     ModelSettings {

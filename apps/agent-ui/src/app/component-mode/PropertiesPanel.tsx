@@ -17,7 +17,7 @@ export type PropertiesPanelProps = {
   onDeleteNode?: (nodeId: string) => void;
 };
 
-// Empty state for the 探索 tab when the selected node has no component
+// Empty state for the "explore" tab when the selected node has no component
 // sessions yet. Note the wording: *publishing* is about the DAG going live to
 // the scheduler — not about publishing a component; component sessions are a
 // separate concern (paused for now).

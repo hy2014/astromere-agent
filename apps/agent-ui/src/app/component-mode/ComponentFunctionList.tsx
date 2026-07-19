@@ -75,7 +75,7 @@ export function ComponentFunctionList({
   return (
     <div className="component-function-list">
       <Section title="组件" open={open.component} onToggle={() => toggle("component")}>
-        {/* 顶部「通用组件」拖拽项 = 默认/日常用法：拖到画布即建一个非共享组件节点 */}
+        {/* The top "Generic Component" drag item = default/everyday usage: dragging it onto the canvas creates a non-shared component node */}
         <div
           className="fn-generic-item"
           draggable

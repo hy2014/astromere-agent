@@ -4,7 +4,7 @@ import {loadDagServer, saveDagServer, testDagServerHealth} from "./api";
 type Props = {
   // Called after a successful /health probe. The parent then unmasks dag mode.
   onConnected: () => void;
-  // Shown only when dag mode is already connected (re-opened from 设置); lets
+  // Shown only when dag mode is already connected (re-opened from settings); lets
   // the user dismiss without changing anything.
   onCancel?: () => void;
 };
