@@ -424,6 +424,24 @@ pub struct ExecutionLog {
     pub timestamp_ms: i64,
 }
 
+/// A single page of a node's on-disk log file
+/// (`<log_dir>/<execution_id>/<node_id>.log`).
+///
+/// The file holds the node's *full* (untruncated) stdout/stderr, so the client
+/// pages through it explicitly via `offset`/`limit` instead of loading the
+/// whole thing into memory. `total` is the line count of the file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeLogFile {
+    pub lines: Vec<String>,
+    pub offset: usize,
+    pub limit: usize,
+    pub total: usize,
+    /// Always `false` for a single page — the client drives paging via
+    /// `offset`/`limit`, so a page is never "truncated" server-side.
+    pub truncated: bool,
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]

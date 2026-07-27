@@ -45,3 +45,19 @@ def cancel_poll() -> float:
         return float(os.environ.get("ENGINE_EXECUTOR_CANCEL_POLL", "0.25"))
     except ValueError:
         return 0.25
+
+
+def log_dir() -> str:
+    """Root directory for per-execution component logs written to disk.
+
+    The worker streams each node's stdout/stderr to
+    ``<log_dir>/<execution_id>/<node_id>.log`` (one file per node, untruncated)
+    so the UI can page through the *full* log instead of the truncated DB copy.
+    Override with ``AGENT_UI_LOG_DIR`` (the Rust server sets this to match the
+    directory it serves the log files from).
+    """
+    p = os.environ.get("AGENT_UI_LOG_DIR")
+    if p:
+        return p
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return os.path.join(home, ".agent-ui", "logs")

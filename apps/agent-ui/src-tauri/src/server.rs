@@ -988,6 +988,11 @@ pub async fn run_server(app_handle: Option<AppHandle>, run_worker: bool) {
         scheduler::start_cron_scheduler();
     }
 
+    // Best-effort cleanup of on-disk component logs older than 30 days (the
+    // retention policy). Runs whenever the HTTP server starts, so stale logs
+    // don't accumulate regardless of whether the worker is co-located.
+    scheduler::prune_old_logs(30);
+
     let port = http_port();
     let host = http_host();
     let addr = format!("{host}:{port}");

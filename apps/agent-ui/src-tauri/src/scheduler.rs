@@ -1,13 +1,15 @@
 //! Topological scheduling and execution state machine for the component DAG platform.
 
 use crate::dag::{get_dag, cron_matches};
+use crate::dag_server_config::log_dir;
 use crate::sqlite::open_sqlite_database;
-use crate::types::{DagDetail, DagExecution, ExecutionLog, NodeExecution};
+use crate::types::{DagDetail, DagExecution, ExecutionLog, NodeExecution, NodeLogFile};
 use chrono::{Local, Timelike};
 use rusqlite::params;
 use serde::Serialize;
 use serde_json::Value;
-use std::time::Duration;
+use std::fs;
+use std::time::{Duration, SystemTime};
 
 fn error_to_string(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -371,6 +373,74 @@ pub fn get_execution_logs(execution_id: String) -> Result<Vec<ExecutionLog>, Str
         logs.push(row.map_err(error_to_string)?);
     }
     Ok(logs)
+}
+
+/// Read a single page of a node's on-disk log file.
+///
+/// The Python engine writes each node's full (untruncated) stdout/stderr to
+/// `<log_dir>/<execution_id>/<node_id>.log`. This returns lines
+/// `[offset, offset+limit)` plus the total line count, so the UI pages through
+/// the log without ever loading the whole file into memory.
+///
+/// Returns an error (→ HTTP 4xx) when the file does not exist — that happens
+/// for executions that ran *before* file-based logging was introduced, and the
+/// client falls back to the legacy DB-backed `/logs` endpoint for those.
+pub fn get_node_log(
+    execution_id: String,
+    node_id: String,
+    offset: usize,
+    limit: usize,
+) -> Result<NodeLogFile, String> {
+    let path = log_dir().join(&execution_id).join(format!("{node_id}.log"));
+    if !path.exists() {
+        return Err(format!("node log file not found: {}", path.display()));
+    }
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let all: Vec<&str> = content.split('\n').collect();
+    // A trailing newline yields one spurious empty final element; drop it.
+    let total = if all.last().map_or(false, |l| l.is_empty()) {
+        all.len().saturating_sub(1)
+    } else {
+        all.len()
+    };
+    let start = offset.min(total);
+    let end = (start + limit).min(total);
+    let lines: Vec<String> = all[start..end].iter().map(|s| s.to_string()).collect();
+    Ok(NodeLogFile {
+        lines,
+        offset: start,
+        limit,
+        total,
+        truncated: false,
+    })
+}
+
+/// Remove on-disk component-log directories whose execution is older than
+/// `days` days. Best-effort: any individual error is ignored. Called on server
+/// startup so stale logs don't accumulate forever (the user's retention
+/// policy: keep 30 days). `<log_dir>` contains *only* per-execution log
+/// directories, so pruning it by mtime is safe.
+pub fn prune_old_logs(days: u64) {
+    let dir = log_dir();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(days * 24 * 3600))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if !p.is_dir() {
+            continue;
+        }
+        if let Ok(meta) = fs::metadata(&p) {
+            if let Ok(mtime) = meta.modified() {
+                if mtime < cutoff {
+                    let _ = fs::remove_dir_all(&p);
+                }
+            }
+        }
+    }
 }
 
 #[cfg_attr(feature = "gui", tauri::command)]

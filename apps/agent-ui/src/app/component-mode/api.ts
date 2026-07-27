@@ -31,6 +31,7 @@ import type {
   DagNode,
   ExecutionLog,
   NodeExecution,
+  NodeLogFile,
 } from "../../types";
 
 const DAG_SERVER_KEY = "agent-ui.dagServer.v1";
@@ -284,6 +285,19 @@ export function cancelExecution(executionId: string): Promise<void> {
 
 export function getExecutionLogs(executionId: string): Promise<ExecutionLog[]> {
   return dagJson<ExecutionLog[]>(`/api/executions/${encodeURIComponent(executionId)}/logs`);
+}
+
+// Fetch a page of a node's on-disk log file (full, untruncated). Falls back to
+// getExecutionLogs (DB) for runs from before file-based logging existed.
+export function getNodeLog(
+  executionId: string,
+  nodeId: string,
+  offset = 0,
+  limit = 2000,
+): Promise<NodeLogFile> {
+  return dagJson<NodeLogFile>(
+    `/api/executions/${encodeURIComponent(executionId)}/nodes/${encodeURIComponent(nodeId)}/log?offset=${offset}&limit=${limit}`,
+  );
 }
 
 export function getNodeExecutions(executionId: string): Promise<NodeExecution[]> {

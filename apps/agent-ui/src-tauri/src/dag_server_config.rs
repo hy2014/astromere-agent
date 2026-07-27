@@ -47,6 +47,23 @@ fn dag_mode_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Resolve the on-disk directory that holds per-execution component logs.
+///
+/// The Python engine writes each node's full (untruncated) stdout/stderr to
+/// `<log_dir>/<execution_id>/<node_id>.log`, and the HTTP server serves those
+/// files back via `/api/executions/:id/nodes/:node_id/log`. Priority:
+/// `$AGENT_UI_LOG_DIR` (set by the server when it spawns the worker, so both
+/// sides agree) → `<agent_ui_home>/logs`.
+pub fn log_dir() -> PathBuf {
+    if let Ok(v) = std::env::var("AGENT_UI_LOG_DIR") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    agent_ui_home().join("logs")
+}
+
 fn dag_server_path() -> PathBuf {
     agent_ui_home().join("dag-mode").join("dagServer.json")
 }

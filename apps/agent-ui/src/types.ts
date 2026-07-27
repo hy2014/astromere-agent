@@ -620,3 +620,13 @@ export type ExecutionLog = {
   message: string;
   timestampMs: number;
 };
+
+// A single page of a node's on-disk log file (full, untruncated). Returned by
+// GET /api/executions/:id/nodes/:node_id/log with offset/limit paging.
+export type NodeLogFile = {
+  lines: string[];
+  offset: number;
+  limit: number;
+  total: number;
+  truncated: boolean;
+};

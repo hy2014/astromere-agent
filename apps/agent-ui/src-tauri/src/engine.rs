@@ -75,6 +75,19 @@ fn ensure_db_path_env(cmd: &mut Command) {
     }
 }
 
+/// Make sure `AGENT_UI_LOG_DIR` is set so the worker writes component logs to
+/// the exact directory the HTTP server serves them from (`log_dir()`). Without
+/// this the two sides could resolve different `~/.agent-ui/logs` paths (e.g. if
+/// `AGENT_UI_HOME` is overridden), and the file-log endpoint would 404.
+fn ensure_log_dir_env(cmd: &mut Command) {
+    if std::env::var("AGENT_UI_LOG_DIR").is_err() {
+        let dir = crate::dag_server_config::log_dir();
+        if let Some(p) = dir.to_str() {
+            cmd.env("AGENT_UI_LOG_DIR", p);
+        }
+    }
+}
+
 /// Spawn the worker process.
 fn spawn_worker() -> std::io::Result<Child> {
     let worker =
@@ -93,6 +106,7 @@ fn spawn_worker() -> std::io::Result<Child> {
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
     ensure_db_path_env(&mut cmd);
+    ensure_log_dir_env(&mut cmd);
     cmd.spawn()
 }
 
