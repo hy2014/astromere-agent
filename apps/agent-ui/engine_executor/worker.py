@@ -291,8 +291,26 @@ class Worker:
             if node is None:
                 return
 
+            # Open this node's on-disk log file (one per node, untruncated).
+            # The worker writes the full component stdout/stderr here too, so
+            # the UI can page through the complete log instead of the capped
+            # DB copy. Orchestration messages also land in this file (and DB).
+            log_path = os.path.join(config.log_dir(), exec_id, f"{node_id}.log")
+            try:
+                parent = os.path.dirname(log_path) or "."
+                os.makedirs(parent, exist_ok=True)
+                node_log_fh = open(log_path, "w", encoding="utf-8", buffering=1)
+            except Exception:
+                node_log_fh = None
+
             def _log(kind, message):
                 add_log(exec_id, node_id, kind, message)
+                if node_log_fh is not None:
+                    try:
+                        node_log_fh.write(f"[{kind}] {message}\n")
+                        node_log_fh.flush()
+                    except Exception:
+                        pass
 
             # status gating (branch isolation): if any upstream node (along any
             # incoming edge, data or status) is failed/skipped, skip this node -
@@ -315,7 +333,7 @@ class Worker:
                 component_root, entry_point, python_path = self.resolve_node(node, plan, log_fn=_log)
             except Exception as e:
                 upsert_node_execution(
-                    exec_id, node_id, "failed", completed_at_ms=now(), error=str(e)[:2000]
+                    exec_id, node_id, "failed", completed_at_ms=now(), error=str(e)[-2000:]
                 )
                 add_log(exec_id, node_id, "error", f"Resolve failed: {e}")
                 # branch isolation: on resolve failure, only mark this node; do not abort the whole DAG.
@@ -358,6 +376,7 @@ class Worker:
                     poll=config.cancel_poll(),
                     log_fn=_log,
                     python_path=python_path,
+                    node_log_path=log_path,
                 )
             finally:
                 self.component_sem.release()
@@ -368,7 +387,13 @@ class Worker:
                 return
 
             if not result["success"]:
-                err = (result["stderr"] or "")[:2000]
+                # Capture the *tail* of the combined streams — the real Python
+                # traceback / exception lives at the END of stderr (or stdout),
+                # not the head. Taking the head (the old [:2000]) only kept early
+                # noise (Ray warnings, business ERROR logs) and silently dropped
+                # the actual failure cause.
+                raw = (result.get("stderr") or "") + "\n" + (result.get("stdout") or "")
+                err = raw[-4000:] if raw.strip() else ""
                 upsert_node_execution(
                     exec_id, node_id, "failed", completed_at_ms=now(), error=err
                 )

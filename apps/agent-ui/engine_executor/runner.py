@@ -489,6 +489,7 @@ def run_node(
     poll=0.25,
     log_fn=None,
     python_path=None,
+    node_log_path=None,
 ):
     """Execute a single component node.
 
@@ -501,6 +502,18 @@ def run_node(
     (the worker wires this to ``db.add_log`` so the UI sees live output).
     """
     os.makedirs(work_dir, exist_ok=True)
+    # Optionally tee the component's raw stdout/stderr to a file on disk (one
+    # file per node, untruncated) so the UI can page through the full log.
+    node_fh = None
+    if node_log_path:
+        try:
+            parent = os.path.dirname(node_log_path) or "."
+            os.makedirs(parent, exist_ok=True)
+            node_fh = open(node_log_path, "w", encoding="utf-8", buffering=1)
+        except Exception as e:  # pragma: no cover - best effort
+            node_fh = None
+            if log_fn:
+                log_fn("warning", f"无法打开节点日志文件 {node_log_path}: {e}")
     input_path = os.path.join(work_dir, "input.json")
     output_path = os.path.join(work_dir, "output.json")
     with open(input_path, "w") as f:
@@ -544,8 +557,17 @@ def run_node(
     def reader(stream, kind):
         try:
             for line in stream:
-                if log_fn:
-                    log_fn(kind, line.rstrip("\n"))
+                # Tee the raw line to the on-disk node log file (untruncated).
+                if node_fh is not None:
+                    try:
+                        node_fh.write(f"[{kind}] {line}")
+                    except Exception:
+                        pass
+                # NOTE: we deliberately do NOT call log_fn here. The worker's
+                # log_fn also writes to the same file, so doing it here too
+                # would duplicate the component output. Orchestration messages
+                # (from the worker) still reach the file + DB via log_fn; the
+                # component's own stdout/stderr lives only in this file.
                 logs.append((kind, line))
         except Exception as e:  # pragma: no cover - defensive
             exceptions.append(e)
@@ -567,6 +589,12 @@ def run_node(
 
     t_out.join()
     t_err.join()
+
+    if node_fh is not None:
+        try:
+            node_fh.close()
+        except Exception:
+            pass
 
     if log_fn:
         elapsed = time.time() - t0

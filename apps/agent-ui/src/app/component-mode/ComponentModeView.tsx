@@ -463,7 +463,6 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
 
   const handleSelectNode = useCallback(
     async (nodeId: string) => {
-      setShowExecHistory(false);
       setSelectedNodeId(nodeId);
       // Self-heal: if the selected node is bound to a component that isn't in
       // the in-memory store yet (the DB has it, but the store was never seeded
@@ -789,9 +788,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
         </div>
       </main>
       <aside className="component-mode-properties">
-        {showExecHistory ? (
-          <ExecutionPanel dagId={activeDagId} runSignal={runSignal} />
-        ) : registering || viewingComponent ? (
+        {registering || viewingComponent ? (
           <RegisterComponentForm
             key={editingComponent?.id ?? viewingComponent?.id ?? "new"}
             editing={editingComponent ?? undefined}
@@ -812,6 +809,15 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
           />
         )}
       </aside>
+      {showExecHistory && (
+        <div className="component-mode-exec-dock">
+          <ExecutionPanel
+            dagId={activeDagId}
+            runSignal={runSignal}
+            onClose={() => setShowExecHistory(false)}
+          />
+        </div>
+      )}
       {!connected || showConnect ? (
         <DagConnectModal
           onConnected={() => {

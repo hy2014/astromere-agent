@@ -1,6 +1,7 @@
 //! DAG, node, and edge CRUD plus validation for the component DAG platform.
 
 use crate::components::{get_component, verify_component};
+use crate::dag_server_config::log_dir;
 use crate::sqlite::open_sqlite_database;
 use crate::types::{Dag, DagDetail, DagEdge, DagNode, DagNodePosition};
 use chrono::{DateTime, Datelike, Local, Timelike};
@@ -279,14 +280,34 @@ pub fn delete_dag(dag_id: String) -> Result<(), String> {
         .map_err(error_to_string)?;
     tx.execute("DELETE FROM dag_edges WHERE dag_id = ?1", params![dag_id])
         .map_err(error_to_string)?;
+    // Collect this DAG's execution ids *before* dropping the rows, so we can
+    // also delete each execution's on-disk component-log directory.
+    let mut stmt = tx
+        .prepare("SELECT id FROM dag_executions WHERE dag_id = ?1")
+        .map_err(error_to_string)?;
+    let exec_ids: Vec<String> = stmt
+        .query_map(params![dag_id], |row| row.get::<_, String>(0))
+        .map_err(error_to_string)?
+        .map(|r| r.map_err(error_to_string))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(error_to_string)?;
+    drop(stmt);
     tx.execute(
         "DELETE FROM execution_logs WHERE execution_id IN \
          (SELECT id FROM dag_executions WHERE dag_id = ?1)",
         params![dag_id],
     )
-    .map_err(error_to_string)?;
+        .map_err(error_to_string)?;
     tx.execute("DELETE FROM dag_executions WHERE dag_id = ?1", params![dag_id])
         .map_err(error_to_string)?;
+    // Best-effort: remove each execution's on-disk log directory. Failure here
+    // (e.g. permission) must not abort the DB delete that already happened.
+    for eid in &exec_ids {
+        let p = log_dir().join(eid);
+        if p.exists() {
+            let _ = std::fs::remove_dir_all(&p);
+        }
+    }
     tx.execute("DELETE FROM dags WHERE id = ?1", params![dag_id])
         .map_err(error_to_string)?;
 

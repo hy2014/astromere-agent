@@ -1,12 +1,29 @@
 .component-mode-shell {
   display: grid;
   grid-template-columns: 240px 1fr 280px;
-  grid-template-rows: 1fr;
+  grid-template-rows: 1fr auto;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
   background: #f8f9fa;
   color: #1a1a1a;
+}
+
+/* Bottom execution-history dock (VSCode/IDEA-style panel): spans the full
+   width on the second grid row, fixed height, internally scrollable. */
+.component-mode-exec-dock {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  height: 320px;
+  min-height: 0;
+  border-top: 1px solid #e2e4e9;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.component-mode-shell.registering .component-mode-exec-dock {
+  display: none;
 }
 
 /* Registering a component is a focused, canvas-free task: the DAG canvas is
@@ -491,18 +508,51 @@
 }
 
 .execution-panel {
-  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
   height: 100%;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .execution-panel-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid #e2e4e9;
+  background: #fff;
+}
+.execution-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.execution-auto-refresh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #64748b;
+}
+.execution-auto-refresh-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+.execution-close-btn {
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.execution-close-btn:hover {
+  color: #475569;
 }
 
 .execution-panel-header h3 {
@@ -563,10 +613,13 @@
 }
 
 .execution-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex-shrink: 0;
+  padding: 0 12px 12px;
 }
 
 .execution-empty {
@@ -590,6 +643,29 @@
 .execution-item:hover {
   border-color: #3b82f6;
   background: #eff6ff;
+}
+
+.execution-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+}
+.execution-list-col {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid #e2e4e9;
+  background: #fff;
+}
+.execution-list-title {
+  padding: 10px 16px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  flex-shrink: 0;
 }
 
 .execution-status {
@@ -624,14 +700,14 @@
 }
 
 .execution-logs {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 140px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-height: 0;
-  border-top: 1px solid #e5e7eb;
-  padding-top: 12px;
+  border-top: 1px solid #e2e4e9;
+  padding: 12px 16px;
 }
 
 .execution-log {
@@ -661,12 +737,83 @@
   margin-right: 6px;
 }
 
+/* Per-node log toolbar (node selector + pager) and file-log line rendering */
+.execution-logs-header {
+  flex-shrink: 0;
+  border-top: 1px solid #e2e4e9;
+  padding: 8px 16px 4px;
+}
+.execution-log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.execution-log-toolbar-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+.execution-log-node-select {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  color: #0f172a;
+  max-width: 60%;
+}
+.execution-log-pager {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #64748b;
+}
+.execution-log-page-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  color: #0f172a;
+  cursor: pointer;
+}
+.execution-log-page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.execution-log-line {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.5;
+  padding: 1px 0;
+}
+.execution-log-lineno {
+  flex-shrink: 0;
+  width: 48px;
+  text-align: right;
+  color: #94a3b8;
+  user-select: none;
+}
+.execution-log-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #334155;
+}
+
 /* History detail: overall status + per-node statuses + frozen config snapshot */
 .execution-detail {
+  flex: 0 1 auto;
+  max-height: 42%;
+  overflow-y: auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border-top: 1px solid #e5e7eb;
   padding-top: 12px;
 }
 
@@ -677,6 +824,47 @@
   font-size: 12px;
   font-weight: 600;
   color: #334155;
+}
+.execution-detail-col {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0 16px;
+}
+.execution-failure-banner {
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-left: 3px solid #dc2626;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #7f1d1d;
+  line-height: 1.5;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.execution-failure-reason {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.execution-failure-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.execution-failure-list li {
+  margin: 2px 0;
+}
+.execution-failure-node {
+  font-weight: 600;
+  color: #991b1b;
+}
+.execution-node-block {
+  border-top: 1px solid #f1f5f9;
+  padding: 4px 0;
 }
 
 .execution-nodes-title {
@@ -714,12 +902,19 @@
 }
 
 .execution-node-error {
-  color: #dc2626;
-  font-size: 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 45%;
+  color: #b91c1c;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.4;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin: 2px 0 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
 }
 
 .execution-snapshot {

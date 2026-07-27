@@ -26,7 +26,7 @@ use crate::component_session;
 use crate::components;
 use crate::dag;
 use crate::scheduler;
-use crate::types::{Component, ComponentSession, Dag, DagEdge, DagNode, DagExecution, ExecutionLog, NodeExecution};
+use crate::types::{Component, ComponentSession, Dag, DagEdge, DagNode, DagExecution, ExecutionLog, NodeExecution, NodeLogFile};
 
 // ─── Request bodies ──────────────────────────────────────────────────
 
@@ -187,6 +187,28 @@ async fn get_execution_logs_handler(
     scheduler::get_execution_logs(execution_id).map(Json).map_err(AppError::new)
 }
 
+// Per-node on-disk log, paginated. The file holds the node's full (untruncated)
+// stdout/stderr; the client pages via `offset`/`limit` (default 2000 lines).
+#[derive(Deserialize)]
+struct LogQuery {
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_log_limit")]
+    limit: usize,
+}
+fn default_log_limit() -> usize {
+    2000
+}
+
+async fn get_node_log_handler(
+    Path((execution_id, node_id)): Path<(String, String)>,
+    Query(query): Query<LogQuery>,
+) -> Result<Json<NodeLogFile>, AppError> {
+    scheduler::get_node_log(execution_id, node_id, query.offset, query.limit)
+        .map(Json)
+        .map_err(AppError::new)
+}
+
 async fn get_node_executions_handler(
     Path(execution_id): Path<String>,
 ) -> Result<Json<Vec<NodeExecution>>, AppError> {
@@ -247,6 +269,10 @@ pub fn register_dag_routes(router: Router<AppState>) -> Router<AppState> {
         .route("/api/dags/:dag_id/executions", get(list_executions_handler))
         .route("/api/executions/:execution_id", get(get_execution_handler))
         .route("/api/executions/:execution_id/logs", get(get_execution_logs_handler))
+        .route(
+            "/api/executions/:execution_id/nodes/:node_id/log",
+            get(get_node_log_handler),
+        )
         .route("/api/executions/:execution_id/nodes", get(get_node_executions_handler))
         .route("/api/executions/:execution_id/cancel", post(cancel_execution_handler))
         .route(
