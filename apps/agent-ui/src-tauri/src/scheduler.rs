@@ -520,9 +520,10 @@ pub fn get_node_execution(
 /// writes into the DB. `output_name` is only used as a map key and **never
 /// participates in any filesystem path construction**, so there is no path
 /// traversal risk.
-/// Guess a file's preview format from its extension. Case-insensitive; unknown
-/// extensions fall through to "" (which triggers the "unsupported format" branch
-/// downstream, returning a friendly hint rather than crashing the caller).
+/// Guess a file's preview format from its extension. Case-insensitive.
+/// Recognises: csv, json, jsonl, parquet (.parquet / .pq / .parq).
+/// Unknown extensions return "" which downstream converts to a friendly
+/// "unsupported format" hint rather than a crash.
 fn guess_format_from_path(path: &str) -> String {
     let lower = path.to_lowercase();
     if lower.ends_with(".csv") {
@@ -531,6 +532,8 @@ fn guess_format_from_path(path: &str) -> String {
         "json".to_string()
     } else if lower.ends_with(".json") {
         "json".to_string()
+    } else if lower.ends_with(".parquet") || lower.ends_with(".pq") || lower.ends_with(".parq") {
+        "parquet".to_string()
     } else {
         String::new()
     }
@@ -572,12 +575,8 @@ pub fn preview_node_output(
         }
         Value::String(s) => {
             let fmt = guess_format_from_path(s);
-            if fmt.is_empty() {
-                return Err(format!(
-                    "outputs 条目是字符串路径但无法推断格式（扩展名未知）: {}",
-                    s
-                ));
-            }
+            // Unknown extension → fmt is "" → downstream match falls into
+            // `other` arm and returns a friendly "unsupported format" hint.
             (s.clone(), fmt)
         }
         _ => {
@@ -727,9 +726,17 @@ mod tests {
     }
 
     #[test]
+    fn guess_format_from_path_handles_parquet() {
+        assert_eq!(guess_format_from_path("/tmp/data.parquet"), "parquet");
+        assert_eq!(guess_format_from_path("/tmp/data.PARQUET"), "parquet");
+        assert_eq!(guess_format_from_path("/tmp/data.pq"), "parquet");
+        assert_eq!(guess_format_from_path("/tmp/data.parq"), "parquet");
+    }
+
+    #[test]
     fn guess_format_from_path_returns_empty_for_unknown() {
-        assert_eq!(guess_format_from_path("/tmp/data.parquet"), "");
         assert_eq!(guess_format_from_path("/tmp/data.txt"), "");
+        assert_eq!(guess_format_from_path("/tmp/data.bin"), "");
         assert_eq!(guess_format_from_path("no_extension"), "");
     }
 
@@ -738,5 +745,6 @@ mod tests {
         // Path itself contains dots but ends with a known extension.
         assert_eq!(guess_format_from_path("/tmp/v1.2.3/data.csv"), "csv");
         assert_eq!(guess_format_from_path("/tmp/report.2024-01.json"), "json");
+        assert_eq!(guess_format_from_path("/tmp/report.2024-01.parquet"), "parquet");
     }
 }
