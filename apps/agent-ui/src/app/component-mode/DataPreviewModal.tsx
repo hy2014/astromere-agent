@@ -46,6 +46,8 @@ type DownloadZoneProps = {
   savedPath: string | null;
   canDownload: boolean;
   compact?: boolean;
+  /** Independent copy-feedback state for the "复制路径" button. Pass `undefined` to hide it (e.g. browser mode where we only know the download folder name, not a real path). */
+  copiedLocal?: boolean;
   onStart: () => void;
   onCancel: () => void;
   onCopySaved: (p: string) => void;
@@ -58,6 +60,7 @@ function DownloadZone({
   savedPath,
   canDownload,
   compact,
+  copiedLocal,
   onStart,
   onCancel,
   onCopySaved,
@@ -107,14 +110,16 @@ function DownloadZone({
         <span className="data-preview-download-savedpath" title={savedPath}>
           {savedPath}
         </span>
-        <button
-          type="button"
-          className="data-preview-copy-btn"
-          onClick={() => onCopySaved(savedPath)}
-          title="复制保存路径"
-        >
-          复制路径
-        </button>
+        {copiedLocal !== undefined && (
+          <button
+            type="button"
+            className="data-preview-copy-btn"
+            onClick={() => onCopySaved(savedPath)}
+            title="复制保存路径"
+          >
+            {copiedLocal ? "✓ 已复制" : "复制路径"}
+          </button>
+        )}
       </div>
     );
   }
@@ -141,6 +146,7 @@ function DownloadZone({
 }
 
 export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPreviewModalProps) {
+  const isTauri = typeof window !== "undefined" && "__TAURI__" in (window as any);
   const [outputKeys, setOutputKeys] = useState<string[]>([]);
   const [activeOutput, setActiveOutput] = useState<string | null>(null);
   const [preview, setPreview] = useState<OutputPreview | null>(null);
@@ -149,26 +155,35 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
   const [error, setError] = useState<string | null>(null);
   const [noOutputs, setNoOutputs] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  // Two independent copy-feedback flags — two different buttons copy two
+  // completely different things (remote server path vs local saved path).
+  const [copiedRemote, setCopiedRemote] = useState(false);
+  const [copiedLocal, setCopiedLocal] = useState(false);
 
-  const handleCopyPath = useCallback(async (path: string) => {
+  const copyText = useCallback(async (text: string) => {
     try {
-      await navigator.clipboard.writeText(path);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      await navigator.clipboard.writeText(text);
     } catch {
-      // Some environments (e.g. Tauri) may require a different approach,
-      // but navigator.clipboard is the standard path for web views.
       const ta = document.createElement("textarea");
-      ta.value = path;
+      ta.value = text;
       document.body.appendChild(ta);
       ta.select();
       document.execCommand("copy");
       document.body.removeChild(ta);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
     }
   }, []);
+
+  const handleCopyRemotePath = useCallback(async (path: string) => {
+    await copyText(path);
+    setCopiedRemote(true);
+    setTimeout(() => setCopiedRemote(false), 1500);
+  }, [copyText]);
+
+  const handleCopySavedPath = useCallback(async (path: string) => {
+    await copyText(path);
+    setCopiedLocal(true);
+    setTimeout(() => setCopiedLocal(false), 1500);
+  }, [copyText]);
 
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
@@ -317,9 +332,10 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
                     error={downloadError}
                     savedPath={downloadPath}
                     canDownload={!!executionId}
+                    copiedLocal={isTauri ? copiedLocal : undefined}
                     onStart={() => handleDownload(preview.outputName)}
                     onCancel={handleCancelDownload}
-                    onCopySaved={handleCopyPath}
+                    onCopySaved={handleCopySavedPath}
                   />
                 </div>
               ) : preview && preview.columns.length > 0 ? (
@@ -337,10 +353,10 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
                     <button
                       type="button"
                       className="data-preview-copy-btn"
-                      onClick={() => handleCopyPath(preview.filePath)}
-                      title="复制文件路径"
+                      onClick={() => handleCopyRemotePath(preview.filePath)}
+                      title="复制远程服务器文件路径"
                     >
-                      {copied ? "✓ 已复制" : "复制"}
+                      {copiedRemote ? "✓ 已复制" : "复制"}
                     </button>
                   </div>
                   <DownloadZone
@@ -349,9 +365,10 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
                     error={downloadError}
                     savedPath={downloadPath}
                     canDownload={!!executionId}
+                    copiedLocal={isTauri ? copiedLocal : undefined}
                     onStart={() => handleDownload(preview.outputName)}
                     onCancel={handleCancelDownload}
-                    onCopySaved={handleCopyPath}
+                    onCopySaved={handleCopySavedPath}
                     compact
                   />
                   <div className="data-preview-table-wrap">

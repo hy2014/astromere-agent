@@ -440,7 +440,11 @@ async function downloadViaBrowserBlob(
   } finally {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
   }
-  return filename;
+  // Browser security sandbox: we CANNOT know the real disk path. The file
+  // lands in the browser's default download folder (Chrome: ~/Downloads,
+  // Firefox: same, Safari: ~/Downloads). Prefix with a hint so the user
+  // knows this is a browser download, not a Tauri save-as pick.
+  return `浏览器默认下载目录 / ${filename}`;
 }
 
 async function downloadViaTauriSave(
