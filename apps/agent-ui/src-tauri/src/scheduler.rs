@@ -21,6 +21,7 @@ fn error_to_string(error: impl std::fmt::Display) -> String {
 /// (e.g. parquet); in that case `columns`/`rows` are empty and the frontend
 /// shows a hint message and the file path instead.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OutputPreview {
     pub output_name: String,
     pub format: String,
@@ -29,6 +30,10 @@ pub struct OutputPreview {
     pub truncated: bool,
     pub total: Option<usize>,
     pub unsupported: Option<String>,
+    /// Absolute path to the underlying file on the server. Frontends render
+    /// this so users can open the file directly if preview doesn't cover their
+    /// needs (e.g. unsupported format, preview truncated).
+    pub file_path: String,
 }
 
 /// Capture a frozen snapshot of the DAG plan at submit time: the node configs,
@@ -595,6 +600,7 @@ pub fn preview_node_output(
     match format.as_str() {
         "csv" => preview_csv(&path, &output_name, limit),
         "json" | "jsonl" => preview_json(&path, &output_name, limit),
+        "parquet" => preview_parquet_via_python(&path, &output_name, limit),
         other => Ok(OutputPreview {
             output_name,
             format: other.to_string(),
@@ -606,6 +612,7 @@ pub fn preview_node_output(
                 "暂不支持 '{}' 格式预览，请在服务端直接打开文件查看：\n{}",
                 other, path
             )),
+            file_path: path.clone(),
         }),
     }
 }
@@ -632,6 +639,7 @@ fn preview_csv(path: &str, output_name: &str, limit: usize) -> Result<OutputPrev
         truncated,
         total: None,
         unsupported: None,
+        file_path: path.to_string(),
     })
 }
 
@@ -688,6 +696,140 @@ fn preview_json(path: &str, output_name: &str, limit: usize) -> Result<OutputPre
         truncated,
         total: None,
         unsupported: None,
+        file_path: path.to_string(),
+    })
+}
+
+/// Inline Python script that reads a parquet file, takes the first `limit`
+/// rows, and prints a JSON object `{columns, rows, truncated, total}` to
+/// stdout. Stays as a raw `&str` constant — no extra files to bundle, no
+/// dependency on the engine_executor directory being present at runtime.
+const PARQUET_PREVIEW_PYTHON: &str = r#"
+import json, sys
+
+def main():
+    f, limit_s = sys.argv[1], int(sys.argv[2])
+    try:
+        import pyarrow.parquet as _pq
+        table = _pq.read_table(f)
+        total = table.num_rows
+        head = table.slice(0, limit_s).to_pylist()
+        cols = [table.schema.field(i).name for i in range(table.num_columns)]
+        rows = [[rec.get(c) for c in cols] for rec in head]
+    except ImportError:
+        try:
+            import pandas as _pd
+            pdf = _pd.read_parquet(f)
+            total = len(pdf)
+            cols = list(pdf.columns)
+            rows = json.loads(
+                pdf.head(limit_s).to_json(orient='values', date_format='iso')
+            )
+        except ImportError:
+            sys.stderr.write(
+                "no parquet engine installed on server: need pyarrow or pandas\n"
+            )
+            sys.exit(2)
+
+    # pyarrow scalars / numpy types -> native JSON-friendly values.
+    def _clean(v):
+        if v is None:
+            return None
+        if hasattr(v, "as_py"):
+            return v.as_py()
+        return v
+
+    rows = [[_clean(c) for c in row] for row in rows]
+    out = {"columns": cols, "rows": rows, "truncated": total > limit_s, "total": total}
+    print(json.dumps(out))
+
+main()
+"#;
+
+/// Read a parquet file by spawning `python3` with the inline script above.
+/// Returns a normal `OutputPreview` (columns + rows) when successful.
+/// Errors are surfaced as plain strings; callers bubble them up as HTTP 500.
+fn preview_parquet_via_python(
+    path: &str,
+    output_name: &str,
+    limit: usize,
+) -> Result<OutputPreview, String> {
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(PARQUET_PREVIEW_PYTHON)
+        .arg(path)
+        .arg(limit.to_string())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("failed to spawn python3 for parquet preview: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        match output.status.code() {
+            Some(2) => {
+                // Our script exits 2 when neither pyarrow nor pandas is available.
+                return Err(format!(
+                    "parquet 预览需要 pyarrow 或 pandas：远程服务器缺少依赖\n{}",
+                    stderr.trim()
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "python3 执行失败 ({}): {}",
+                    output.status,
+                    stderr.trim()
+                ));
+            }
+        }
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value = serde_json::from_str(&stdout).map_err(|e| {
+        format!(
+            "python3 输出不是合法 JSON: {e}\nraw: {}",
+            stdout.chars().take(200).collect::<String>()
+        )
+    })?;
+
+    let columns: Vec<String> = parsed
+        .get("columns")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let rows: Vec<Vec<Value>> = parsed
+        .get("rows")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|row| row.as_array().map(|r| r.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let truncated = parsed
+        .get("truncated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let total = parsed
+        .get("total")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+
+    Ok(OutputPreview {
+        output_name: output_name.to_string(),
+        format: "parquet".to_string(),
+        columns,
+        rows,
+        truncated,
+        total,
+        unsupported: None,
+        file_path: path.to_string(),
     })
 }
 

@@ -312,6 +312,8 @@ export type OutputPreview = {
   truncated: boolean;
   total: number | null;
   unsupported?: string | null;
+  /** Absolute path to the underlying file on the server. */
+  filePath: string;
 };
 
 // Preview the first `limit` rows (default 100) of a node's output port. Files
