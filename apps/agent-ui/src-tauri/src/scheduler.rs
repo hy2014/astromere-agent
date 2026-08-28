@@ -544,6 +544,65 @@ fn guess_format_from_path(path: &str) -> String {
     }
 }
 
+/// Shared helper: extract a file path (and its format hint) from a node
+/// execution's outputs JSON for a given output port. Understands both the
+/// canonical file-card entry `{path, format}` and the legacy raw-string
+/// shortcut that older components emit.
+pub fn resolve_output_file_path(
+    execution_id: &str,
+    node_id: &str,
+    output_name: &str,
+) -> Result<(String, String), String> {
+    let ne = get_node_execution(execution_id.to_string(), node_id.to_string())?
+        .ok_or_else(|| format!("未找到节点执行记录 (execution={}, node={})", execution_id, node_id))?;
+    let outputs = ne
+        .outputs
+        .ok_or_else(|| "该节点执行没有 outputs 记录".to_string())?;
+    let entry = outputs
+        .get(output_name)
+        .ok_or_else(|| format!("outputs 中不存在名为 '{}' 的输出端口", output_name))?;
+
+    match entry {
+        Value::Object(map) => {
+            let path = map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "outputs 条目缺少 path 字段（entry 是对象但不含 path，可能是非文件端口如 status）: {:?}",
+                        entry
+                    )
+                })?;
+            let format = map
+                .get("format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok((path.to_string(), format))
+        }
+        Value::String(s) => {
+            let fmt = guess_format_from_path(s);
+            Ok((s.clone(), fmt))
+        }
+        _ => Err(format!(
+            "outputs 条目格式不支持（既不是对象也不是字符串）: {:?}",
+            entry
+        )),
+    }
+}
+
+/// Return the absolute server-side file path of a node's output.
+/// Thin wrapper over `resolve_output_file_path` — useful for callers that
+/// only need the file path (e.g. download handlers) and don't care about
+/// the format hint.
+pub fn get_output_file_path(
+    execution_id: &str,
+    node_id: &str,
+    output_name: &str,
+) -> Result<String, String> {
+    resolve_output_file_path(execution_id, node_id, output_name).map(|(p, _)| p)
+}
+
 pub fn preview_node_output(
     execution_id: String,
     node_id: String,
