@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useState} from "react";
 import {
+  downloadNodeOutput,
   getNodeExecutions,
   listExecutions,
   previewNodeOutput,
@@ -57,6 +58,22 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
       setTimeout(() => setCopied(false), 1500);
     }
   }, []);
+
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const handleDownload = useCallback(async (outputName: string) => {
+    if (!executionId) return;
+    setDownloadError(null);
+    setDownloading(true);
+    try {
+      await downloadNodeOutput(executionId, nodeId, outputName);
+    } catch (e: any) {
+      setDownloadError(e?.message ?? "下载失败");
+    } finally {
+      setDownloading(false);
+    }
+  }, [executionId, nodeId]);
 
   // Locate the execution that most recently produced this node's outputs
   useEffect(() => {
@@ -158,7 +175,17 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
               ) : error ? (
                 <div className="data-preview-error">{error}</div>
               ) : preview?.unsupported ? (
-                <pre className="data-preview-unsupported">{preview.unsupported}</pre>
+                <div className="data-preview-unsupported-wrap">
+                  <pre className="data-preview-unsupported">{preview.unsupported}</pre>
+                  <button
+                    type="button"
+                    className="data-preview-copy-btn data-preview-download-btn"
+                    disabled={downloading || !executionId}
+                    onClick={() => handleDownload(preview.outputName)}
+                  >
+                    {downloading ? "下载中…" : "⬇ 下载原始文件"}
+                  </button>
+                </div>
               ) : preview && preview.columns.length > 0 ? (
                 <>
                   <div className="data-preview-info-bar">
@@ -179,6 +206,20 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
                     >
                       {copied ? "✓ 已复制" : "复制"}
                     </button>
+                    <button
+                      type="button"
+                      className="data-preview-copy-btn data-preview-download-btn"
+                      disabled={downloading || !executionId}
+                      onClick={() => handleDownload(preview.outputName)}
+                      title="下载原始文件"
+                    >
+                      {downloading ? "下载中…" : "⬇ 下载"}
+                    </button>
+                    {downloadError && (
+                      <span className="data-preview-download-error" title={downloadError}>
+                        ⚠ {downloadError}
+                      </span>
+                    )}
                   </div>
                   <div className="data-preview-table-wrap">
                     <table className="data-preview-table">

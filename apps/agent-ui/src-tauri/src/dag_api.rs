@@ -16,6 +16,8 @@
 use axum::{
     Json, Router,
     extract::{Path, Query},
+    http::{HeaderName, HeaderValue, StatusCode},
+    response::IntoResponse,
     routing::{delete, get, post, put},
 };
 use serde::Deserialize;
@@ -239,6 +241,30 @@ async fn preview_node_output_handler(
         .map_err(AppError::new)
 }
 
+/// Download the raw output file produced by a node execution as an
+/// attachment. The file lives on the DAG server's disk; we stream it back
+/// as bytes with a `Content-Disposition: attachment` header so the browser
+/// / webview saves it instead of trying to display it.
+async fn download_node_output_handler(
+    Path((execution_id, node_id, output_name)): Path<(String, String, String)>,
+) -> Result<impl IntoResponse, AppError> {
+    let path = scheduler::get_output_file_path(&execution_id, &node_id, &output_name)?;
+    let filename = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("output");
+    let bytes = std::fs::read(&path)
+        .map_err(|e| AppError::new(format!("读文件失败 {}: {}", path, e)))?;
+    let cd = format!("attachment; filename=\"{}\"", filename);
+    let header_val = HeaderValue::from_str(&cd)
+        .map_err(|e| AppError::new(format!("构造 Content-Disposition 失败: {}", e)))?;
+    Ok((
+        StatusCode::OK,
+        [(HeaderName::from_static("content-disposition"), header_val)],
+        bytes,
+    ))
+}
+
 // ─── Router ──────────────────────────────────────────────────────────
 
 /// Mount the dag/component/component-session/execution HTTP routes onto the
@@ -278,5 +304,9 @@ pub fn register_dag_routes(router: Router<AppState>) -> Router<AppState> {
         .route(
             "/api/executions/:execution_id/nodes/:node_id/outputs/:output_name/preview",
             get(preview_node_output_handler),
+        )
+        .route(
+            "/api/executions/:execution_id/nodes/:node_id/outputs/:output_name/download",
+            get(download_node_output_handler),
         )
 }

@@ -2388,6 +2388,60 @@
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
 }
 
+.data-preview-copy-btn:disabled,
+.data-preview-copy-btn:disabled:hover {
+  background: #f9fafb;
+  border-color: #e5e7eb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.data-preview-download-btn {
+  background: #4f46e5;
+  border-color: #4f46e5;
+  color: #ffffff;
+}
+
+.data-preview-download-btn:hover {
+  background: #4338ca;
+  border-color: #4338ca;
+}
+
+.data-preview-download-btn:active {
+  background: #3730a3;
+}
+
+.data-preview-download-btn:disabled,
+.data-preview-download-btn:disabled:hover {
+  background: #a5b4fc;
+  border-color: #a5b4fc;
+  color: #ffffff;
+}
+
+.data-preview-download-error {
+  font-size: 11px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-preview-unsupported-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.data-preview-unsupported-wrap .data-preview-copy-btn {
+  align-self: flex-start;
+}
+
 .data-preview-table-wrap {
   overflow: auto;
   border: 1px solid #e5e7eb;

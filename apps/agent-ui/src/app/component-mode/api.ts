@@ -329,6 +329,45 @@ export function previewNodeOutput(
   );
 }
 
+/** Fetch a node's raw output file from the remote DAG server and trigger a
+ *  browser / webview download. Handles auth headers and file extraction
+ *  from `Content-Disposition`.
+ */
+export async function downloadNodeOutput(
+  executionId: string,
+  nodeId: string,
+  outputName: string,
+): Promise<void> {
+  const profile = getDagProfile();
+  const url = `${profile.baseUrl}/api/executions/${encodeURIComponent(executionId)}/nodes/${encodeURIComponent(nodeId)}/outputs/${encodeURIComponent(outputName)}/download`;
+  const response = await fetch(url, {
+    headers: {
+      ...(profile.token ? { Authorization: `Bearer ${profile.token}` } : {}),
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `下载失败 (HTTP ${response.status})`);
+  }
+  const blob = await response.blob();
+  const contentDisposition = response.headers.get("content-disposition") ?? "";
+  // `attachment; filename="sentiment_features.parquet"` → extract filename
+  const match = contentDisposition.match(/filename="?([^";]+)"?/);
+  const filename = match?.[1] ?? outputName;
+  const downloadUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = downloadUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    // Give the browser a tick to initiate the download before revoking.
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+  }
+}
+
 export function deleteDagNode(dagId: string, nodeId: string): Promise<void> {
   return dagJson<void>(
     `/api/dags/${encodeURIComponent(dagId)}/nodes/${encodeURIComponent(nodeId)}`,
