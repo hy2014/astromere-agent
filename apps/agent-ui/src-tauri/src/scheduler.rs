@@ -520,6 +520,22 @@ pub fn get_node_execution(
 /// writes into the DB. `output_name` is only used as a map key and **never
 /// participates in any filesystem path construction**, so there is no path
 /// traversal risk.
+/// Guess a file's preview format from its extension. Case-insensitive; unknown
+/// extensions fall through to "" (which triggers the "unsupported format" branch
+/// downstream, returning a friendly hint rather than crashing the caller).
+fn guess_format_from_path(path: &str) -> String {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".csv") {
+        "csv".to_string()
+    } else if lower.ends_with(".jsonl") {
+        "json".to_string()
+    } else if lower.ends_with(".json") {
+        "json".to_string()
+    } else {
+        String::new()
+    }
+}
+
 pub fn preview_node_output(
     execution_id: String,
     node_id: String,
@@ -535,16 +551,42 @@ pub fn preview_node_output(
     let entry = outputs
         .get(&output_name)
         .ok_or_else(|| format!("outputs 中不存在名为 '{}' 的输出端口", output_name))?;
-    let path = entry
-        .get("path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "outputs 条目缺少 path 字段".to_string())?
-        .to_string();
-    let format = entry
-        .get("format")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+
+    // Compatibility shim: components may emit either the proper *file card*
+    // ({"path": "/abs/file.csv", "format": "csv"}) or a raw string path
+    // ("/abs/file.csv") as a legacy shortcut. Non-file values (status ports,
+    // scalar summaries) surface a clear error instead of silently 500-ing.
+    let (path, format) = match entry {
+        Value::Object(map) => {
+            let path = map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "outputs 条目缺少 path 字段（entry 是对象但不含 path，可能是非文件端口如 status）: {:?}",
+                        entry
+                    )
+                })?;
+            let format = map.get("format").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            (path.to_string(), format)
+        }
+        Value::String(s) => {
+            let fmt = guess_format_from_path(s);
+            if fmt.is_empty() {
+                return Err(format!(
+                    "outputs 条目是字符串路径但无法推断格式（扩展名未知）: {}",
+                    s
+                ));
+            }
+            (s.clone(), fmt)
+        }
+        _ => {
+            return Err(format!(
+                "outputs 条目格式不支持（既不是对象也不是字符串）: {:?}",
+                entry
+            ));
+        }
+    };
 
     let meta = std::fs::metadata(&path).map_err(error_to_string)?;
     if !meta.is_file() {
@@ -663,4 +705,38 @@ pub fn cancel_execution(execution_id: String) -> Result<(), String> {
     )
     .map_err(error_to_string)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guess_format_from_path_handles_csv() {
+        assert_eq!(guess_format_from_path("/tmp/data.csv"), "csv");
+        assert_eq!(guess_format_from_path("/tmp/data.CSV"), "csv");
+        assert_eq!(guess_format_from_path("data.Csv"), "csv");
+    }
+
+    #[test]
+    fn guess_format_from_path_handles_json_and_jsonl() {
+        assert_eq!(guess_format_from_path("/tmp/data.json"), "json");
+        assert_eq!(guess_format_from_path("/tmp/data.JSON"), "json");
+        assert_eq!(guess_format_from_path("/tmp/data.jsonl"), "json");
+        assert_eq!(guess_format_from_path("/tmp/data.JSONL"), "json");
+    }
+
+    #[test]
+    fn guess_format_from_path_returns_empty_for_unknown() {
+        assert_eq!(guess_format_from_path("/tmp/data.parquet"), "");
+        assert_eq!(guess_format_from_path("/tmp/data.txt"), "");
+        assert_eq!(guess_format_from_path("no_extension"), "");
+    }
+
+    #[test]
+    fn guess_format_from_path_handles_paths_with_dots() {
+        // Path itself contains dots but ends with a known extension.
+        assert_eq!(guess_format_from_path("/tmp/v1.2.3/data.csv"), "csv");
+        assert_eq!(guess_format_from_path("/tmp/report.2024-01.json"), "json");
+    }
 }
