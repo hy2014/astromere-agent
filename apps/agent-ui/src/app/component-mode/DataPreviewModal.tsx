@@ -37,6 +37,26 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
   const [error, setError] = useState<string | null>(null);
   const [noOutputs, setNoOutputs] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyPath = useCallback(async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Some environments (e.g. Tauri) may require a different approach,
+      // but navigator.clipboard is the standard path for web views.
+      const ta = document.createElement("textarea");
+      ta.value = path;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }, []);
 
   // Locate the execution that most recently produced this node's outputs
   useEffect(() => {
@@ -141,9 +161,25 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
                 <pre className="data-preview-unsupported">{preview.unsupported}</pre>
               ) : preview && preview.columns.length > 0 ? (
                 <>
-                  {preview.truncated && (
-                    <div className="data-preview-truncated">仅显示前 100 行</div>
-                  )}
+                  <div className="data-preview-info-bar">
+                    {preview.truncated && (
+                      <span className="data-preview-truncated">
+                        仅显示前 {preview.rows.length} 行
+                        {preview.total != null && <>（共 {preview.total.toLocaleString()} 行）</>}
+                      </span>
+                    )}
+                    <span className="data-preview-filepath" title={preview.filePath}>
+                      📄 {preview.filePath}
+                    </span>
+                    <button
+                      type="button"
+                      className="data-preview-copy-btn"
+                      onClick={() => handleCopyPath(preview.filePath)}
+                      title="复制文件路径"
+                    >
+                      {copied ? "✓ 已复制" : "复制"}
+                    </button>
+                  </div>
                   <div className="data-preview-table-wrap">
                     <table className="data-preview-table">
                       <thead>
