@@ -337,18 +337,23 @@ function getActiveRemoteProfileBaseUrl(): string | null {
   return profile?.baseUrl ?? null;
 }
 
-export async function clientDebugLog(level: string, message: string, data?: unknown) {
-  try {
-    const baseUrl = getActiveRemoteProfileBaseUrl();
-    if (!baseUrl) return;
-    await fetch(`${baseUrl}/debug/log`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ level, message, data }),
-    });
-  } catch {
-    // silent — logging should never break the app
-  }
+export function clientDebugLog(level: string, message: string, data?: unknown): void {
+  // FIRE-AND-FORGET: debug logging MUST NOT block startup or user actions.
+  // The caller treats the return value as Promise<void> (old signature) so
+  // this function still "returns" thenable-but-we-don't-catch — but we
+  // intentionally drop the Promise here.
+  const baseUrl = getActiveRemoteProfileBaseUrl();
+  if (!baseUrl) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 500);
+  void fetch(`${baseUrl}/debug/log`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ level, message, data }),
+    signal: controller.signal,
+  })
+    .catch(() => { /* silent — logging should never break the app */ })
+    .finally(() => clearTimeout(timer));
 }
 
 // ── Clipboard ──────────────────────────────────────────────────────────

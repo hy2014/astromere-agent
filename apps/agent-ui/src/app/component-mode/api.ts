@@ -333,38 +333,187 @@ export function previewNodeOutput(
  *  browser / webview download. Handles auth headers and file extraction
  *  from `Content-Disposition`.
  */
-export async function downloadNodeOutput(
+export type DownloadProgress = {
+  loaded: number;
+  total: number | null;
+  percent: number | null; // null if server didn't send Content-Length
+};
+
+export type DownloadHandle = {
+  /** Resolves to the chosen save path (Tauri) or filename (browser). */
+  promise: Promise<string>;
+  abort: () => void;
+  /** 0–100, or null if size unknown. */
+  onProgress: (cb: (p: DownloadProgress) => void) => void;
+};
+
+/**
+ * Download a node output file. Respects the Tauri plugin-dialog when
+ * available (→ OS-native "Save As" picker), falls back to the browser's
+ * default download directory in pure-HTTP / non-Tauri environments.
+ *
+ * Returns a handle so the caller can render a progress bar + cancel button.
+ */
+export function downloadNodeOutput(
   executionId: string,
   nodeId: string,
   outputName: string,
-): Promise<void> {
+  preferredFilename?: string,
+): DownloadHandle {
   const profile = getDagProfile();
   const url = `${profile.baseUrl}/api/executions/${encodeURIComponent(executionId)}/nodes/${encodeURIComponent(nodeId)}/outputs/${encodeURIComponent(outputName)}/download`;
-  const response = await fetch(url, {
-    headers: {
-      ...(profile.token ? { Authorization: `Bearer ${profile.token}` } : {}),
-    },
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `下载失败 (HTTP ${response.status})`);
+
+  const ac = new AbortController();
+  let progressCb: ((p: DownloadProgress) => void) | null = null;
+  const setProgress = (p: DownloadProgress) => progressCb?.(p);
+
+  let promise: Promise<string>;
+
+  // --- Detect Tauri runtime: @tauri-apps/api is only bundled in the Tauri build ---
+  const isTauri = typeof window !== "undefined" && "__TAURI__" in (window as any);
+
+  if (isTauri) {
+    promise = downloadViaTauriSave(url, {
+      signal: ac.signal,
+      authToken: profile.token,
+      preferredFilename,
+      outputName,
+      onProgress: setProgress,
+    });
+  } else {
+    promise = downloadViaBrowserBlob(url, {
+      signal: ac.signal,
+      authToken: profile.token,
+      onProgress: setProgress,
+    });
   }
-  const blob = await response.blob();
-  const contentDisposition = response.headers.get("content-disposition") ?? "";
-  // `attachment; filename="sentiment_features.parquet"` → extract filename
+
+  return {
+    promise,
+    abort: () => ac.abort(),
+    onProgress: (cb) => {
+      progressCb = cb;
+    },
+  };
+}
+
+async function downloadViaBrowserBlob(
+  url: string,
+  opts: { signal: AbortSignal; authToken?: string; onProgress: (p: DownloadProgress) => void },
+): Promise<string> {
+  const resp = await fetch(url, {
+    signal: opts.signal,
+    headers: opts.authToken ? { Authorization: `Bearer ${opts.authToken}` } : {},
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text || `下载失败 (HTTP ${resp.status})`);
+  }
+  const contentDisposition = resp.headers.get("content-disposition") ?? "";
   const match = contentDisposition.match(/filename="?([^";]+)"?/);
-  const filename = match?.[1] ?? outputName;
-  const downloadUrl = URL.createObjectURL(blob);
+  const filename = match?.[1] ?? downloadFilenameFromUrl(url);
+
+  const total = resp.headers.get("content-length") ? Number(resp.headers.get("content-length")) : null;
+  const reader = resp.body!.getReader();
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    chunks.push(value!);
+    loaded += value!.byteLength;
+    opts.onProgress({
+      loaded,
+      total,
+      percent: total != null ? Math.round((loaded / total) * 100) : null,
+    });
+  }
+  const blob = new Blob(chunks as BlobPart[]);
+  const blobUrl = URL.createObjectURL(blob);
   try {
     const a = document.createElement("a");
-    a.href = downloadUrl;
+    a.href = blobUrl;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
   } finally {
-    // Give the browser a tick to initiate the download before revoking.
-    setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+  }
+  return filename;
+}
+
+async function downloadViaTauriSave(
+  url: string,
+  opts: {
+    signal: AbortSignal;
+    authToken?: string;
+    preferredFilename?: string;
+    outputName: string;
+    onProgress: (p: DownloadProgress) => void;
+  },
+): Promise<string> {
+  // Lazy-import — these modules only exist in the Tauri bundle.
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const suggestedName = opts.preferredFilename ?? opts.outputName;
+
+  // 1. Show OS-native "Save As" picker FIRST — cancel early if user bails.
+  const chosen = await save({
+    defaultPath: suggestedName,
+    title: "保存输出文件",
+  });
+  if (chosen == null) {
+    throw new DOMException("用户取消了保存对话框", "AbortError");
+  }
+
+  // 2. Stream the file from the DAG server, reporting progress as we go.
+  const resp = await fetch(url, {
+    signal: opts.signal,
+    headers: opts.authToken ? { Authorization: `Bearer ${opts.authToken}` } : {},
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text || `下载失败 (HTTP ${resp.status})`);
+  }
+  const total = resp.headers.get("content-length") ? Number(resp.headers.get("content-length")) : null;
+  const reader = resp.body!.getReader();
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    chunks.push(value!);
+    loaded += value!.byteLength;
+    opts.onProgress({
+      loaded,
+      total,
+      percent: total != null ? Math.round((loaded / total) * 100) : null,
+    });
+  }
+
+  // 3. Hand the complete byte buffer to Rust so it writes to the path the
+  //    user chose. This avoids having to ship plugin-fs just for one write.
+  const merged = new Uint8Array(loaded);
+  let offset = 0;
+  for (const c of chunks) {
+    merged.set(c, offset);
+    offset += c.byteLength;
+  }
+  await invoke("save_bytes_to_file", {
+    path: chosen,
+    bytes: Array.from(merged),
+  });
+  return chosen;
+}
+
+function downloadFilenameFromUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split("/").filter(Boolean).pop();
+    return decodeURIComponent(last ?? "output");
+  } catch {
+    return "output";
   }
 }
 

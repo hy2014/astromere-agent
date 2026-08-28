@@ -173,6 +173,7 @@ fn main() {
             scheduler::get_execution_logs,
             scheduler::get_node_executions,
             scheduler::cancel_execution,
+            scheduler::save_bytes_to_file,
             dag_server_config::load_dag_server,
             dag_server_config::save_dag_server,
             dag_server_config::clear_dag_server,
