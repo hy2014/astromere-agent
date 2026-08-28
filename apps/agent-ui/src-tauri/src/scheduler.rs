@@ -907,6 +907,30 @@ pub fn cancel_execution(execution_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Tauri command: write raw bytes to an absolute path chosen by the user
+/// via the native "Save As" dialog. Used by the DataPreviewModal download
+/// flow — the frontend streams the file from the DAG server, shows live
+/// progress, then hands the bytes off here so the file lands exactly where
+/// the user picked.
+///
+/// Only compiled when the "gui" feature is on (Tauri build); the headless
+/// HTTP server has no IPC layer and therefore doesn't expose this command.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn save_bytes_to_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    // Ensure the parent directory exists — dialog.save() doesn't create it
+    // automatically if the user picks a folder that was just mounted.
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!("创建目标目录失败 {}: {}", parent.display(), e)
+        })?;
+    }
+    std::fs::write(&path, &bytes).map_err(|e| {
+        format!("写文件失败 {}: {}", path, e)
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

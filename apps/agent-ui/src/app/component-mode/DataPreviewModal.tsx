@@ -1,9 +1,11 @@
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {
   downloadNodeOutput,
   getNodeExecutions,
   listExecutions,
   previewNodeOutput,
+  type DownloadHandle,
+  type DownloadProgress,
   type OutputPreview,
 } from "./api";
 import type {NodeExecution} from "../../types";
@@ -29,6 +31,115 @@ function formatCell(v: unknown): string {
  *    100 rows of that output.
  *  - Table columns = column names, rows = values per column.
  */
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+type DownloadZoneProps = {
+  downloading: boolean;
+  progress: DownloadProgress | null;
+  error: string | null;
+  savedPath: string | null;
+  canDownload: boolean;
+  compact?: boolean;
+  onStart: () => void;
+  onCancel: () => void;
+  onCopySaved: (p: string) => void;
+};
+
+function DownloadZone({
+  downloading,
+  progress,
+  error,
+  savedPath,
+  canDownload,
+  compact,
+  onStart,
+  onCancel,
+  onCopySaved,
+}: DownloadZoneProps) {
+  // --- Downloading state: progress bar + cancel button ---
+  if (downloading) {
+    const percent = progress?.percent ?? null;
+    const loaded = progress?.loaded ?? 0;
+    const total = progress?.total ?? null;
+    return (
+      <div className={`data-preview-download-zone ${compact ? "compact" : ""}`}>
+        <div className="data-preview-download-progress-wrap">
+          <div className="data-preview-download-progress-bar">
+            <div
+              className="data-preview-download-progress-fill"
+              style={{width: percent != null ? `${percent}%` : "0%"}}
+            />
+          </div>
+          <span className="data-preview-download-percent">
+            {percent != null
+              ? `${percent}%`
+              : formatBytes(loaded) + (total != null ? ` / ${formatBytes(total)}` : "")}
+          </span>
+        </div>
+        <div className="data-preview-download-meta">
+          {total != null
+            ? `${formatBytes(loaded)} / ${formatBytes(total)}`
+            : `已下载 ${formatBytes(loaded)}`}
+        </div>
+        <button
+          type="button"
+          className="data-preview-copy-btn"
+          onClick={onCancel}
+          title="取消下载"
+        >
+          ✕ 取消
+        </button>
+      </div>
+    );
+  }
+
+  // --- Downloaded state: show where the file landed ---
+  if (savedPath) {
+    return (
+      <div className={`data-preview-download-zone success ${compact ? "compact" : ""}`}>
+        <span className="data-preview-download-success">✓ 已保存到</span>
+        <span className="data-preview-download-savedpath" title={savedPath}>
+          {savedPath}
+        </span>
+        <button
+          type="button"
+          className="data-preview-copy-btn"
+          onClick={() => onCopySaved(savedPath)}
+          title="复制保存路径"
+        >
+          复制路径
+        </button>
+      </div>
+    );
+  }
+
+  // --- Idle state: big download button ---
+  return (
+    <div className={`data-preview-download-zone ${compact ? "compact" : ""}`}>
+      {error && (
+        <span className="data-preview-download-error" title={error}>
+          ⚠ {error}
+        </span>
+      )}
+      <button
+        type="button"
+        className="data-preview-copy-btn data-preview-download-btn"
+        disabled={!canDownload}
+        onClick={onStart}
+        title="下载原始文件到本地"
+      >
+        ⬇ 下载
+      </button>
+    </div>
+  );
+}
+
 export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPreviewModalProps) {
   const [outputKeys, setOutputKeys] = useState<string[]>([]);
   const [activeOutput, setActiveOutput] = useState<string | null>(null);
@@ -59,18 +170,41 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
     }
   }, []);
 
-  const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [downloadPath, setDownloadPath] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const downloadHandleRef = useRef<DownloadHandle | null>(null);
+
+  const handleCancelDownload = useCallback(() => {
+    downloadHandleRef.current?.abort();
+    downloadHandleRef.current = null;
+    setDownloading(false);
+    setDownloadProgress(null);
+  }, []);
 
   const handleDownload = useCallback(async (outputName: string) => {
     if (!executionId) return;
     setDownloadError(null);
+    setDownloadPath(null);
+    setDownloadProgress(null);
     setDownloading(true);
     try {
-      await downloadNodeOutput(executionId, nodeId, outputName);
+      const handle = downloadNodeOutput(executionId, nodeId, outputName);
+      downloadHandleRef.current = handle;
+      handle.onProgress(setDownloadProgress);
+      const finalPath = await handle.promise;
+      setDownloadPath(finalPath);
     } catch (e: any) {
-      setDownloadError(e?.message ?? "下载失败");
+      // User cancelled via Save-As dialog or AbortController — don't surface
+      // as a red error, just reset state.
+      if (e?.name === "AbortError" || /取消/.test(e?.message ?? "")) {
+        // silent
+      } else {
+        setDownloadError(e?.message ?? "下载失败");
+      }
     } finally {
+      downloadHandleRef.current = null;
       setDownloading(false);
     }
   }, [executionId, nodeId]);
@@ -177,14 +311,16 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
               ) : preview?.unsupported ? (
                 <div className="data-preview-unsupported-wrap">
                   <pre className="data-preview-unsupported">{preview.unsupported}</pre>
-                  <button
-                    type="button"
-                    className="data-preview-copy-btn data-preview-download-btn"
-                    disabled={downloading || !executionId}
-                    onClick={() => handleDownload(preview.outputName)}
-                  >
-                    {downloading ? "下载中…" : "⬇ 下载原始文件"}
-                  </button>
+                  <DownloadZone
+                    downloading={downloading}
+                    progress={downloadProgress}
+                    error={downloadError}
+                    savedPath={downloadPath}
+                    canDownload={!!executionId}
+                    onStart={() => handleDownload(preview.outputName)}
+                    onCancel={handleCancelDownload}
+                    onCopySaved={handleCopyPath}
+                  />
                 </div>
               ) : preview && preview.columns.length > 0 ? (
                 <>
@@ -206,21 +342,18 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
                     >
                       {copied ? "✓ 已复制" : "复制"}
                     </button>
-                    <button
-                      type="button"
-                      className="data-preview-copy-btn data-preview-download-btn"
-                      disabled={downloading || !executionId}
-                      onClick={() => handleDownload(preview.outputName)}
-                      title="下载原始文件"
-                    >
-                      {downloading ? "下载中…" : "⬇ 下载"}
-                    </button>
-                    {downloadError && (
-                      <span className="data-preview-download-error" title={downloadError}>
-                        ⚠ {downloadError}
-                      </span>
-                    )}
                   </div>
+                  <DownloadZone
+                    downloading={downloading}
+                    progress={downloadProgress}
+                    error={downloadError}
+                    savedPath={downloadPath}
+                    canDownload={!!executionId}
+                    onStart={() => handleDownload(preview.outputName)}
+                    onCancel={handleCancelDownload}
+                    onCopySaved={handleCopyPath}
+                    compact
+                  />
                   <div className="data-preview-table-wrap">
                     <table className="data-preview-table">
                       <thead>
