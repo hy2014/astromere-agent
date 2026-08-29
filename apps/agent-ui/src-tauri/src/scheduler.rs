@@ -7,7 +7,8 @@ use crate::types::{DagDetail, DagExecution, ExecutionLog, NodeExecution, NodeLog
 use chrono::{Local, Timelike};
 use rusqlite::params;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::{Duration, SystemTime};
 
@@ -125,6 +126,165 @@ pub fn submit_dag_run(dag_id: &str, trigger_kind: &str) -> Result<DagExecution, 
         dag_id: dag_id.to_string(),
         status: "submit".to_string(),
         trigger_kind: Some(trigger_kind.to_string()),
+        started_at_ms: Some(now),
+        completed_at_ms: None,
+        outputs: None,
+        snapshot: Some(snapshot),
+    };
+
+    conn.execute(
+        "INSERT INTO dag_executions (id, dag_id, status, trigger_kind, started_at_ms, \
+         completed_at_ms, outputs, snapshot) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            execution.id,
+            execution.dag_id,
+            execution.status,
+            execution.trigger_kind,
+            execution.started_at_ms,
+            execution.completed_at_ms,
+            execution.outputs.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()),
+            execution.snapshot,
+        ],
+    )
+    .map_err(error_to_string)?;
+
+    Ok(execution)
+}
+
+/// BFS on reversed edges to collect every ancestor of `target_id`.
+/// Cycles are handled by a visited set; the target itself is *not* included.
+pub(crate) fn get_node_ancestors(
+    detail: &DagDetail,
+    target_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut rev_adj: HashMap<String, Vec<String>> = HashMap::new();
+    for e in &detail.edges {
+        rev_adj
+            .entry(e.target_node_id.clone())
+            .or_default()
+            .push(e.source_node_id.clone());
+    }
+    let mut ancestors: Vec<String> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut frontier: Vec<String> = vec![target_id.to_string()];
+    while let Some(cur) = frontier.pop() {
+        if let Some(sources) = rev_adj.get(&cur) {
+            for src in sources {
+                if visited.insert(src.clone()) {
+                    ancestors.push(src.clone());
+                    frontier.push(src.clone());
+                }
+            }
+        }
+    }
+    Ok(ancestors)
+}
+
+/// Find the most recent success execution for `dag_id`, then pull
+/// node_executions.outputs for each ancestor. Returns a map keyed by
+/// ancestor node_id → outputs JSON object. Ancestors without outputs
+/// (failed / skipped / never executed) are simply absent from the map.
+pub(crate) fn load_upstream_outputs(
+    dag_id: &str,
+    ancestor_ids: &[String],
+) -> Result<Map<String, Value>, String> {
+    if ancestor_ids.is_empty() {
+        return Ok(Map::new());
+    }
+    let (conn, _path) = open_sqlite_database()?;
+
+    // Most recent success execution.
+    let exec_id: String = conn
+        .query_row(
+            "SELECT id FROM dag_executions \
+             WHERE dag_id = ?1 AND status = 'success' \
+             ORDER BY started_at_ms DESC LIMIT 1",
+            params![dag_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                format!(
+                    "未找到 DAG {} 成功的历史运行记录，无法继续执行。请先完整运行一次 DAG。",
+                    dag_id
+                )
+            }
+            other => error_to_string(other),
+        })?;
+
+    // Pull outputs for each ancestor.
+    let mut result = Map::new();
+    for ancestor in ancestor_ids {
+        let outputs_str: Option<String> = conn
+            .query_row(
+                "SELECT outputs FROM node_executions \
+                 WHERE execution_id = ?1 AND node_id = ?2 LIMIT 1",
+                params![exec_id, ancestor],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        if let Some(s) = outputs_str {
+            if let Ok(v) = serde_json::from_str::<Value>(&s) {
+                result.insert(ancestor.clone(), v);
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Build a snapshot JSON for a resume run — same shape as `build_snapshot`
+/// except execution_order contains only the target node and an additional
+/// `upstream_outputs` key carries ancestor outputs pulled from the last
+/// successful execution.
+pub(crate) fn build_resume_snapshot(
+    detail: &DagDetail,
+    target_node_id: &str,
+    upstream_outputs: Map<String, Value>,
+) -> Result<String, String> {
+    let base = build_snapshot(detail)?;
+    let mut plan: Value = serde_json::from_str(&base).map_err(error_to_string)?;
+
+    // execution_order → just the target node
+    plan["execution_order"] = Value::Array(vec![Value::String(target_node_id.to_string())]);
+
+    // upstream_outputs — ancestors' outputs pulled from the DB
+    let outer = if let Some(obj) = plan.as_object_mut() {
+        obj
+    } else {
+        return Err("snapshot root is not an object".to_string());
+    };
+    outer.insert("upstream_outputs".to_string(), Value::Object(upstream_outputs));
+
+    serde_json::to_string(&plan).map_err(error_to_string)
+}
+
+/// Submit a "run this single node" execution. Ancestor outputs are seeded
+/// from the most recent successful full-run of the DAG (or any execution
+/// where the ancestor actually produced outputs).
+#[cfg_attr(feature = "gui", tauri::command)]
+pub fn submit_resume_run(dag_id: String, node_id: String) -> Result<DagExecution, String> {
+    let detail = get_dag(dag_id.clone())?;
+
+    // Confirm target node actually belongs to this DAG.
+    let node_exists = detail.nodes.iter().any(|n| n.id == node_id);
+    if !node_exists {
+        return Err(format!("节点 {} 不在 DAG {} 中", node_id, dag_id));
+    }
+
+    let ancestors = get_node_ancestors(&detail, &node_id)?;
+    let upstream_outputs = load_upstream_outputs(&dag_id, &ancestors)?;
+
+    let snapshot = build_resume_snapshot(&detail, &node_id, upstream_outputs)?;
+
+    let (conn, _path) = open_sqlite_database()?;
+    let id = crate::utils::generate_agent_ui_session_id();
+    let now = chrono::Utc::now().timestamp_millis();
+    let execution = DagExecution {
+        id: id.clone(),
+        dag_id: dag_id.clone(),
+        status: "submit".to_string(),
+        trigger_kind: Some("resume".to_string()),
         started_at_ms: Some(now),
         completed_at_ms: None,
         outputs: None,

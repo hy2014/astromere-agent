@@ -30,6 +30,9 @@ export type ComponentCanvasProps = {
   // Right-click a node → preview that node's output data. `label` is the node's
   // display name (label || component name).
   onPreviewNode?: (nodeId: string, label: string) => void;
+  // Right-click a node → resume-run only that node, seeding ancestors from
+  // the last successful full-run of the same DAG.
+  onRunSingleNode?: (nodeId: string, label: string) => void;
   // Called after a *generic* component is created on drop, so the parent can
   // refresh its component list (enabling node→component lookup on selection).
   onComponentCreated?: (component: Component) => void;
@@ -210,6 +213,7 @@ function ComponentCanvasInner({
   onSelectNode,
   onDeleteNode,
   onPreviewNode,
+  onRunSingleNode,
   onComponentCreated,
 }: ComponentCanvasProps) {
   const componentMap = new Map(components.map((component) => [component.id, component]));
@@ -480,6 +484,18 @@ function ComponentCanvasInner({
           >
             预览数据
           </button>
+          {onRunSingleNode && (
+            <button
+              type="button"
+              className="node-context-item node-context-item-resume"
+              onClick={() => {
+                onRunSingleNode(menu.nodeId, menu.label);
+                setMenu(null);
+              }}
+            >
+              ▶ 在此节点继续执行
+            </button>
+          )}
         </div>
       </>
     )}

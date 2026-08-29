@@ -175,6 +175,17 @@ async fn run_dag_handler(Path(dag_id): Path<String>) -> Result<Json<DagExecution
     scheduler::run_dag(dag_id).map(Json).map_err(AppError::new)
 }
 
+/// Submit a resume run for a single node. The node's ancestors are seeded
+/// with their most recent successful outputs from the last successful full-run
+/// of the same DAG. The resulting execution runs only the target node.
+async fn run_single_node_handler(
+    Path((dag_id, node_id)): Path<(String, String)>,
+) -> Result<Json<DagExecution>, AppError> {
+    scheduler::submit_resume_run(dag_id, node_id)
+        .map(Json)
+        .map_err(AppError::new)
+}
+
 async fn get_execution_handler(Path(execution_id): Path<String>) -> Result<Json<DagExecution>, AppError> {
     scheduler::get_execution(execution_id).map(Json).map_err(AppError::new)
 }
@@ -292,6 +303,10 @@ pub fn register_dag_routes(router: Router<AppState>) -> Router<AppState> {
         .route("/api/dags/:dag_id/unpublish", post(unpublish_dag_handler))
         // executions
         .route("/api/dags/:dag_id/run", post(run_dag_handler))
+        .route(
+            "/api/dags/:dag_id/nodes/:node_id/resume",
+            post(run_single_node_handler),
+        )
         .route("/api/dags/:dag_id/executions", get(list_executions_handler))
         .route("/api/executions/:execution_id", get(get_execution_handler))
         .route("/api/executions/:execution_id/logs", get(get_execution_logs_handler))
