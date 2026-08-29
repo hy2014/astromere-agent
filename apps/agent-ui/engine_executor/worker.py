@@ -177,9 +177,15 @@ class Worker:
                 inp.update(params)
             return inp
 
+        upstream_seed = plan.get("upstream_outputs") or {}
         inp = {}
         for e in upstream:
             out = node_outputs.get(e["source_node_id"])
+            if out is None:
+                # Resume mode: fall back to outputs seeded from the last
+                # successful execution. Normal (full-run) executions do not
+                # carry upstream_outputs, so this branch is a no-op there.
+                out = upstream_seed.get(e["source_node_id"])
             if out is None:
                 continue
             # UI stores handles as "out:<port>" / "in:<port>" (React-Flow Handle
@@ -320,8 +326,13 @@ class Worker:
             upstream_ids = [
                 e["source_node_id"] for e in plan["edges"] if e["target_node_id"] == node_id
             ]
+            upstream_seed = plan.get("upstream_outputs") or {}
             with state_lock:
-                upstream_failed = any(node_status.get(uid) == "failed" for uid in upstream_ids)
+                upstream_failed = any(
+                    node_status.get(uid) == "failed"
+                    or (uid not in node_status and upstream_seed.get(uid) is None)
+                    for uid in upstream_ids
+                )
             if upstream_failed:
                 upsert_node_execution(exec_id, node_id, "skipped", completed_at_ms=now())
                 add_log(exec_id, node_id, "info", "上游状态为 failed/skipped，本节点跳过")

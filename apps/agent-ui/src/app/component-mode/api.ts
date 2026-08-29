@@ -269,6 +269,13 @@ export function runDag(dagId: string): Promise<DagExecution> {
   });
 }
 
+export function runSingleNode(dagId: string, nodeId: string): Promise<DagExecution> {
+  return dagJson<DagExecution>(
+    `/api/dags/${encodeURIComponent(dagId)}/nodes/${encodeURIComponent(nodeId)}/resume`,
+    { method: "POST" },
+  );
+}
+
 export function getExecution(executionId: string): Promise<DagExecution> {
   return dagJson<DagExecution>(`/api/executions/${encodeURIComponent(executionId)}`);
 }

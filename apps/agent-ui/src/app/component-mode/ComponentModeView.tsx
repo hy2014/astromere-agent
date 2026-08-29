@@ -14,6 +14,7 @@ import {
   loadDagServer,
   publishDag,
   runDag,
+  runSingleNode,
   testDagServerHealth,
   unpublishDag,
   updateComponent,
@@ -442,6 +443,27 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
     }
   }, [activeDagId, runInProgress, instanceValidationError]);
 
+  const handleRunSingleNode = useCallback(
+    async (nodeId: string, nodeLabel?: string) => {
+      if (!activeDagId || runInProgress) return;
+      try {
+        const exec = await runSingleNode(activeDagId, nodeId);
+        setLatestExec(exec);
+        setRunSignal((s) => s + 1);
+        await message(
+          nodeLabel
+            ? `已提交「${nodeLabel}」继续执行，正在拉取历史 outputs 作为上游输入`
+            : "已提交节点继续执行",
+          { kind: "info", title: "已提交" },
+        );
+      } catch (error) {
+        console.error("[dag-mode] failed to resume single node", error);
+        await message(String(error), { kind: "error", title: "继续执行失败" });
+      }
+    },
+    [activeDagId, runInProgress],
+  );
+
   const handleUnpublishDag = useCallback(async (dagId: string) => {
     const ok = await confirm("下线该 DAG？将把状态改回草稿（cron 保留，可再次发布）。", {
       title: "下线 DAG",
@@ -777,6 +799,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
                 onSelectNode={handleSelectNode}
                 onDeleteNode={handleDeleteNode}
                 onPreviewNode={(nodeId, label) => setPreviewNode({nodeId, label})}
+                onRunSingleNode={handleRunSingleNode}
                 onComponentCreated={handleComponentCreated}
               />
             ) : (

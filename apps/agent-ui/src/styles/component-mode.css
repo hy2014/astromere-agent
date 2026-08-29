@@ -2249,6 +2249,11 @@
   background: #f1f5f9;
 }
 
+.node-context-item-resume:hover {
+  background: #ecfdf5;
+  color: #047857;
+}
+
 /* ─── 节点输出数据预览弹框 ─────────────────────────────────────── */
 .data-preview-overlay {
   position: fixed;

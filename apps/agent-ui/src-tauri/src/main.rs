@@ -168,6 +168,7 @@ fn main() {
             dag::publish_dag,
             dag::unpublish_dag,
             scheduler::run_dag,
+            scheduler::submit_resume_run,
             scheduler::get_execution,
             scheduler::list_executions,
             scheduler::get_execution_logs,
