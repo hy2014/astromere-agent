@@ -125,7 +125,7 @@ export type SlashRootItem = {
   disabled?: boolean;
 };
 
-export type SettingsSection = "models" | "remote" | "sessions";
+export type SettingsSection = "models" | "remote" | "sessions" | "dw";
 
 export type SettingsViewProps = {
   hiddenSessions: HiddenSession[];

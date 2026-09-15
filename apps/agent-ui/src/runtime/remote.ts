@@ -236,6 +236,15 @@ export function createRemoteRuntime(profile: RemoteProfile): AgentRuntime {
       body: JSON.stringify(settings),
     });
 
+  runtime.loadDwSettings = async () =>
+    remoteJson(profile, "/dw/settings");
+
+  runtime.saveDwSettings = async (settings: any) =>
+    remoteJson(profile, "/dw/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    });
+
   runtime.listSkills = async (root: string) =>
     remoteJson(profile, `/skills${query({ root })}`);
 

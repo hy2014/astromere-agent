@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from "react";
-import type {Component, ConfigSchemaItem, DagNode} from "../../types";
-import {isListType, validateInstanceConfig} from "./componentModel";
+import type {Component, ConfigSchemaItem, DagNode, PortDef} from "../../types";
+import {isListType, schemaToPorts, validateInstanceConfig} from "./componentModel";
 
 export type InstanceConfigFormProps = {
   node: DagNode;
@@ -15,6 +15,11 @@ type FreePair = {id: string; key: string; value: string};
 // System-level knobs are stored with the `system.` prefix (see SystemConfigForm)
 // and owned by the System Config tab; this tab only manages run parameters (no prefix).
 const SYSTEM_PREFIX = "system.";
+// DW registration knobs (`dw.enabled` / `dw.port` / `dw.table`) are owned by the
+// "注册到DW" section below; the run-param editors must not touch them.
+const DW_PREFIX = "dw.";
+// Table-name whitelist enforced here (UX) and again by the runner (safety).
+const DW_TABLE_RE = /^[A-Za-z0-9_-]+$/;
 
 function pairsFromValues(values: InstanceValues): FreePair[] {
   return Object.entries(values).map(([key, value]) => ({
@@ -30,9 +35,9 @@ function readParams(node: DagNode): InstanceValues {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     const all = raw as Record<string, unknown>;
     const out: InstanceValues = {};
-    // Drop `system.*` keys — those belong to the System Config tab.
+    // Drop `system.*` and `dw.*` keys — those belong to other UI sections.
     for (const [k, v] of Object.entries(all)) {
-      if (!k.startsWith(SYSTEM_PREFIX)) out[k] = v;
+      if (!k.startsWith(SYSTEM_PREFIX) && !k.startsWith(DW_PREFIX)) out[k] = v;
     }
     return out;
   }
@@ -207,6 +212,135 @@ function controlFor(
   }
 }
 
+// "注册到DW" section: registers one output port of this node into the data
+// warehouse. Values live in `node.config.params` under the `dw.` prefix
+// (`dw.enabled` / `dw.port` / `dw.table`) so they never mix with run params
+// (a source node's params are forwarded verbatim to downstream inputs).
+// Reads/writes the *freshest* node so run-param edits never get clobbered.
+function DwSection({
+  node,
+  ports,
+  onChange,
+}: {
+  node: DagNode;
+  ports: PortDef[];
+  onChange: (n: DagNode) => void;
+}) {
+  const nodeRef = useRef(node);
+  nodeRef.current = node;
+
+  function readDw(): {enabled: boolean; port: string; table: string} {
+    const config = nodeRef.current.config as Record<string, unknown> | undefined;
+    const params =
+      config && config.params && typeof config.params === "object"
+        ? (config.params as Record<string, unknown>)
+        : {};
+    return {
+      enabled: params["dw.enabled"] === true,
+      port: typeof params["dw.port"] === "string" ? (params["dw.port"] as string) : "",
+      table: typeof params["dw.table"] === "string" ? (params["dw.table"] as string) : "",
+    };
+  }
+
+  const [dw, setDw] = useState(readDw);
+
+  // Re-sync when a *different* node is selected.
+  useEffect(() => {
+    setDw(readDw());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.id]);
+
+  function commit(patch: Partial<{enabled: boolean; port: string; table: string}>) {
+    const next = {...dw, ...patch};
+    setDw(next);
+    const config =
+      nodeRef.current.config && typeof nodeRef.current.config === "object"
+        ? (nodeRef.current.config as Record<string, unknown>)
+        : {};
+    const existing =
+      config.params && typeof config.params === "object"
+        ? (config.params as Record<string, unknown>)
+        : {};
+    const updated: DagNode = {
+      ...nodeRef.current,
+      config: {
+        params: {
+          ...existing,
+          "dw.enabled": next.enabled,
+          "dw.port": next.port,
+          "dw.table": next.table,
+        },
+      },
+    };
+    onChange(updated);
+  }
+
+  const tableErr =
+    dw.enabled && dw.table.trim() !== "" && !DW_TABLE_RE.test(dw.table.trim())
+      ? "表名仅允许字母、数字、下划线和连字符"
+      : undefined;
+  const portErr = dw.enabled && dw.port === "" ? "请选择要注册的输出端口" : undefined;
+  const tableEmptyErr = dw.enabled && dw.table.trim() === "" ? "请填写表名" : undefined;
+  const error = tableErr ?? portErr ?? tableEmptyErr;
+
+  return (
+    <div className="instance-config instance-dw">
+      <h4>注册到DW</h4>
+      <div className="instance-field">
+        <label className="instance-label instance-dw-toggle">
+          <input
+            type="checkbox"
+            checked={dw.enabled}
+            onChange={(e) => commit({enabled: e.target.checked})}
+          />
+          <span>将输出端口写入数据仓库（{`{dw_root}/{表名}/`}）</span>
+        </label>
+      </div>
+      {dw.enabled && (
+        <>
+          <div className="instance-field">
+            <label className="instance-label">
+              <span>输出端口</span>
+              <span className="instance-desc">该端口的数据文件将直接写入 DW 表目录</span>
+            </label>
+            <select
+              className="instance-input"
+              value={dw.port}
+              onChange={(e) => commit({port: e.target.value})}
+            >
+              <option value="">— 请选择 —</option>
+              {ports.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                  {p.format ? ` (${p.format})` : ""}
+                </option>
+              ))}
+            </select>
+            {portErr && <p className="instance-error">{portErr}</p>}
+          </div>
+          <div className="instance-field">
+            <label className="instance-label">
+              <span>表名（dw_table）</span>
+              <span className="instance-desc">仅字母/数字/下划线/连字符</span>
+            </label>
+            <input
+              className="instance-input"
+              type="text"
+              value={dw.table}
+              placeholder="例如 my_features"
+              onChange={(e) => commit({table: e.target.value})}
+            />
+            {(tableErr ?? tableEmptyErr) && (
+              <p className="instance-error">{tableErr ?? tableEmptyErr}</p>
+            )}
+          </div>
+        </>
+      )}
+      {error && <p className="instance-gate-warning">DW 配置有误，运行或发布前请先修正。</p>}
+    </div>
+  );
+}
+
 // Renders the *instance* configuration form for a node: one control per
 // declared parameter in the component's config_schema, with value stored in
 // `node.config.params` (node-level, not the component definition). Validates
@@ -215,6 +349,8 @@ function controlFor(
 export function InstanceConfigForm({node, component, onChange}: InstanceConfigFormProps) {
   const schema = component.configSchema ?? [];
   const [values, setValues] = useState<InstanceValues>(() => readParams(node));
+  // DW-eligible ports: file (data) ports only — status ports carry no data.
+  const dwPorts = schemaToPorts(component.outputSchema).filter((p) => p.type === "file");
   // Keep the latest node so a commit here never clobbers keys owned by the
   // System Config tab (e.g. `system.python_path`): when we re-read existing
   // params we use the freshest node, not the one captured at mount.
@@ -242,15 +378,21 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
         : {};
     const out: Record<string, unknown> = {};
     // Preserve system-level knobs (owned by the System Config tab, stored with
-    // the `system.` prefix) so this tab never clobbers them.
+    // the `system.` prefix) and DW knobs (owned by the 注册到DW section, `dw.`
+    // prefix) so this tab never clobbers them.
     for (const [k, v] of Object.entries(existing)) {
-      if (k.startsWith(SYSTEM_PREFIX)) out[k] = v;
+      if (k.startsWith(SYSTEM_PREFIX) || k.startsWith(DW_PREFIX)) out[k] = v;
     }
     // Preserve any other legacy run params this tab does not enumerate (the
     // structured schema view only lists declared keys; free-form mode already
     // includes them in `next`).
     for (const [k, v] of Object.entries(existing)) {
-      if (!k.startsWith(SYSTEM_PREFIX) && !schema.some((s) => s.key === k) && !(k in next)) {
+      if (
+        !k.startsWith(SYSTEM_PREFIX) &&
+        !k.startsWith(DW_PREFIX) &&
+        !schema.some((s) => s.key === k) &&
+        !(k in next)
+      ) {
         out[k] = v;
       }
     }
@@ -276,6 +418,9 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
       <div className="instance-config">
         <h4>运行参数</h4>
         <FreeFormParams values={values} nodeId={node.id} onChange={commit} />
+        {dwPorts.length > 0 && (
+          <DwSection node={node} ports={dwPorts} onChange={onChange} />
+        )}
       </div>
     );
   }
@@ -302,6 +447,7 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
       {hasErrors && (
         <p className="instance-gate-warning">存在必填/类型错误，运行或发布前请先修正。</p>
       )}
+      {dwPorts.length > 0 && <DwSection node={node} ports={dwPorts} onChange={onChange} />}
     </div>
   );
 }

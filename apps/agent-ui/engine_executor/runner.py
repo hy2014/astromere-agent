@@ -14,6 +14,7 @@ The worker owns the state machine; this module is the "do the work" primitive.
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -490,6 +491,7 @@ def run_node(
     log_fn=None,
     python_path=None,
     node_log_path=None,
+    dw_export=None,
 ):
     """Execute a single component node.
 
@@ -500,7 +502,30 @@ def run_node(
     ``log_fn(kind, message)`` (kind in {"stdout", "stderr"}) is invoked for
     every line as it is produced, so callers can persist logs in real time
     (the worker wires this to ``db.add_log`` so the UI sees live output).
+
+    ``dw_export`` (``{port, table, table_dir}`` or None) registers one output
+    port into the data warehouse: the table directory is created here and
+    announced to the component via ``AGENT_UI_OUTPUT_DATA_DIRS`` so the
+    component writes its data files directly under ``{dw_root}/{table}/``.
     """
+    # DW export: validate + create the table directory up front (fail fast,
+    # before any interpreter probing). The inner layout of the table dir is
+    # owned by the component (business side); the runner only guarantees the
+    # table root exists.
+    dw_port = dw_table = dw_table_dir = ""
+    if dw_export:
+        dw_port = dw_export.get("port") or ""
+        dw_table = dw_export.get("table") or ""
+        dw_table_dir = dw_export.get("table_dir") or ""
+        # Path-traversal guard (defense in depth — the worker validates too).
+        if not dw_port or not re.match(r"^[A-Za-z0-9_-]+$", dw_table):
+            raise ValueError(
+                f"invalid dw_export: port={dw_port!r} table={dw_table!r}"
+            )
+        if not os.path.isabs(dw_table_dir):
+            raise ValueError(f"invalid dw_export table_dir: {dw_table_dir!r}")
+        os.makedirs(dw_table_dir, exist_ok=True)
+
     os.makedirs(work_dir, exist_ok=True)
     # Optionally tee the component's raw stdout/stderr to a file on disk (one
     # file per node, untruncated) so the UI can page through the full log.
@@ -533,6 +558,10 @@ def run_node(
             "AGENT_UI_COMPONENT_ROOT": component_root,
         }
     )
+    if dw_export:
+        env["AGENT_UI_OUTPUT_DATA_DIRS"] = json.dumps({dw_port: dw_table_dir})
+        if log_fn:
+            log_fn("info", f"DW 落库目录已就绪: 端口={dw_port} → {dw_table_dir}")
 
     if log_fn:
         log_fn("info", f"启动组件进程: {py} {entry_point} (cwd={component_root})")

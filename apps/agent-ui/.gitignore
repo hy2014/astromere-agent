@@ -2,5 +2,10 @@ node_modules/
 dist/
 .npm-cache/
 src-tauri/target/
+src-tauri/logs/
 dist-checker
 .workbuddy
+.trae/
+__pycache__/
+*.pyc
+*.log

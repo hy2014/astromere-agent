@@ -298,6 +298,10 @@ export type ModelSettings = {
   deepseekPricing?: DeepSeekPricingConfig | null;
 };
 
+export type DwSettings = {
+  dwRoot: string;
+};
+
 export type ModelConnectionTestResult = {
   ok: boolean;
   message: string;

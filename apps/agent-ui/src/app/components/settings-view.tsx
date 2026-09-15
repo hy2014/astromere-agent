@@ -4,6 +4,7 @@ import type {SettingsSection} from "../types";
 import {sessionKey} from "../file-utils";
 import {RemoteSettingsPanelView} from "./remote-settings-panel";
 import {ModelsSettingsPanelView} from "./models-settings-panel";
+import {DwSettingsPanelView} from "./dw-settings-panel";
 import {render, renderView} from "../../core/dep";
 
 // ─── Props interface (required by checker) ────────────────────────────
@@ -27,6 +28,7 @@ function goToSettingsSection(section: SettingsSection): void {
 
 const renderRemotePanel = (): JSX.Element => renderView({ fn: RemoteSettingsPanelView, props: {} });
 const renderModelsPanel = (): JSX.Element => renderView({ fn: ModelsSettingsPanelView, props: {} });
+const renderDwPanel = (): JSX.Element => renderView({ fn: DwSettingsPanelView, props: {} });
 
 // ─── renderFn functions ───────────────────────────────────────────────
 
@@ -107,6 +109,21 @@ function renderSettingsSidebar(
           </svg>
         </span>
         <strong>Remote</strong>
+      </button>
+
+      <button
+        type="button"
+        className={settingsSection === "dw" ? "active" : ""}
+        onClick={() => goToSettingsSection("dw")}
+      >
+        <span className="settings-svg-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <ellipse cx="12" cy="5.5" rx="7" ry="2.5" />
+            <path d="M5 5.5v13c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-13" />
+            <path d="M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
+          </svg>
+        </span>
+        <strong>DW</strong>
       </button>
 
       <button type="button" disabled>
@@ -226,6 +243,10 @@ function renderSettingsContent(
 ) {
   if (settingsSection === "remote") {
     return renderRemotePanel();
+  }
+
+  if (settingsSection === "dw") {
+    return renderDwPanel();
   }
 
   if (settingsSection === "sessions") {

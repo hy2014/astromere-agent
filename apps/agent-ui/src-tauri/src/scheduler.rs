@@ -74,6 +74,9 @@ pub(crate) fn build_snapshot(detail: &DagDetail) -> Result<String, String> {
                 // Carry the component's declared parameter schema into the frozen
                 // plan so the worker / history view can render the instance form.
                 config.insert("configSchema".to_string(), component.config_schema.clone());
+                // Carry the declared output ports too: the Python worker validates
+                // a node's "注册到DW" port selection against this frozen schema.
+                config.insert("outputSchema".to_string(), component.output_schema.clone());
                 // Live `dag_nodes.config` no longer stores the node name (it lives
                 // in the component definition), so re-inject it here for the
                 // history view's "per-node" snapshot display.
@@ -102,6 +105,11 @@ pub(crate) fn build_snapshot(detail: &DagDetail) -> Result<String, String> {
         "execution_order": order,
         "nodes": nodes,
         "edges": edges,
+        // Freeze the DW root at submit time: later settings changes only
+        // affect new executions, and resume runs replay with the same value.
+        "dw_root": crate::dw_core::load_dw_settings()
+            .map(|s| s.dw_root)
+            .unwrap_or_else(|_| crate::dw_core::default_dw_root()),
     });
     serde_json::to_string(&plan).map_err(error_to_string)
 }

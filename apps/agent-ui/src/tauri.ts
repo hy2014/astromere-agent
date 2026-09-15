@@ -16,6 +16,7 @@ import type {
   DagExecution,
   DagEdge,
   DagNode,
+  DwSettings,
   ExecutionLog,
   FileView,
   NodeExecution,
@@ -178,6 +179,14 @@ export function loadModelSettings(): Promise<ModelSettings> {
 
 export function saveModelSettings(settings: ModelSettings): Promise<ModelSettings> {
   return invoke("save_model_settings", { settings });
+}
+
+export function loadDwSettings(): Promise<DwSettings> {
+  return invoke("load_dw_settings");
+}
+
+export function saveDwSettings(settings: DwSettings): Promise<DwSettings> {
+  return invoke("save_dw_settings", { settings });
 }
 
 export function testModelConnection(settings: ModelSettings): Promise<ModelConnectionTestResult> {

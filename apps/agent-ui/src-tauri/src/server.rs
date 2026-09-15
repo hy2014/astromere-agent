@@ -12,6 +12,8 @@ use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 
 use crate::control;
+use crate::dw;
+use crate::dw::DwSettings;
 use crate::mcp_core;
 use crate::models_core;
 use crate::permissions;
@@ -186,6 +188,7 @@ pub fn app_router(state: AppState) -> Router {
         .route("/models/deepseek-pricing", get(deepseek_pricing_handler))
         // mcp
         .route("/mcp/settings", get(load_mcp_settings_handler).put(save_mcp_settings_handler))
+        .route("/dw/settings", get(load_dw_settings_handler).put(save_dw_settings_handler))
         // workspace
         .route("/workspace/default", get(default_workspace_handler))
         .route("/workspace/open", get(open_workspace_handler))
@@ -251,6 +254,20 @@ async fn save_model_settings_handler(
 ) -> Result<Json<ModelSettings>, AppError> {
     let saved = models_core::save_model_settings(settings)
         .map_err(|e| AppError::new(format!("failed to save model settings: {e}")))?;
+    Ok(Json(saved))
+}
+
+async fn load_dw_settings_handler() -> Result<Json<DwSettings>, AppError> {
+    let settings = dw::load_dw_settings()
+        .map_err(|e| AppError::new(format!("failed to load dw settings: {e}")))?;
+    Ok(Json(settings))
+}
+
+async fn save_dw_settings_handler(
+    Json(settings): Json<DwSettings>,
+) -> Result<Json<DwSettings>, AppError> {
+    let saved = dw::save_dw_settings(settings)
+        .map_err(|e| AppError::new(format!("failed to save dw settings: {e}")))?;
     Ok(Json(saved))
 }
 
@@ -938,6 +955,7 @@ pub fn stateless_test_router() -> Router {
         .route("/models/test", post(test_model_handler))
         .route("/models/deepseek-pricing", get(deepseek_pricing_handler))
         .route("/mcp/settings", get(load_mcp_settings_handler).put(save_mcp_settings_handler))
+        .route("/dw/settings", get(load_dw_settings_handler).put(save_dw_settings_handler))
         .route("/workspace/default", get(default_workspace_handler))
         .route("/workspace/open", get(open_workspace_handler))
         .route("/workspaces", get(list_workspaces_handler).post(add_workspace_handler).delete(remove_workspace_handler))

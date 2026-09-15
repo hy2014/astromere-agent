@@ -1,9 +1,10 @@
 # dataset-loader component
 
 A **global** source component for the `engine_executor` DAG runtime (see
-`docs/engine-executor.md`). It loads a local CSV or Parquet file, validates it,
-reads lightweight metadata, and returns the file's absolute path so downstream
-nodes can read the dataset directly from disk. It never rewrites the data.
+`docs/engine-executor.md`). It validates a local CSV/Parquet file path,
+auto-detects its format from the extension, and returns the file's absolute
+path + format so downstream nodes can read the dataset directly from disk.
+It does NOT load, copy, or rewrite the data in any way.
 
 ## What it does
 
@@ -46,7 +47,7 @@ In the app, open **注册组件** and fill:
       "key": "file",
       "label": "File",
       "type": "string",
-      "required": false,
+      "required": true,
       "description": "输入选择的文件"
     }
   ]

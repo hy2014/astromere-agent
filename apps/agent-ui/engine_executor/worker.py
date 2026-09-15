@@ -21,6 +21,7 @@ Environment:
 
 import json
 import os
+import re
 import signal
 import sys
 import threading
@@ -41,6 +42,11 @@ from db import (
     upsert_node_execution,
 )
 from runner import prepare_env, run_node
+
+# dw_table whitelist: letters/digits/underscore/hyphen only. Rejects path
+# separators, "..", absolute paths — a bad table name can never escape
+# `{dw_root}/` (defense in depth; the UI enforces the same pattern).
+DW_TABLE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class Worker:
@@ -155,6 +161,51 @@ class Worker:
                 return {}
         return cfg or {}
 
+    def resolve_dw_export(self, node, plan):
+        """Resolve the "注册到DW" settings of a node → ``{port, table, table_dir}``
+        or ``None`` when DW is not enabled for this node.
+
+        Reads the ``dw.*`` instance params (``dw.enabled`` / ``dw.port`` /
+        ``dw.table``, set by the node config panel) plus ``plan.dw_root``
+        (frozen into the snapshot at submit time). Invalid config raises
+        ``ValueError`` so the node fails loudly instead of silently running
+        without its expected DW export. Legacy snapshots without ``dw_root``
+        that somehow enable DW also fail here; nodes without ``dw.enabled``
+        are unaffected (return None → pre-DW behavior).
+        """
+        cfg = self.parse_config(node)
+        params = cfg.get("params")
+        if not isinstance(params, dict) or params.get("dw.enabled") is not True:
+            return None
+        dw_root = str(plan.get("dw_root") or "").strip()
+        if not dw_root:
+            raise ValueError(
+                "dw.enabled=true 但执行快照缺少 dw_root（全局 DW 设置未配置）"
+            )
+        port = params.get("dw.port")
+        port = port.strip() if isinstance(port, str) else ""
+        if not port:
+            raise ValueError("dw.enabled=true 但未选择输出端口 (dw.port)")
+        table = params.get("dw.table")
+        table = table.strip() if isinstance(table, str) else ""
+        if not DW_TABLE_RE.match(table):
+            raise ValueError(
+                f"dw.table 非法: {table!r}（仅允许字母/数字/下划线/连字符）"
+            )
+        # Validate the port against the component's frozen output schema
+        # (build_snapshot injects outputSchema into every node config).
+        outputs = cfg.get("outputSchema")
+        props = outputs.get("properties") if isinstance(outputs, dict) else None
+        if not isinstance(props, dict) or not props:
+            raise ValueError(
+                f"dw.port={port!r} 无法校验：快照缺少组件 outputSchema"
+            )
+        if port not in props:
+            raise ValueError(
+                f"dw.port={port!r} 不在组件输出端口 {sorted(props)} 中"
+            )
+        return {"port": port, "table": table, "table_dir": os.path.join(dw_root, table)}
+
     def build_input(self, node, plan, node_outputs):
         """Assemble the ``input.json`` payload for a node.
 
@@ -170,11 +221,18 @@ class Worker:
         cfg = self.parse_config(node)
         upstream = [e for e in plan["edges"] if e["target_node_id"] == node["id"]]
         if not upstream:
-            # Source node: instance params (node.config.params) as the input payload.
+            # Source node: instance params (node.config.params) as the input
+            # payload. `system.*` / `dw.*` keys are UI-only knobs (interpreter
+            # path, DW registration) — never business input data.
             inp = {}
             params = cfg.get("params")
             if isinstance(params, dict):
-                inp.update(params)
+                for key, value in params.items():
+                    if isinstance(key, str) and (
+                        key.startswith("system.") or key.startswith("dw.")
+                    ):
+                        continue
+                    inp[key] = value
             return inp
 
         upstream_seed = plan.get("upstream_outputs") or {}
@@ -280,6 +338,14 @@ class Worker:
         if not plan:
             plan = get_dag_plan(dag_id)
         layers = self.compute_layers(plan)
+        # If execution_order is present (resume mode), filter layers to only
+        # the nodes that should actually run. Normal full-DAG runs also ship
+        # execution_order (the full topological order), so the filter is a no-op.
+        run_order = plan.get("execution_order")
+        if run_order:
+            target_set = set(run_order)
+            layers = [[nid for nid in layer if nid in target_set] for layer in layers]
+            layers = [layer for layer in layers if layer]
         node_map = {n["id"]: n for n in plan["nodes"]}
         # Shared across layer threads; writes are guarded by state_lock. Reads of
         # upstream values happen only in later layers (after join => happens-
@@ -373,6 +439,25 @@ class Worker:
                 _log("info", "构建输入: 空（无上游、无实例参数）")
             work_dir = os.path.join(config.cache_root(), "runs", exec_id, node_id)
 
+            # Resolve the node's "注册到DW" export settings (None = not enabled).
+            # Invalid DW config fails the node before any component process starts.
+            try:
+                dw_export = self.resolve_dw_export(node, plan)
+            except Exception as e:
+                upsert_node_execution(
+                    exec_id, node_id, "failed", completed_at_ms=now(), error=str(e)[-2000:]
+                )
+                _log("error", f"DW 配置校验失败: {e}")
+                with state_lock:
+                    node_status[node_id] = "failed"
+                    any_failed = True
+                return
+            if dw_export:
+                _log(
+                    "info",
+                    f"DW 落库: 端口={dw_export['port']} → {dw_export['table_dir']}",
+                )
+
             # Global concurrency semaphore: caps "number of concurrently running
             # component subprocesses ≤ min(CPU,8)". This is the real throttle,
             # spanning all in-flight DAG runs (see docs/parallel-execution.md §2/§4).
@@ -388,6 +473,7 @@ class Worker:
                     log_fn=_log,
                     python_path=python_path,
                     node_log_path=log_path,
+                    dw_export=dw_export,
                 )
             finally:
                 self.component_sem.release()

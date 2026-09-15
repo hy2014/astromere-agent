@@ -706,7 +706,6 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border-top: 1px solid #e2e4e9;
   padding: 12px 16px;
 }
 
@@ -740,7 +739,6 @@
 /* Per-node log toolbar (node selector + pager) and file-log line rendering */
 .execution-logs-header {
   flex-shrink: 0;
-  border-top: 1px solid #e2e4e9;
   padding: 8px 16px 4px;
 }
 .execution-log-toolbar {
@@ -771,18 +769,13 @@
   font-size: 11px;
   color: #64748b;
 }
-.execution-log-page-btn {
+.execution-log-page-select {
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 2px 4px;
   border: 1px solid #cbd5e1;
   border-radius: 4px;
   background: #fff;
   color: #0f172a;
-  cursor: pointer;
-}
-.execution-log-page-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 .execution-log-line {
   display: flex;
@@ -806,9 +799,30 @@
 }
 
 /* History detail: overall status + per-node statuses + frozen config snapshot */
+.execution-tabs {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  padding-top: 6px;
+  border-bottom: 1px solid #e2e4e9;
+}
+.execution-tab {
+  font-size: 12px;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.execution-tab.active {
+  color: #1d4ed8;
+  font-weight: 600;
+  border-bottom-color: #1d4ed8;
+}
 .execution-detail {
-  flex: 0 1 auto;
-  max-height: 42%;
+  flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
   display: flex;
@@ -1752,6 +1766,21 @@
   font-size: 12px;
   font-weight: 500;
   color: #374151;
+}
+
+/* 注册到DW section: checkbox + text on one row */
+.instance-dw-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.instance-dw-toggle input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #2563eb;
 }
 
 .instance-required {

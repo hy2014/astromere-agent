@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import type {DagExecution, ExecutionLog, NodeExecution, NodeLogFile} from "../../types";
 import {getExecutionLogs, getNodeExecutions, getNodeLog, listExecutions} from "./api";
 
@@ -61,6 +61,14 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
   const [logOffset, setLogOffset] = useState(0);
   const [logLoading, setLogLoading] = useState(false);
   const [fallbackLogs, setFallbackLogs] = useState<ExecutionLog[] | null>(null);
+  // 右侧分两个 tab：本次运行状态 / 运行日志（原来上下堆叠，状态被日志挤没）。
+  const [detailTab, setDetailTab] = useState<"status" | "logs">("status");
+  // selectedExecutionId 的镜像，供 2s 轮询回调读取（避免闭包过期，
+  // 也保持轮询 effect 的依赖稳定、interval 不被重置）。
+  const selectedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedIdRef.current = selectedExecutionId;
+  }, [selectedExecutionId]);
 
   // Load the execution list and auto-select the most recent *non-terminal* run
   // when nothing is manually selected — so after clicking "运行 DAG" the live
@@ -70,13 +78,18 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
     try {
       const result = await listExecutions(dagId);
       setExecutions(result);
-      setSelectedExecutionId((cur) => {
-        if (cur) return cur;
+      // Auto-select the most recent non-terminal run when nothing is manually
+      // selected — after 运行 DAG the live view appears without a click, and
+      // lands directly on the log tab.
+      if (!selectedIdRef.current) {
         const running = result
           .filter((e) => !TERMINAL.has(e.status))
           .sort((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0))[0];
-        return running ? running.id : cur;
-      });
+        if (running) {
+          setSelectedExecutionId(running.id);
+          setDetailTab("logs");
+        }
+      }
     } catch (error) {
       console.error("[execution-panel] failed to list executions", error);
     }
@@ -104,7 +117,9 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
         sorted[0]?.nodeId ??
         null;
       setSelectedLogNodeId((cur) => cur ?? def);
-      setLogOffset(0);
+      // 注意: 这里不能重置 logOffset —— loadDetail 每 2s 轮询一次,
+      // 无条件归零会把用户正在看的日志分页拽回第一页。
+      // 页码归零只发生在用户切换节点/切换执行时(select onChange / selectExecution)。
     } catch (error) {
       console.error("[execution-panel] failed to load run detail", error);
     }
@@ -169,6 +184,7 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
     setSelectedExecutionId(execution.id);
     setSelectedLogNodeId(null);
     setLogOffset(0);
+    setDetailTab("status");
     if (execution.snapshot) {
       try {
         const parsed = JSON.parse(execution.snapshot) as {nodes?: SnapshotNode[]};
@@ -250,7 +266,27 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
         </div>
 
         <div className="execution-detail-col">
-          {selected && (
+          <div className="execution-tabs">
+            <button
+              type="button"
+              className={`execution-tab ${detailTab === "status" ? "active" : ""}`}
+              onClick={() => setDetailTab("status")}
+            >
+              本次运行状态
+            </button>
+            <button
+              type="button"
+              className={`execution-tab ${detailTab === "logs" ? "active" : ""}`}
+              onClick={() => setDetailTab("logs")}
+            >
+              运行日志
+            </button>
+          </div>
+
+          {detailTab === "status" && !selected && (
+            <p className="execution-empty">Select an execution to view details.</p>
+          )}
+          {detailTab === "status" && selected && (
             <div className="execution-detail">
               <div className="execution-detail-head">
                 <span>本次运行状态</span>
@@ -345,6 +381,8 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
             </div>
           )}
 
+          {detailTab === "logs" && (
+          <>
           <div className="execution-logs-header">
             <div className="execution-log-toolbar">
               <label className="execution-log-toolbar-label">节点日志</label>
@@ -367,26 +405,24 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
               ) : null}
               {nodeLogFile && (
                 <div className="execution-log-pager">
-                  <button
-                    type="button"
-                    className="execution-log-page-btn"
-                    disabled={logOffset === 0}
-                    onClick={() => setLogOffset((o) => Math.max(0, o - LOG_PAGE))}
+                  <select
+                    className="execution-log-page-select"
+                    value={Math.floor(logOffset / LOG_PAGE)}
+                    onChange={(e) => setLogOffset(Number(e.target.value) * LOG_PAGE)}
                   >
-                    上一页
-                  </button>
+                    {Array.from(
+                      {length: Math.max(1, Math.ceil(nodeLogFile.total / LOG_PAGE))},
+                      (_, i) => (
+                        <option key={i} value={i}>
+                          第 {i + 1} 页
+                        </option>
+                      ),
+                    )}
+                  </select>
                   <span className="execution-log-page-info">
                     {nodeLogFile.offset + 1}–
                     {nodeLogFile.offset + nodeLogFile.lines.length} / 共 {nodeLogFile.total} 行
                   </span>
-                  <button
-                    type="button"
-                    className="execution-log-page-btn"
-                    disabled={logOffset + LOG_PAGE >= nodeLogFile.total}
-                    onClick={() => setLogOffset((o) => o + LOG_PAGE)}
-                  >
-                    下一页
-                  </button>
                 </div>
               )}
             </div>
@@ -427,6 +463,8 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
               <p className="execution-empty">Select an execution to view logs.</p>
             )}
           </div>
+          </>
+          )}
         </div>
       </div>
     </div>

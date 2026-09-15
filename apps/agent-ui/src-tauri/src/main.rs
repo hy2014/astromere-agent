@@ -18,6 +18,9 @@ use claw_agent_ui::dag;
 use claw_agent_ui::dag_server_config;
 
 #[cfg(feature = "gui")]
+use claw_agent_ui::dw;
+
+#[cfg(feature = "gui")]
 use claw_agent_ui::mcp;
 
 #[cfg(feature = "gui")]
@@ -135,6 +138,8 @@ fn main() {
             models::save_model_settings,
             mcp::load_mcp_settings,
             mcp::save_mcp_settings,
+            dw::load_dw_settings,
+            dw::save_dw_settings,
             models::test_model_connection,
             permissions::get_agent_permission_state,
             control::interrupt_agent_turn,
