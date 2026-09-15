@@ -70,14 +70,19 @@
 ③ 提交执行: Rust 把 dw_root 冻结进 snapshot 顶层
      (设置后续修改只影响新执行; resume 自动携带; worker 常驻无需重启)
 ④ worker 解析 dw.* + snapshot.dw_root, 校验(port∈组件outputs, 表名合法)
-     → run_node(dw_export={port, table_dir})
-⑤ runner: os.makedirs(table_dir, exist_ok=True)
-     env 注入 AGENT_UI_OUTPUT_DATA_DIRS = '{"<port>": "<table_dir>"}'
-⑥ 组件: 共享 helper resolve_output_data_dir(port) 读 env
-     → 数据文件写入表目录(业务方自定子目录/分区); 未配置时维持现状 temp dir
-⑦ output.json 登记的路径即 dw 路径
+     → run_node(dw_export={port, table_dir}, output_ports=快照outputSchema全部端口)
+⑤ runner: 对**每个**输出端口分配目录并 os.makedirs
+     env 注入 AGENT_UI_OUTPUT_DATA_DIRS = '{注册端口: <table_dir>, 其余端口: {work_dir}/outputs/<port>}'
+⑥ 组件: 通用 helper _resolve_output_dir(port) 读 env（内联在各组件，无 DW 语义）
+     → 数据文件写入环境给的目录; 未注入(单跑)时回退 temp dir
+⑦ output.json 登记的路径即最终落盘路径
      → 下游 input.json / Rust 预览 / 下载: 零改动自动生效
 ```
+
+**组件零 DW 感知**：DW 注册是 instance（节点配置）层的事，组件（class）只认识
+"环境注入的输出目录"这一通用概念——agent-ui 的 runner 对所有文件端口统一注入
+`AGENT_UI_OUTPUT_DATA_DIRS`，组件写入注入目录即可，不需要 import 任何 DW 模块。
+未来若新增其他落库目标（S3/NFS），只需 runner 侧改目录分配策略，组件代码零改动。
 
 ### 3.2 关键设计决策
 
@@ -87,7 +92,7 @@
 | dw_root 存储 | Rust 侧 JSON 文件（`~/.agent-ui/dw-settings.json`） | 与 ModelSettings/McpSettings 先例一致，无 DB migration |
 | dw_root 流转 | 提交执行时冻结进 snapshot 顶层 | worker 常驻进程，env 方式改设置不生效；snapshot 方式零 schema 变更（worker 已解析 snapshot）、历史执行可复现、resume 自动携带 |
 | 节点参数命名 | `dw.` 前缀（`dw.enabled/port/table`） | 仿 `system.` 前缀隔离模式；避免污染源节点输入（源节点 params 会整个作为 input payload，见 worker.py L172-178） |
-| 目录注入方式 | 环境变量 `AGENT_UI_OUTPUT_DATA_DIRS`（JSON map：端口→目录） | 结构上天然支持未来多端口扩展；组件侧 helper 一行读取 |
+| 目录注入方式 | 环境变量 `AGENT_UI_OUTPUT_DATA_DIRS`（JSON map：端口→目录），**对所有端口无条件注入** | 组件零 DW 感知（instance 配置不泄漏进 class）；结构上天然支持未来多端口扩展 |
 | 表内布局 | 业务方自控（runner 只 mkdir 表根目录） | 需求方明确 |
 
 ## 4. 实现步骤
@@ -98,8 +103,8 @@
 | 2 | snapshot 冻结 | `scheduler.rs` `build_snapshot`（L46-76） | 顶层注入 `dw_root`（读设置文件，空则默认值）；`build_resume_snapshot` 调 build_snapshot，resume 自动携带 |
 | 3 | 节点配置 UI | `InstanceConfigForm.tsx` | `DW_PREFIX="dw."`，readParams/commit 仿 SYSTEM_PREFIX 的剥离/保留（L243-255）；固定"注册到DW"区块：开关 + 端口下拉（`component.outputSchema` → PortDef，见 componentModel.ts L21-38；outputSchema 为空的组件隐藏区块）+ 表名文本框 |
 | 4 | worker | `engine_executor/worker.py` | 解析 `dw.enabled/port/table`；校验 `dw.port` ∈ snapshot node config 的 outputs、`dw_root` 非空、表名合法（不合法 → 节点 fail + 日志）；`dw_export={port, table_dir}` 传入 run_node（L389 调用点加参）；build_input 源节点分支（L172-178）过滤 `dw.*`（顺带过滤 `system.*`，消除既有污染） |
-| 5 | runner | `engine_executor/runner.py` `run_node` | 新参数 `dw_export=None`；表名白名单 `^[A-Za-z0-9_\-]+$`（拒绝 `..` 与绝对路径，防穿越）；`os.makedirs(table_dir, exist_ok=True)`；env.update（L529）注入 `AGENT_UI_OUTPUT_DATA_DIRS=json.dumps({port: table_dir})`；info 日志记录落库目录 |
-| 6 | 组件接入 | component-repo：共享 util + `components/comp-upstream/run.py`（L931）+ `components/comp-downstream/run.py` 等 | 新 helper `resolve_output_data_dir(port)`：读 `AGENT_UI_OUTPUT_DATA_DIRS`，未配置返回 None；组件数据文件落点改为 `resolve_output_data_dir(port) or tempfile.mkdtemp(...)`；`_write_output` 登记逻辑不变 |
+| 5 | runner | `engine_executor/runner.py` `run_node` | 新参数 `dw_export=None`、`output_ports=None`；表名白名单 `^[A-Za-z0-9_\-]+$`（拒绝 `..` 与绝对路径，防穿越）；`os.makedirs(table_dir, exist_ok=True)`；对**所有端口**分配目录（注册端口 → 表目录，其余 → `{work_dir}/outputs/{port}`）并注入 `AGENT_UI_OUTPUT_DATA_DIRS=json.dumps(全端口map)`；info 日志记录落库目录 |
+| 6 | 组件接入 | component-repo：`components/comp-upstream/run.py`、`components/comp-downstream/run.py` | 各组件内联通用 helper `_resolve_output_dir(port)`：读 `AGENT_UI_OUTPUT_DATA_DIRS`，未注入返回 None；数据文件落点改为 `_resolve_output_dir(port) or tempfile.mkdtemp(...)`；**不 import 任何 DW 模块**；`_write_output` 登记逻辑不变 |
 | 7 | 下游读/预览/下载 | — | **零改动**（登记路径即 dw 路径） |
 
 另：本设计文档存于 `agent-ui/docs/dw-export-design.md`；实现后在 component-repo 组件开发规范中补"DW 落库"一节（表目录约定、原子写建议）。

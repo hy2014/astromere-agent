@@ -458,6 +458,14 @@ class Worker:
                     f"DW 落库: 端口={dw_export['port']} → {dw_export['table_dir']}",
                 )
 
+            # Output ports from the node's frozen outputSchema: the runner
+            # injects an output dir for EVERY port (DW table dir for the
+            # registered one, runner-managed dirs for the rest) so components
+            # never need to know DW exists.
+            outputs_schema = self.parse_config(node).get("outputSchema")
+            props = outputs_schema.get("properties") if isinstance(outputs_schema, dict) else None
+            output_ports = sorted(props) if isinstance(props, dict) else []
+
             # Global concurrency semaphore: caps "number of concurrently running
             # component subprocesses ≤ min(CPU,8)". This is the real throttle,
             # spanning all in-flight DAG runs (see docs/parallel-execution.md §2/§4).
@@ -474,6 +482,7 @@ class Worker:
                     python_path=python_path,
                     node_log_path=log_path,
                     dw_export=dw_export,
+                    output_ports=output_ports,
                 )
             finally:
                 self.component_sem.release()

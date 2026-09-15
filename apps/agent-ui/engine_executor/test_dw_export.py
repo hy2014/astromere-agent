@@ -7,10 +7,9 @@ Covers:
      table name all fail loudly.
   2. worker.build_input: source nodes never leak `dw.*` / `system.*` UI knobs
      into the input payload.
-  3. runner.run_node with dw_export: path-traversal table names are rejected
-     up front; a valid export creates the table dir, injects
-     AGENT_UI_OUTPUT_DATA_DIRS, and the component's registered output path
-     lands under `{dw_root}/{table}/`.
+  3. runner.run_node output-dir injection: EVERY port gets a directory via
+     AGENT_UI_OUTPUT_DATA_DIRS — the DW table dir for the registered port, a
+     runner-managed dir for the rest. Components stay DW-ignorant.
 
 Run with:
     python3 test_dw_export.py
@@ -136,31 +135,22 @@ class BuildInputFilterTests(unittest.TestCase):
         self.assertEqual(inp, {"symbol": "000001"})
 
 
-class RunNodeDwExportTests(unittest.TestCase):
+class RunNodeOutputDirTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="dw_test_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
-    def _make_component(self):
-        root = os.path.join(self.tmp, "component")
+    def _make_component(self, body):
+        root = os.path.join(self.tmp, f"component_{id(body):x}")
         os.makedirs(root)
         # Empty requirements.txt → _ensure_requirements is a no-op.
         open(os.path.join(root, "requirements.txt"), "w").close()
         with open(os.path.join(root, "main.py"), "w") as f:
-            f.write(
-                "import json, os\n"
-                "data_dirs = json.loads(os.environ['AGENT_UI_OUTPUT_DATA_DIRS'])\n"
-                "table_dir = data_dirs['out_port']\n"
-                "out_file = os.path.join(table_dir, 'data.txt')\n"
-                "with open(out_file, 'w') as f:\n"
-                "    f.write('dw-data')\n"
-                "with open(os.environ['AGENT_UI_OUTPUT_PATH'], 'w') as f:\n"
-                "    json.dump({'out_port': out_file}, f)\n"
-            )
+            f.write(body)
         return root
 
     def test_invalid_table_rejected_up_front(self):
-        root = self._make_component()
+        root = self._make_component("import os\n")
         work_dir = os.path.join(self.tmp, "work_bad")
         outside = os.path.join(self.tmp, "escape")
         with self.assertRaises(ValueError):
@@ -172,7 +162,17 @@ class RunNodeDwExportTests(unittest.TestCase):
         self.assertFalse(os.path.exists(outside))
 
     def test_valid_export_writes_into_table_dir(self):
-        root = self._make_component()
+        body = (
+            "import json, os\n"
+            "data_dirs = json.loads(os.environ['AGENT_UI_OUTPUT_DATA_DIRS'])\n"
+            "table_dir = data_dirs['out_port']\n"
+            "out_file = os.path.join(table_dir, 'data.txt')\n"
+            "with open(out_file, 'w') as f:\n"
+            "    f.write('dw-data')\n"
+            "with open(os.environ['AGENT_UI_OUTPUT_PATH'], 'w') as f:\n"
+            "    json.dump({'out_port': out_file}, f)\n"
+        )
+        root = self._make_component(body)
         dw_root = os.path.join(self.tmp, "dw")
         table_dir = os.path.join(dw_root, "my_table")
         work_dir = os.path.join(self.tmp, "work_ok")
@@ -180,6 +180,7 @@ class RunNodeDwExportTests(unittest.TestCase):
             root, "main.py", {}, work_dir,
             python_path=sys.executable,
             dw_export={"port": "out_port", "table": "my_table", "table_dir": table_dir},
+            output_ports=["out_port"],
         )
         self.assertTrue(result["success"], msg=result.get("stderr"))
         # Table dir created by the runner; component data landed inside it.
@@ -189,25 +190,73 @@ class RunNodeDwExportTests(unittest.TestCase):
         # output.json registers the DW path (path-as-contract).
         self.assertEqual(result["output_value"]["out_port"], data_file)
 
-    def test_no_dw_export_keeps_legacy_behavior(self):
-        root = self._make_component()
+    def test_mixed_ports_dw_and_plain(self):
+        # Registered port → DW table dir; the other ports → runner dirs under
+        # work_dir/outputs/. The component itself never mentions DW.
+        body = (
+            "import json, os\n"
+            "data_dirs = json.loads(os.environ['AGENT_UI_OUTPUT_DATA_DIRS'])\n"
+            "paths = {p: os.path.join(d, 'out.txt') for p, d in data_dirs.items()}\n"
+            "for p, f in paths.items():\n"
+            "    open(f, 'w').close()\n"
+            "with open(os.environ['AGENT_UI_OUTPUT_PATH'], 'w') as f:\n"
+            "    json.dump(paths, f)\n"
+        )
+        root = self._make_component(body)
+        table_dir = os.path.join(self.tmp, "dw", "my_table")
+        work_dir = os.path.join(self.tmp, "work_mixed")
+        result = runner.run_node(
+            root, "main.py", {}, work_dir,
+            python_path=sys.executable,
+            dw_export={"port": "dw_port", "table": "my_table", "table_dir": table_dir},
+            output_ports=["dw_port", "plain_a", "plain_b"],
+        )
+        self.assertTrue(result["success"], msg=result.get("stderr"))
+        self.assertEqual(
+            result["output_value"]["dw_port"], os.path.join(table_dir, "out.txt")
+        )
+        self.assertTrue(os.path.isfile(os.path.join(table_dir, "out.txt")))
+        for port in ["plain_a", "plain_b"]:
+            expected = os.path.join(work_dir, "outputs", port, "out.txt")
+            self.assertEqual(result["output_value"][port], expected)
+            self.assertTrue(os.path.isfile(expected))
+
+    def test_no_export_no_ports_keeps_legacy_behavior(self):
+        # No dw_export and no output_ports (legacy callers / components that
+        # pick their own dirs) → no AGENT_UI_OUTPUT_DATA_DIRS injected.
+        body = (
+            "import json, os\n"
+            "with open(os.environ['AGENT_UI_OUTPUT_PATH'], 'w') as f:\n"
+            "    json.dump({'has_env': 'AGENT_UI_OUTPUT_DATA_DIRS' in os.environ}, f)\n"
+        )
+        root = self._make_component(body)
         work_dir = os.path.join(self.tmp, "work_plain")
         result = runner.run_node(root, "main.py", {}, work_dir, python_path=sys.executable)
-        # Without dw_export the component sees no AGENT_UI_OUTPUT_DATA_DIRS and
-        # fails on KeyError → we assert the env var was NOT injected instead by
-        # running a probe component.
-        probe = os.path.join(self.tmp, "probe")
-        os.makedirs(probe)
-        open(os.path.join(probe, "requirements.txt"), "w").close()
-        with open(os.path.join(probe, "main.py"), "w") as f:
-            f.write(
-                "import json, os\n"
-                "with open(os.environ['AGENT_UI_OUTPUT_PATH'], 'w') as f:\n"
-                "    json.dump({'has_env': 'AGENT_UI_OUTPUT_DATA_DIRS' in os.environ}, f)\n"
-            )
-        result = runner.run_node(probe, "main.py", {}, work_dir, python_path=sys.executable)
         self.assertTrue(result["success"], msg=result.get("stderr"))
         self.assertEqual(result["output_value"], {"has_env": False})
+
+    def test_plain_ports_without_dw_get_runner_dirs(self):
+        # Instance config without any DW registration: every port still gets a
+        # deterministic runner-managed dir (components read the map the same way).
+        body = (
+            "import json, os\n"
+            "data_dirs = json.loads(os.environ['AGENT_UI_OUTPUT_DATA_DIRS'])\n"
+            "out_file = os.path.join(data_dirs['out_port'], 'data.txt')\n"
+            "open(out_file, 'w').close()\n"
+            "with open(os.environ['AGENT_UI_OUTPUT_PATH'], 'w') as f:\n"
+            "    json.dump({'out_port': out_file}, f)\n"
+        )
+        root = self._make_component(body)
+        work_dir = os.path.join(self.tmp, "work_nodw")
+        result = runner.run_node(
+            root, "main.py", {}, work_dir,
+            python_path=sys.executable,
+            output_ports=["out_port"],
+        )
+        self.assertTrue(result["success"], msg=result.get("stderr"))
+        expected = os.path.join(work_dir, "outputs", "out_port", "data.txt")
+        self.assertEqual(result["output_value"]["out_port"], expected)
+        self.assertTrue(os.path.isfile(expected))
 
 
 if __name__ == "__main__":

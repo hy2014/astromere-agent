@@ -51,6 +51,27 @@ done
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 pid_running() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 
+# Kill all worker.py processes (in-flight and orphans). Prefers pkill;
+# falls back to ps+awk on minimal images without procps (no pkill/pgrep).
+kill_worker_processes() {
+  if command -v pkill &>/dev/null; then
+    pkill -f "engine_executor/worker.py" || true
+    return
+  fi
+  local pids
+  pids="$(ps -eo pid,args 2>/dev/null | grep -F 'engine_executor/worker.py' | grep -v grep | awk '{print $1}')"
+  if [[ -n "$pids" ]]; then
+    log "pkill 不可用，使用 ps 回退清理 worker: $pids"
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    sleep 1
+    # SIGTERM 没退的补 kill -9
+    pids="$(ps -eo pid,args 2>/dev/null | grep -F 'engine_executor/worker.py' | grep -v grep | awk '{print $1}')"
+    # shellcheck disable=SC2086
+    [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null || true
+  fi
+}
+
 # ── Stop ──────────────────────────────────────────────────────────────
 do_stop() {
   # clean up leftover worker subprocesses (prevent stale workers from becoming
@@ -58,7 +79,7 @@ do_stop() {
   # covers three cases: this instance's worker (when kill -9 is too fast for the
   # handler to run), and orphan workers left behind by previous crashes/force-kills
   # (not children of this PID).
-  pkill -f "engine_executor/worker.py" || true
+  kill_worker_processes
 
   if [[ ! -f "$PID_FILE" ]]; then
     echo "未找到 PID 文件，服务可能未在运行。"

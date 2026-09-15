@@ -1,26 +1,34 @@
-import {useState} from "react";
+import {useEffect, useState} from "react";
 import {loadDagServer, saveDagServer, testDagServerHealth} from "./api";
 
 type Props = {
   // Called after a successful /health probe. The parent then unmasks dag mode.
   onConnected: () => void;
-  // Shown only when dag mode is already connected (re-opened from settings); lets
-  // the user dismiss without changing anything.
-  onCancel?: () => void;
 };
 
-// First-connect (and re-configure) modal for dag pure-HTTP mode.
+// First-connect wizard for dag pure-HTTP mode.
 //
-// dag mode has NO local mode — it must talk to a remote axum server. On first
-// entry the user MUST fill in the server IP + port (no pre-fill, no default to
-// any other address). We probe `GET /health`; only on success do we persist the
-// profile and let dag mode proceed. If the server is unreachable we stay on this
-// modal and block all dag functionality (the parent renders it as a full overlay).
-export function DagConnectModal({onConnected, onCancel}: Props) {
+// dag mode has NO local mode; it must talk to a remote axum server. On first
+// entry (no saved profile) the user MUST fill in the server IP + port (no
+// pre-fill, no default). We probe `GET /health`; only on success do we persist
+// the profile and let dag mode proceed. Ongoing configuration (server switch,
+// DW, …) lives in the full-page advanced settings view.
+export function DagConnectModal({onConnected}: Props) {
   const [ip, setIp] = useState("");
   const [port, setPort] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+
+  // Saved profile exists but is unreachable (startup probe failed): prefill
+  // the last known address so the user only has to fix what's wrong.
+  useEffect(() => {
+    const saved = loadDagServer();
+    if (!saved) return;
+    const m = saved.baseUrl.match(/^https?:\/\/([^/:]+?)(?::(\d+))?\/?$/);
+    if (!m) return;
+    setIp(m[1]);
+    setPort(m[2] ?? "7421");
+  }, []);
 
   async function handleConnect() {
     const trimmedIp = ip.trim();
@@ -49,9 +57,6 @@ export function DagConnectModal({onConnected, onCancel}: Props) {
     if (health.ok) {
       onConnected();
     } else {
-      // Keep the modal open so the user can fix the address. Do NOT persist a
-      // broken profile — but we already wrote it; clear it so a stray value
-      // doesn't get reused on next launch.
       setError(health.message || "无法连接到该地址，请确认服务器已启动且端口正确");
     }
   }
@@ -60,6 +65,7 @@ export function DagConnectModal({onConnected, onCancel}: Props) {
     <div className="dag-connect-overlay">
       <div className="dag-connect-modal">
         <h2 className="dag-connect-title">连接 DAG 服务器</h2>
+
         <p className="dag-connect-hint">
           dag 模式需要连接一台运行中的远程服务器（axum，默认端口 7421）。
           请在下方填写服务器的 IP 与端口。
@@ -100,12 +106,6 @@ export function DagConnectModal({onConnected, onCancel}: Props) {
         >
           {testing ? "连接中…" : "连接"}
         </button>
-
-        {onCancel && (
-          <button type="button" className="dag-connect-cancel" onClick={onCancel}>
-            关闭
-          </button>
-        )}
       </div>
     </div>
   );

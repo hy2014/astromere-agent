@@ -29,6 +29,7 @@ import type {
   DagEdge,
   DagExecution,
   DagNode,
+  DwSettings,
   ExecutionLog,
   NodeExecution,
   NodeLogFile,
@@ -119,6 +120,19 @@ export function clearDagServer(): void {
 
 export function testDagServerHealth(profile: RemoteProfile) {
   return testRemoteHealth(profile);
+}
+
+// ─── Server-side settings (DW etc.), routed to the connected dag server ──
+
+export async function fetchDwSettings(): Promise<DwSettings> {
+  return dagJson<DwSettings>("/dw/settings");
+}
+
+export async function putDwSettings(settings: DwSettings): Promise<DwSettings> {
+  return dagJson<DwSettings>("/dw/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
 }
 
 // ─── Internal request helper ─────────────────────────────────────────

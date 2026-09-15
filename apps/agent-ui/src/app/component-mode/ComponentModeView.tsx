@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import type {Component, Dag, DagDetail, DagEdge, DagExecution, DagNode} from "../../types";
 import {
   createComponent,
@@ -21,6 +21,7 @@ import {
   updateDag,
 } from "./api";
 import {DagConnectModal} from "./DagConnectModal";
+import {DagAdvancedSettings} from "./DagAdvancedSettings";
 import {DagListView} from "./DagListView";
 import {confirm, message} from "@tauri-apps/plugin-dialog";
 import {
@@ -140,11 +141,10 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
 
   // ── dag pure-HTTP connection gating ───────────────────────────────
   // dag mode has no local mode; it must connect to a remote server to work.
-  // When connected=false the whole page is covered by the connection overlay
-  // and all dag features are unavailable. showConnect re-opens the modal from
-  // "Settings" to re-edit the server address.
+  // When connected=false the whole page is covered by the first-connect modal
+  // and all dag features are unavailable. Server switching / ongoing config
+  // lives in the "settings" center view instead of re-showing this modal.
   const [connected, setConnected] = useState(false);
-  const [showConnect, setShowConnect] = useState(false);
   // Toggle for the right-hand "Execution History" view: opened via the top
   // toolbar's "Execution History" button; auto-closes when a node is selected.
   const [showExecHistory, setShowExecHistory] = useState(false);
@@ -154,7 +154,12 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   // Center view in dag mode: "list" = published-DAG catalog table (the default
   // landing when entering dag mode), "detail" = the selected DAG's canvas.
   // Clicking "enter" in the table (or a DAG in the sidebar) switches to detail.
-  const [centerView, setCenterView] = useState<"list" | "detail">("list");
+  // Center-area view routing: "list" = DAG 列表, "detail" = DAG 画布,
+  // "settings" = 高级设置页。The left function menu always stays visible;
+  // only the center area swaps.
+  const [centerView, setCenterView] = useState<"list" | "detail" | "settings">("list");
+  // View to return to when the settings page is closed.
+  const centerBeforeSettings = useRef<"list" | "detail">("list");
 
   // Success toast auto-dismisses.
   useEffect(() => {
@@ -164,12 +169,11 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   }, [successToast]);
 
   // On mount: if a config exists, probe health; only proceed if it responds;
-  // otherwise show the connect modal.
+  // otherwise show the first-connect modal (rendered while !connected).
   useEffect(() => {
     const profile = loadDagServer();
     if (!profile) {
       setConnected(false);
-      setShowConnect(true);
       return;
     }
     let cancelled = false;
@@ -177,10 +181,8 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
       if (cancelled) return;
       if (health.ok) {
         setConnected(true);
-        setShowConnect(false);
       } else {
         setConnected(false);
-        setShowConnect(true);
       }
     });
     return () => {
@@ -312,6 +314,18 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
     setActiveDagId(dagId);
     setLocalActiveDagId(dagId);
     setCenterView("detail");
+  }, []);
+
+  // Advanced settings: a center view (left menu stays visible). Opening from
+  // "detail" remembers it so closing returns to the DAG the user was editing.
+  const handleOpenSettings = useCallback(() => {
+    centerBeforeSettings.current = centerView === "settings" ? centerBeforeSettings.current : centerView;
+    setShowExecHistory(false);
+    setCenterView("settings");
+  }, [centerView]);
+
+  const handleCloseSettings = useCallback(() => {
+    setCenterView(centerBeforeSettings.current);
   }, []);
 
   // Enter a published DAG from the catalog table → open its detail canvas.
@@ -697,12 +711,25 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
           onEditComponent={handleEditComponent}
           onViewComponent={handleViewComponent}
           onDeleteComponent={handleDeleteComponent}
-          onOpenServerSettings={() => setShowConnect(true)}
+          onOpenServerSettings={handleOpenSettings}
         />
       </aside>
       <main className="component-mode-main">
         <header className="component-mode-toolbar">
-          {centerView === "list" ? (
+          {centerView === "settings" ? (
+            <div className="dag-toolbar">
+              <div className="dag-toolbar-left">
+                <button
+                  type="button"
+                  className="dag-back-btn"
+                  onClick={handleCloseSettings}
+                >
+                  ← 返回
+                </button>
+                <span className="component-mode-dag">高级设置</span>
+              </div>
+            </div>
+          ) : centerView === "list" ? (
             <span className="component-mode-dag">DAG 列表</span>
           ) : activeDagDetail ? (
             <div className="dag-toolbar">
@@ -786,7 +813,17 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
           )}
         </header>
         <div className="component-mode-canvas">
-          {centerView === "list" ? (
+          {centerView === "settings" ? (
+            <DagAdvancedSettings
+              onServerChanged={() => {
+                // Force a reload of all server-backed data after a server
+                // switch: data-loading effects are keyed on `connected`, so
+                // drop it and re-assert on the next tick.
+                setConnected(false);
+                setTimeout(() => setConnected(true), 0);
+              }}
+            />
+          ) : centerView === "list" ? (
             <DagListView dags={dags} onEnter={handleEnterDag} />
           ) : activeDagDetail ? (
             componentsLoaded ? (
@@ -841,13 +878,11 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
           />
         </div>
       )}
-      {!connected || showConnect ? (
+      {!connected ? (
         <DagConnectModal
           onConnected={() => {
             setConnected(true);
-            setShowConnect(false);
           }}
-          onCancel={connected ? () => setShowConnect(false) : undefined}
         />
       ) : null}
       {previewNode && (

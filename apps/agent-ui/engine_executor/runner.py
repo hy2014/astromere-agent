@@ -492,6 +492,7 @@ def run_node(
     python_path=None,
     node_log_path=None,
     dw_export=None,
+    output_ports=None,
 ):
     """Execute a single component node.
 
@@ -504,9 +505,14 @@ def run_node(
     (the worker wires this to ``db.add_log`` so the UI sees live output).
 
     ``dw_export`` (``{port, table, table_dir}`` or None) registers one output
-    port into the data warehouse: the table directory is created here and
-    announced to the component via ``AGENT_UI_OUTPUT_DATA_DIRS`` so the
-    component writes its data files directly under ``{dw_root}/{table}/``.
+    port into the data warehouse: the table directory is created here.
+
+    ``output_ports`` (list of the node's output port names, from the frozen
+    outputSchema) drives ``AGENT_UI_OUTPUT_DATA_DIRS``: EVERY port gets an
+    output directory injected — the DW table dir for the registered port, a
+    runner-managed ``{work_dir}/outputs/{port}`` dir for the rest. Components
+    write into whatever dir the environment hands them and stay completely
+    ignorant of DW (instance-level config never leaks into component code).
     """
     # DW export: validate + create the table directory up front (fail fast,
     # before any interpreter probing). The inner layout of the table dir is
@@ -558,10 +564,25 @@ def run_node(
             "AGENT_UI_COMPONENT_ROOT": component_root,
         }
     )
-    if dw_export:
-        env["AGENT_UI_OUTPUT_DATA_DIRS"] = json.dumps({dw_port: dw_table_dir})
-        if log_fn:
-            log_fn("info", f"DW 落库目录已就绪: 端口={dw_port} → {dw_table_dir}")
+    # Output dir injection: every port of the node gets a directory. The DW
+    # table dir wins for the registered port; everything else lands in a
+    # runner-managed dir under the node's work dir. Components just write into
+    # the injected dirs — DW is invisible to them.
+    ports = list(output_ports or [])
+    if dw_export and dw_port not in ports:
+        ports.append(dw_port)
+    output_dirs = {}
+    for port in ports:
+        if dw_export and port == dw_port:
+            output_dirs[port] = dw_table_dir
+        else:
+            output_dirs[port] = os.path.join(work_dir, "outputs", port)
+    if output_dirs:
+        for port_dir in output_dirs.values():
+            os.makedirs(port_dir, exist_ok=True)
+        env["AGENT_UI_OUTPUT_DATA_DIRS"] = json.dumps(output_dirs)
+    if dw_export and log_fn:
+        log_fn("info", f"DW 落库目录已就绪: 端口={dw_port} → {dw_table_dir}")
 
     if log_fn:
         log_fn("info", f"启动组件进程: {py} {entry_point} (cwd={component_root})")
