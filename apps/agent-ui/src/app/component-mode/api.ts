@@ -325,6 +325,13 @@ export function getNodeExecutions(executionId: string): Promise<NodeExecution[]>
   return dagJson<NodeExecution[]>(`/api/executions/${encodeURIComponent(executionId)}/nodes`);
 }
 
+/** One artifact of an output port. `path` may be a regular file or a directory
+ *  (e.g. a `month=YYYYMM/` partition dir). */
+export type OutputArtifact = {
+  path: string;
+  format: string;
+};
+
 export type OutputPreview = {
   outputName: string;
   format: string;
@@ -333,20 +340,26 @@ export type OutputPreview = {
   truncated: boolean;
   total: number | null;
   unsupported?: string | null;
-  /** Absolute path to the underlying file on the server. */
+  /** Absolute path to the previewed artifact on the server. */
   filePath: string;
+  /** Every artifact of this port. Length 1 = single-valued port (the artifact
+   *  selector is hidden); >1 = the port returned a list. Absent when talking to
+   *  a server predating artifact lists — treat that as a single artifact. */
+  artifacts?: OutputArtifact[];
 };
 
-// Preview the first `limit` rows (default 100) of a node's output port. Files
-// live on the server's disk and are read and returned by the server.
+// Preview the first `limit` rows (default 100) of a node's output port, reading
+// the `index`-th artifact when the port value is a list. Files live on the
+// server's disk and are read and returned by the server.
 export function previewNodeOutput(
   executionId: string,
   nodeId: string,
   outputName: string,
   limit = 100,
+  index = 0,
 ): Promise<OutputPreview> {
   return dagJson<OutputPreview>(
-    `/api/executions/${encodeURIComponent(executionId)}/nodes/${encodeURIComponent(nodeId)}/outputs/${encodeURIComponent(outputName)}/preview?limit=${limit}`,
+    `/api/executions/${encodeURIComponent(executionId)}/nodes/${encodeURIComponent(nodeId)}/outputs/${encodeURIComponent(outputName)}/preview?limit=${limit}&index=${index}`,
   );
 }
 
@@ -369,9 +382,12 @@ export type DownloadHandle = {
 };
 
 /**
- * Download a node output file. Respects the Tauri plugin-dialog when
+ * Download a node output artifact. Respects the Tauri plugin-dialog when
  * available (→ OS-native "Save As" picker), falls back to the browser's
  * default download directory in pure-HTTP / non-Tauri environments.
+ *
+ * `index` selects which artifact to fetch when the port value is a list
+ * (default 0); single-valued ports are unaffected.
  *
  * Returns a handle so the caller can render a progress bar + cancel button.
  */
@@ -380,10 +396,34 @@ export function downloadNodeOutput(
   nodeId: string,
   outputName: string,
   preferredFilename?: string,
+  index = 0,
 ): DownloadHandle {
   const profile = getDagProfile();
-  const url = `${profile.baseUrl}/api/executions/${encodeURIComponent(executionId)}/nodes/${encodeURIComponent(nodeId)}/outputs/${encodeURIComponent(outputName)}/download`;
+  const url = `${profile.baseUrl}/api/executions/${encodeURIComponent(executionId)}/nodes/${encodeURIComponent(nodeId)}/outputs/${encodeURIComponent(outputName)}/download?index=${index}`;
+  return startDownload(url, profile, preferredFilename, outputName);
+}
 
+/**
+ * Download EVERY artifact of an output port as one zip archive. The server
+ * streams the archive, so a table with many partitions does not have to be
+ * buffered in memory on either side.
+ */
+export function downloadAllNodeOutputs(
+  executionId: string,
+  nodeId: string,
+  outputName: string,
+): DownloadHandle {
+  const profile = getDagProfile();
+  const url = `${profile.baseUrl}/api/executions/${encodeURIComponent(executionId)}/nodes/${encodeURIComponent(nodeId)}/outputs/${encodeURIComponent(outputName)}/download-all`;
+  return startDownload(url, profile, `${outputName}.zip`, outputName);
+}
+
+function startDownload(
+  url: string,
+  profile: {token?: string},
+  preferredFilename: string | undefined,
+  outputName: string,
+): DownloadHandle {
   const ac = new AbortController();
   let progressCb: ((p: DownloadProgress) => void) | null = null;
   const setProgress = (p: DownloadProgress) => progressCb?.(p);

@@ -73,10 +73,10 @@
      → run_node(dw_export={port, table_dir}, output_ports=快照outputSchema全部端口)
 ⑤ runner: 对**每个**输出端口分配目录并 os.makedirs
      env 注入 AGENT_UI_OUTPUT_DATA_DIRS = '{注册端口: <table_dir>, 其余端口: {work_dir}/outputs/<port>}'
-⑥ 组件: 通用 helper _resolve_output_dir(port) 读 env（内联在各组件，无 DW 语义）
+⑥ 组件: component_sdk.resolve_output_dir(port) 读 env（SDK 随 runner 注入, 无 DW 语义）
      → 数据文件写入环境给的目录; 未注入(单跑)时回退 temp dir
-⑦ output.json 登记产出：单产物端口写文件卡片；分区表等多产物端口写**卡片列表**
-     → 下游 input.json 原样透传（零改动）；Rust 预览/下载需支持列表分支（见 §7）
+⑦ output.json 登记产出：单产物端口写文件卡片；分区表等多产物端口写**产物卡片列表**
+     → 下游 input.json 原样透传；Rust 预览/下载已支持列表分支（见 §7）
 ```
 
 **组件零 DW 感知**：DW 注册是 instance（节点配置）层的事，组件（class）只认识
@@ -106,7 +106,7 @@
 | 3 | 节点配置 UI | `InstanceConfigForm.tsx` | `DW_PREFIX="dw."`，readParams/commit 仿 SYSTEM_PREFIX 的剥离/保留（L243-255）；固定"注册到DW"区块：开关 + 端口下拉（`component.outputSchema` → PortDef，见 componentModel.ts L21-38；outputSchema 为空的组件隐藏区块）+ 表名文本框 |
 | 4 | worker | `engine_executor/worker.py` | 解析 `dw.enabled/port/table`；校验 `dw.port` ∈ snapshot node config 的 outputs、`dw_root` 非空、表名合法（不合法 → 节点 fail + 日志）；`dw_export={port, table_dir}` 传入 run_node（L389 调用点加参）；build_input 源节点分支（L172-178）过滤 `dw.*`（顺带过滤 `system.*`，消除既有污染） |
 | 5 | runner | `engine_executor/runner.py` `run_node` | 新参数 `dw_export=None`、`output_ports=None`；表名白名单 `^[A-Za-z0-9_\-]+$`（拒绝 `..` 与绝对路径，防穿越）；`os.makedirs(table_dir, exist_ok=True)`；对**所有端口**分配目录（注册端口 → 表目录，其余 → `{work_dir}/outputs/{port}`）并注入 `AGENT_UI_OUTPUT_DATA_DIRS=json.dumps(全端口map)`；info 日志记录落库目录 |
-| 6 | 组件接入 | component-repo：`components/comp-upstream/run.py`、`components/comp-downstream/run.py` | 各组件内联通用 helper `_resolve_output_dir(port)`：读 `AGENT_UI_OUTPUT_DATA_DIRS`，未注入返回 None；数据文件落点改为 `_resolve_output_dir(port) or tempfile.mkdtemp(...)`；**不 import 任何 DW 模块**；`_write_output` 登记逻辑不变 |
+| 6 | 组件接入 | component-repo：`components/comp-upstream/run.py`、`components/comp-downstream/run.py` | 改用平台注入的 `component_sdk.resolve_output_dir(port)`（读 `AGENT_UI_OUTPUT_DATA_DIRS`，未注入返回 None，组件不 vendor SDK）；数据文件落点改为 `resolve_output_dir(port) or tempfile.mkdtemp(...)`；**不 import 任何 DW 模块**；`_write_output` 登记逻辑不变 |
 | 7 | 下游读/预览/下载 | — | **零改动**（登记路径即 dw 路径）；列表形态需平台加分支，见 §7 |
 
 另：本设计文档存于 `agent-ui/docs/dw-export-design.md`；实现后在 component-repo 组件开发规范中补"DW 落库"一节（表目录约定、原子写建议）。
@@ -138,12 +138,12 @@
 5. 修改 dw_root 后新执行生效、老执行重放仍用旧值（快照冻结语义）
 6. 回归：不配置 dw 的 DAG 行为与现状完全一致
 
-## 7. 端口值列表形态 + component_sdk（设计已定，待实现）
+## 7. 端口值列表形态 + component_sdk（平台侧已实现，组件侧待接入）
 
 ### 7.1 问题
 
 一个端口可能产出**多个独立产物**——典型是按时序分区落盘的表（如 comp-upstream 的
-`month=YYYYMM/data.parquet`）。当前 `output.json` 只支持单值（文件卡片或裸路径），这类端口
+`month=YYYYMM/` 目录）。平台原先 `output.json` 只支持单值（文件卡片或裸路径），这类端口
 只能登记**目录**，而目录在平台侧预览/下载会因 `is_file()` 校验直接失败
 （`scheduler.rs` `preview_node_output`、`dag_api.rs` `download_node_output_handler`）。
 
@@ -155,9 +155,10 @@
 |---|---|
 | 标量 | 字符串 / 数字 / 布尔（status 端口、摘要值） |
 | 单个文件卡片 | `{"path": <绝对路径>, "format": "csv"\|"parquet"}` |
-| **卡片列表** | `[{"path": ..., "format": ...}, ...]` |
+| **产物卡片列表** | `[{"path": ..., "format": ...}, ...]` |
 
-裸字符串路径为历史兼容形态，等价于只含 `path` 的卡片。
+裸字符串路径为历史兼容形态，等价于只含 `path` 的卡片。`path` 可以是文件或目录，为目录时
+`format` 必填（细节见 `engine-executor.md` 同名章节）。
 
 ### 7.3 列表的语义：范围即输出（非变更集）
 
@@ -197,15 +198,19 @@ paths = read_input_files("out_features")   # 恒返回 list[str]；单值自动�
 
 | # | 改动 | 文件 | 要点 |
 |---|---|---|---|
-| 8 | 平台支持列表 | `src-tauri/src/scheduler.rs`、`dag_api.rs` | preview 匹配 `Value::Array`（取首项/逐项）；download 打包 zip；单值分支保留兼容 |
+| 8 | 平台支持列表 | `src-tauri/src/scheduler.rs`、`dag_api.rs` | 共用解析 `parse_port_entry`（列表/卡片/裸字符串统一收敛为 `OutputArtifact{path,format}`，空列表报错）；preview 加 `index` 参数并回填 `artifacts`，目录产物按 `format` 分流（parquet 直通 hive、csv/json 解析唯一匹配文件）；download 加 `index`，单值分支保留兼容 |
 | 9 | SDK | 新增 `engine_executor/sdk/component_sdk/`；`runner.py` | 注入 `PYTHONPATH` + `AGENT_UI_SDK_PATH`；`read_input_files` 做形态归一化 |
-| 10 | 组件登记 | component-repo `components/comp-upstream/run.py` | 登记改为卡片列表（枚举**输入范围**的月分区，含复用月份；`_check_and_register` 已保证完整） |
+| 10 | 组件登记 | component-repo `components/comp-upstream/run.py` | 登记改为产物卡片列表，每项是月分区**目录**（`[{path: "…/month=YYYYMM", format: "parquet"}]`）；枚举**输入范围**的月分区，含复用月份；`_check_and_register` 已保证完整 |
 | 11 | 组件读取 | `components/comp-downstream/run.py`（以及 comp-upstream / comp-prep 的文件端口） | 改用 `component_sdk.read_input_files` 后逐项读 + concat，兼容单值 |
 | 12 | 文档 | `engine-executor.md`（契约定义处）、`dag.md`、`component-mode.md`、本文件；component-repo 各组件设计文档 | 契约只定义一处，其余引用 |
+| 13 | 打包下载 | 新增 `src-tauri/src/zip_store.rs`；`dag_api.rs` | 新增路由 `…/outputs/:output_name/download-all`：逐产物收集成员（目录递归、保留 `month=YYYYMM/` 形状）→ store-only ZIP 流式响应（零新依赖、CRC-32 + data descriptor），重名加 `_2`/`_3`；zip-slip 校验拒绝绝对路径与 `..` |
+| 14 | 前端 | `component-mode/api.ts`、`DataPreviewModal.tsx` | `previewNodeOutput` / `downloadNodeOutput` 加 `index`；新增 `downloadAllNodeOutputs`；端口产物 >1 时渲染产物面板（逐项切换 + 下载 + 「打包下载全部」） |
 
 ### 7.6 验证
 
-- **平台**：`outputs` 为数组时 preview 正常（取首项/逐项）；download 返回 zip；单值形态回归不变
+- **平台**（已验）：列表 preview `index=0/1`、越界报错、空列表报错、单卡片、裸字符串均正确；单产物
+  download 与 `download-all` 生成的 zip 经 Python `zipfile.testzip()` 校验 CRC 全对、目录形状与内容
+  逐字节一致；parquet 目录走 hive 发现（`filePath` 保持目录）；headless 构建通过
 - **组件**：comp-upstream 在「全量首跑」与「续跑复用」两种情况下，登记的列表**一致**（都含复用月份）
 - **下游**：comp-downstream 收到列表与收到单值时结果一致（归一化生效）
 - **非 Python 组件**：不受影响（契约本体是环境变量）

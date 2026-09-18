@@ -2539,6 +2539,95 @@
   font-size: 12px;
 }
 
+/* ─── 多产物端口：产物列表（逐项预览/下载 + 打包下载全部） ─────── */
+
+.data-preview-artifacts {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.data-preview-artifacts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.data-preview-artifacts-count {
+  font-size: 12px;
+  color: #475569;
+}
+
+.data-preview-artifact-downloadall {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.data-preview-artifact-downloadall:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.data-preview-artifact-list {
+  /* Long tables (dozens of partitions) scroll inside a bounded strip instead
+     of pushing the data table off-screen. */
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.data-preview-artifact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 6px 2px 10px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.data-preview-artifact:last-child {
+  border-bottom: none;
+}
+
+.data-preview-artifact.active {
+  background: #e0e9ff;
+}
+
+.data-preview-artifact-name {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+  color: #1d4ed8;
+  padding: 5px 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-preview-artifact.active .data-preview-artifact-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.data-preview-artifact .data-preview-copy-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .data-preview-truncated {
   color: #b45309;
   background: #fffbeb;

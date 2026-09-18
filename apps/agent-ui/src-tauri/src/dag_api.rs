@@ -15,12 +15,15 @@
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Path, Query},
-    http::{HeaderName, HeaderValue, StatusCode},
-    response::IntoResponse,
+    http::{header, HeaderName, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use serde::Deserialize;
+use std::collections::HashSet;
+use std::path::Path as FsPath;
 
 use crate::server::{AppError, AppState};
 
@@ -29,6 +32,7 @@ use crate::components;
 use crate::dag;
 use crate::scheduler;
 use crate::types::{Component, ComponentSession, Dag, DagEdge, DagNode, DagExecution, ExecutionLog, NodeExecution, NodeLogFile};
+use crate::zip_store::{self, ZipMember};
 
 // ─── Request bodies ──────────────────────────────────────────────────
 
@@ -232,12 +236,14 @@ async fn cancel_execution_handler(Path(execution_id): Path<String>) -> Result<Js
     scheduler::cancel_execution(execution_id).map(Json).map_err(AppError::new)
 }
 
-// Node-output preview: first N rows of CSV/JSON; unsupported formats such as
-// parquet return an "unsupported" hint.
+// Node-output preview: first N rows of CSV/JSON/parquet. `index` selects which
+// artifact to preview when the port value is a list (default 0 = the first).
 #[derive(Deserialize)]
 struct PreviewQuery {
     #[serde(default = "default_preview_limit")]
     limit: usize,
+    #[serde(default)]
+    index: usize,
 }
 fn default_preview_limit() -> usize {
     100
@@ -247,20 +253,36 @@ async fn preview_node_output_handler(
     Path((execution_id, node_id, output_name)): Path<(String, String, String)>,
     Query(query): Query<PreviewQuery>,
 ) -> Result<Json<scheduler::OutputPreview>, AppError> {
-    scheduler::preview_node_output(execution_id, node_id, output_name, query.limit)
-        .map(Json)
-        .map_err(AppError::new)
+    scheduler::preview_node_output(
+        execution_id,
+        node_id,
+        output_name,
+        query.limit,
+        query.index,
+    )
+    .map(Json)
+    .map_err(AppError::new)
 }
 
-/// Download the raw output file produced by a node execution as an
-/// attachment. The file lives on the DAG server's disk; we stream it back
-/// as bytes with a `Content-Disposition: attachment` header so the browser
-/// / webview saves it instead of trying to display it.
+/// `index` selects which artifact to download when the port value is a list
+/// (default 0). Single-valued ports are unaffected.
+#[derive(Deserialize)]
+struct DownloadQuery {
+    #[serde(default)]
+    index: usize,
+}
+
+/// Download one artifact produced by a node execution as an attachment. The
+/// artifact lives on the DAG server's disk; we read it back with a
+/// `Content-Disposition: attachment` header so the browser / webview saves it
+/// instead of trying to display it.
 async fn download_node_output_handler(
     Path((execution_id, node_id, output_name)): Path<(String, String, String)>,
+    Query(query): Query<DownloadQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let path = scheduler::get_output_file_path(&execution_id, &node_id, &output_name)?;
-    let filename = std::path::Path::new(&path)
+    let (path, _format) =
+        scheduler::resolve_output_file_path(&execution_id, &node_id, &output_name, query.index)?;
+    let filename = FsPath::new(&path)
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or("output");
@@ -274,6 +296,68 @@ async fn download_node_output_handler(
         [(HeaderName::from_static("content-disposition"), header_val)],
         bytes,
     ))
+}
+
+/// Pack EVERY artifact of an output port into one streamed zip archive.
+///
+/// The archive is produced as a byte stream (see `zip_store`), so a table with
+/// many partitions downloads without buffering the whole archive in memory.
+/// Artifact paths may be files or directories; directories keep their internal
+/// shape inside the archive (`month=202401/data.parquet`).
+async fn download_node_outputs_all_handler(
+    Path((execution_id, node_id, output_name)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    let artifacts =
+        scheduler::output_artifacts(&execution_id, &node_id, &output_name).map_err(AppError::new)?;
+
+    let mut members: Vec<ZipMember> = Vec::new();
+    let mut used: HashSet<String> = HashSet::new();
+    for (i, artifact) in artifacts.iter().enumerate() {
+        let base = FsPath::new(&artifact.path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("artifact_{i}"));
+        let prefix = unique_archive_name(&base, &mut used);
+        let mut found = zip_store::collect_members(FsPath::new(&artifact.path), &prefix)
+            .map_err(AppError::new)?;
+        members.append(&mut found);
+    }
+
+    let filename = format!("{output_name}.zip");
+    let cd = format!("attachment; filename=\"{filename}\"");
+    let cd_val = HeaderValue::from_str(&cd)
+        .map_err(|e| AppError::new(format!("构造 Content-Disposition 失败: {}", e)))?;
+
+    let mut response = Response::new(Body::from_stream(zip_store::zip_stream(members)));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, cd_val);
+    Ok(response)
+}
+
+/// Keep archive member names unique: two partitions both named `data.parquet`
+/// must not collide inside one archive. First use keeps the plain name;
+/// later duplicates get `_2`, `_3`, … before the extension.
+fn unique_archive_name(base: &str, used: &mut HashSet<String>) -> String {
+    if used.insert(base.to_string()) {
+        return base.to_string();
+    }
+    let (stem, ext) = match base.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (base.to_string(), String::new()),
+    };
+    let mut n = 2;
+    loop {
+        let candidate = format!("{stem}_{n}{ext}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 // ─── Router ──────────────────────────────────────────────────────────
@@ -323,5 +407,9 @@ pub fn register_dag_routes(router: Router<AppState>) -> Router<AppState> {
         .route(
             "/api/executions/:execution_id/nodes/:node_id/outputs/:output_name/download",
             get(download_node_output_handler),
+        )
+        .route(
+            "/api/executions/:execution_id/nodes/:node_id/outputs/:output_name/download-all",
+            get(download_node_outputs_all_handler),
         )
 }

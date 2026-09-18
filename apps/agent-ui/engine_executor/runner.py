@@ -33,6 +33,28 @@ def _git(root, args):
     return r
 
 
+def _sdk_dir() -> str:
+    """Absolute path of the platform SDK directory shipped with this runner.
+
+    Components do ``import component_sdk`` because we put this directory on
+    their PYTHONPATH — the SDK belongs to the platform (agent-ui), so it always
+    matches the worker version instead of drifting inside a component repo.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "sdk")
+
+
+def _prepend_pythonpath(env: dict, directory: str) -> None:
+    """Append ``directory`` to ``env['PYTHONPATH']`` (preserving existing entries).
+
+    Appended rather than prepended: the component's own directory sits at
+    ``sys.path[0]`` and must keep winning name resolution over platform modules.
+    """
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        os.pathsep.join([existing, directory]) if existing else directory
+    )
+
+
 def _cache_key(git_url: str, branch: str, git_ref: str = "") -> str:
     return hashlib.sha256(f"{git_url}@{branch}@{git_ref}".encode()).hexdigest()[:16]
 
@@ -567,8 +589,16 @@ def run_node(
             # agent-ui home (~/.agent-ui), so components keep their own caches
             # under the platform root instead of hard-coding expanduser("~").
             "AGENT_UI_HOME": config.agent_home(),
+            # Platform SDK: ship the contract's client from the platform itself
+            # (never from the component repo) so it always matches this worker's
+            # version. Non-Python components read the env var directly.
+            "AGENT_UI_SDK_PATH": _sdk_dir(),
         }
     )
+    # Make `import component_sdk` resolve for the component's interpreter.
+    # Appending (not replacing) keeps any PYTHONPATH the caller set, and the
+    # component's own directory still wins because it is sys.path[0].
+    _prepend_pythonpath(env, _sdk_dir())
     # Output dir injection: every port of the node gets a directory. The DW
     # table dir wins for the registered port; everything else lands in a
     # runner-managed dir under the node's work dir. Components just write into

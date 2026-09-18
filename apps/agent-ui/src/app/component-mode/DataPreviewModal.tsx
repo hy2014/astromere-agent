@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {
+  downloadAllNodeOutputs,
   downloadNodeOutput,
   getNodeExecutions,
   listExecutions,
@@ -37,6 +38,14 @@ function formatBytes(bytes: number): string {
   const units = ["B", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+/** Display name for an artifact: its last path segment. Artifacts may be
+ *  files or directories, so no extension handling is assumed. */
+function artifactBasename(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  const i = trimmed.lastIndexOf("/");
+  return i >= 0 ? trimmed.slice(i + 1) : trimmed;
 }
 
 type DownloadZoneProps = {
@@ -151,6 +160,10 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
   const [activeOutput, setActiveOutput] = useState<string | null>(null);
   const [preview, setPreview] = useState<OutputPreview | null>(null);
   const [cache, setCache] = useState<Record<string, OutputPreview>>({});
+  // Which artifact of the active port is being previewed. Only meaningful when
+  // the port returned a list (>1 artifacts); single-valued ports stay at 0 and
+  // never render the selector.
+  const [artifactIndex, setArtifactIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noOutputs, setNoOutputs] = useState(false);
@@ -198,18 +211,18 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
     setDownloadProgress(null);
   }, []);
 
-  const handleDownload = useCallback(async (outputName: string) => {
-    if (!executionId) return;
+  // Shared driver for both downloads ("one artifact" and "all artifacts as a
+  // zip"), so the progress/cancel zone behaves identically either way.
+  const runDownload = useCallback(async (makeHandle: () => DownloadHandle) => {
     setDownloadError(null);
     setDownloadPath(null);
     setDownloadProgress(null);
     setDownloading(true);
     try {
-      const handle = downloadNodeOutput(executionId, nodeId, outputName);
+      const handle = makeHandle();
       downloadHandleRef.current = handle;
       handle.onProgress(setDownloadProgress);
-      const finalPath = await handle.promise;
-      setDownloadPath(finalPath);
+      setDownloadPath(await handle.promise);
     } catch (e: any) {
       // User cancelled via Save-As dialog or AbortController — don't surface
       // as a red error, just reset state.
@@ -222,7 +235,25 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
       downloadHandleRef.current = null;
       setDownloading(false);
     }
-  }, [executionId, nodeId]);
+  }, []);
+
+  const handleDownload = useCallback(
+    (outputName: string, index = 0) => {
+      if (!executionId) return;
+      void runDownload(() =>
+        downloadNodeOutput(executionId, nodeId, outputName, undefined, index),
+      );
+    },
+    [executionId, nodeId, runDownload],
+  );
+
+  const handleDownloadAll = useCallback(
+    (outputName: string) => {
+      if (!executionId) return;
+      void runDownload(() => downloadAllNodeOutputs(executionId, nodeId, outputName));
+    },
+    [executionId, nodeId, runDownload],
+  );
 
   // Locate the execution that most recently produced this node's outputs
   useEffect(() => {
@@ -248,6 +279,7 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
             setExecutionId(exec.id);
             setOutputKeys(keys);
             setActiveOutput(keys[0] ?? null);
+            setArtifactIndex(0);
             return;
           }
         }
@@ -261,18 +293,21 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
     };
   }, [dagId, nodeId]);
 
+  // Cache key includes the artifact index: one port may hold many artifacts and
+// each is previewed independently.
   const loadPreview = useCallback(
-    async (outputName: string) => {
+    async (outputName: string, index: number) => {
       if (!executionId) return;
-      if (cache[outputName]) {
-        setPreview(cache[outputName]);
+      const key = `${outputName}#${index}`;
+      if (cache[key]) {
+        setPreview(cache[key]);
         return;
       }
       setLoading(true);
       setError(null);
       try {
-        const p = await previewNodeOutput(executionId, nodeId, outputName, 100);
-        setCache((c) => ({...c, [outputName]: p}));
+        const p = await previewNodeOutput(executionId, nodeId, outputName, 100, index);
+        setCache((c) => ({...c, [key]: p}));
         setPreview(p);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -284,9 +319,17 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
     [executionId, nodeId, cache],
   );
 
+  // Re-preview whenever the port or the selected artifact changes. The index is
+  // reset by the callers that switch ports (tab click / initial selection)
+  // rather than by an effect here — an effect would fire once with the stale
+  // index and fetch twice.
   useEffect(() => {
-    if (activeOutput) void loadPreview(activeOutput);
-  }, [activeOutput, loadPreview]);
+    if (activeOutput) void loadPreview(activeOutput, artifactIndex);
+  }, [activeOutput, artifactIndex, loadPreview]);
+
+  // Artifacts of the previewed port. Absent when the server predates artifact
+  // lists — an empty list keeps every code path below behaving as "single".
+  const artifacts = preview?.artifacts ?? [];
 
   return (
     <div className="data-preview-overlay" onClick={onClose}>
@@ -312,13 +355,62 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
                   key={k}
                   type="button"
                   className={`data-preview-tab ${k === activeOutput ? "active" : ""}`}
-                  onClick={() => setActiveOutput(k)}
+                  onClick={() => {
+                    setActiveOutput(k);
+                    setArtifactIndex(0);
+                  }}
                 >
                   {k}
                 </button>
               ))}
             </div>
             <div className="data-preview-body">
+              {preview && preview.outputName === activeOutput && artifacts.length > 1 && (
+                  <div className="data-preview-artifacts">
+                    <div className="data-preview-artifacts-head">
+                      <span className="data-preview-artifacts-count">
+                        共 {artifacts.length} 个产物
+                      </span>
+                      <button
+                        type="button"
+                        className="data-preview-artifact-downloadall"
+                        onClick={() => handleDownloadAll(preview.outputName)}
+                        disabled={downloading}
+                        title="打包为 zip 下载全部产物"
+                      >
+                        ⬇ 打包下载全部
+                      </button>
+                    </div>
+                    <div className="data-preview-artifact-list">
+                      {artifacts.map((artifact, i) => (
+                        <div
+                          key={artifact.path}
+                          className={`data-preview-artifact ${
+                            i === artifactIndex ? "active" : ""
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            className="data-preview-artifact-name"
+                            onClick={() => setArtifactIndex(i)}
+                            title={artifact.path}
+                          >
+                            {artifactBasename(artifact.path)}
+                          </button>
+                          <button
+                            type="button"
+                            className="data-preview-copy-btn"
+                            onClick={() => handleDownload(preview.outputName, i)}
+                            disabled={downloading}
+                            title={`下载 ${artifact.path}`}
+                          >
+                            下载
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               {loading ? (
                 <div className="data-preview-empty">加载中…</div>
               ) : error ? (
@@ -333,7 +425,7 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
                     savedPath={downloadPath}
                     canDownload={!!executionId}
                     copiedLocal={isTauri ? copiedLocal : undefined}
-                    onStart={() => handleDownload(preview.outputName)}
+                    onStart={() => handleDownload(preview.outputName, artifactIndex)}
                     onCancel={handleCancelDownload}
                     onCopySaved={handleCopySavedPath}
                   />
@@ -366,7 +458,7 @@ export function DataPreviewModal({dagId, nodeId, nodeLabel, onClose}: DataPrevie
                     savedPath={downloadPath}
                     canDownload={!!executionId}
                     copiedLocal={isTauri ? copiedLocal : undefined}
-                    onStart={() => handleDownload(preview.outputName)}
+                    onStart={() => handleDownload(preview.outputName, artifactIndex)}
                     onCancel={handleCancelDownload}
                     onCopySaved={handleCopySavedPath}
                     compact

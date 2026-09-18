@@ -48,3 +48,4 @@ pub mod sqlite;
 pub mod types;
 pub mod utils;
 pub mod workspace;
+pub mod zip_store;

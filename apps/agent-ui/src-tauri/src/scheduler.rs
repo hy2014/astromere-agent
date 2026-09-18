@@ -35,6 +35,104 @@ pub struct OutputPreview {
     /// this so users can open the file directly if preview doesn't cover their
     /// needs (e.g. unsupported format, preview truncated).
     pub file_path: String,
+    /// All artifacts of this port (a port value may be a single artifact or a
+    /// list). `file_path` above is the previewed one. Length 1 = single-valued
+    /// port → frontends hide the artifact selector.
+    pub artifacts: Vec<OutputArtifact>,
+}
+
+/// One artifact of an output port: a path on the server plus its format hint.
+/// The path may point at a regular file OR a directory (a partition dir such
+/// as `month=YYYYMM/`, or a hive-partitioned table root).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputArtifact {
+    pub path: String,
+    pub format: String,
+}
+
+/// Normalize one output-port value into a list of artifacts.
+///
+/// Accepted shapes (all coexist — legacy values must keep working):
+///   - raw string path            `"/abs/a.csv"`
+///   - file card                  `{"path": "/abs/a", "format": "parquet"}`
+///   - list of either of the above  `[ ... ]`
+///
+/// A single-element list is semantically identical to a single value, so
+/// callers never need to branch on the shape. An empty list is a real error
+/// (the port produced nothing) — surfaced rather than silently returning [].
+fn parse_port_entry(entry: &Value) -> Result<Vec<OutputArtifact>, String> {
+    match entry {
+        Value::Array(items) => {
+            if items.is_empty() {
+                return Err("该输出端口本次没有产出（输出列表为空）".to_string());
+            }
+            let mut out = Vec::with_capacity(items.len());
+            for (i, item) in items.iter().enumerate() {
+                out.push(
+                    parse_single_entry(item)
+                        .map_err(|e| format!("输出列表第 {} 项解析失败: {e}", i))?,
+                );
+            }
+            Ok(out)
+        }
+        other => Ok(vec![parse_single_entry(other)?]),
+    }
+}
+
+fn parse_single_entry(entry: &Value) -> Result<OutputArtifact, String> {
+    match entry {
+        Value::Object(map) => {
+            let path = map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "条目缺少 path 字段（可能是非文件端口如 status）: {entry:?}"
+                    )
+                })?;
+            let declared = map.get("format").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(OutputArtifact {
+                path: path.to_string(),
+                format: resolve_artifact_format(path, declared),
+            })
+        }
+        Value::String(s) => Ok(OutputArtifact {
+            path: s.clone(),
+            format: guess_format_from_path(s),
+        }),
+        _ => Err(format!(
+            "条目格式不支持（既不是对象、字符串，也不是列表）: {entry:?}"
+        )),
+    }
+}
+
+/// Effective format of an artifact: the card's declared `format` wins;
+/// otherwise infer from the extension. A directory has no extension, so an
+/// undeclared format on a directory yields "" and the caller reports a clear
+/// hint instead of guessing.
+fn resolve_artifact_format(path: &str, declared: &str) -> String {
+    if !declared.is_empty() {
+        return declared.to_string();
+    }
+    guess_format_from_path(path)
+}
+
+/// All artifacts of a node's output port, normalized to a list.
+pub fn output_artifacts(
+    execution_id: &str,
+    node_id: &str,
+    output_name: &str,
+) -> Result<Vec<OutputArtifact>, String> {
+    let ne = get_node_execution(execution_id.to_string(), node_id.to_string())?
+        .ok_or_else(|| format!("未找到节点执行记录 (execution={}, node={})", execution_id, node_id))?;
+    let outputs = ne
+        .outputs
+        .ok_or_else(|| "该节点执行没有 outputs 记录".to_string())?;
+    let entry = outputs
+        .get(output_name)
+        .ok_or_else(|| format!("outputs 中不存在名为 '{}' 的输出端口", output_name))?;
+    parse_port_entry(entry)
 }
 
 /// Capture a frozen snapshot of the DAG plan at submit time: the node configs,
@@ -712,63 +810,22 @@ fn guess_format_from_path(path: &str) -> String {
     }
 }
 
-/// Shared helper: extract a file path (and its format hint) from a node
-/// execution's outputs JSON for a given output port. Understands both the
-/// canonical file-card entry `{path, format}` and the legacy raw-string
-/// shortcut that older components emit.
+/// Shared helper: extract the `index`-th artifact path (and format hint) from a
+/// node execution's outputs JSON for a given output port. Understands all port
+/// value shapes via `parse_port_entry` (raw string / file card / list).
 pub fn resolve_output_file_path(
     execution_id: &str,
     node_id: &str,
     output_name: &str,
+    index: usize,
 ) -> Result<(String, String), String> {
-    let ne = get_node_execution(execution_id.to_string(), node_id.to_string())?
-        .ok_or_else(|| format!("未找到节点执行记录 (execution={}, node={})", execution_id, node_id))?;
-    let outputs = ne
-        .outputs
-        .ok_or_else(|| "该节点执行没有 outputs 记录".to_string())?;
-    let entry = outputs
-        .get(output_name)
-        .ok_or_else(|| format!("outputs 中不存在名为 '{}' 的输出端口", output_name))?;
-
-    match entry {
-        Value::Object(map) => {
-            let path = map
-                .get("path")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    format!(
-                        "outputs 条目缺少 path 字段（entry 是对象但不含 path，可能是非文件端口如 status）: {:?}",
-                        entry
-                    )
-                })?;
-            let format = map
-                .get("format")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Ok((path.to_string(), format))
-        }
-        Value::String(s) => {
-            let fmt = guess_format_from_path(s);
-            Ok((s.clone(), fmt))
-        }
-        _ => Err(format!(
-            "outputs 条目格式不支持（既不是对象也不是字符串）: {:?}",
-            entry
-        )),
-    }
-}
-
-/// Return the absolute server-side file path of a node's output.
-/// Thin wrapper over `resolve_output_file_path` — useful for callers that
-/// only need the file path (e.g. download handlers) and don't care about
-/// the format hint.
-pub fn get_output_file_path(
-    execution_id: &str,
-    node_id: &str,
-    output_name: &str,
-) -> Result<String, String> {
-    resolve_output_file_path(execution_id, node_id, output_name).map(|(p, _)| p)
+    let artifacts = output_artifacts(execution_id, node_id, output_name)?;
+    let total = artifacts.len();
+    artifacts
+        .into_iter()
+        .nth(index)
+        .map(|a| (a.path, a.format))
+        .ok_or_else(|| format!("产物索引越界: index={index}，该端口共 {total} 项"))
 }
 
 pub fn preview_node_output(
@@ -776,60 +833,50 @@ pub fn preview_node_output(
     node_id: String,
     output_name: String,
     limit: usize,
+    index: usize,
 ) -> Result<OutputPreview, String> {
     let limit = limit.clamp(1, 1000);
-    let ne = get_node_execution(execution_id.clone(), node_id.clone())?
-        .ok_or_else(|| format!("未找到节点执行记录 (execution={}, node={})", execution_id, node_id))?;
-    let outputs = ne
-        .outputs
-        .ok_or_else(|| "该节点执行没有 outputs 记录".to_string())?;
-    let entry = outputs
-        .get(&output_name)
-        .ok_or_else(|| format!("outputs 中不存在名为 '{}' 的输出端口", output_name))?;
+    let artifacts = output_artifacts(&execution_id, &node_id, &output_name)?;
+    let total_artifacts = artifacts.len();
+    let selected = artifacts
+        .get(index)
+        .ok_or_else(|| format!("产物索引越界: index={index}，该端口共 {total_artifacts} 项"))?
+        .clone();
 
-    // Compatibility shim: components may emit either the proper *file card*
-    // ({"path": "/abs/file.csv", "format": "csv"}) or a raw string path
-    // ("/abs/file.csv") as a legacy shortcut. Non-file values (status ports,
-    // scalar summaries) surface a clear error instead of silently 500-ing.
-    let (path, format) = match entry {
-        Value::Object(map) => {
-            let path = map
-                .get("path")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    format!(
-                        "outputs 条目缺少 path 字段（entry 是对象但不含 path，可能是非文件端口如 status）: {:?}",
-                        entry
-                    )
-                })?;
-            let format = map.get("format").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            (path.to_string(), format)
-        }
-        Value::String(s) => {
-            let fmt = guess_format_from_path(s);
-            // Unknown extension → fmt is "" → downstream match falls into
-            // `other` arm and returns a friendly "unsupported format" hint.
-            (s.clone(), fmt)
-        }
-        _ => {
+    let path = selected.path.clone();
+    let format = selected.format.clone();
+
+    // The artifact may be a regular file OR a directory (e.g. a `month=YYYYMM/`
+    // partition dir or a hive-partitioned table root). Directory handling is
+    // format-dependent:
+    //   * parquet → hand the DIRECTORY to the previewer: pyarrow/pandas both do
+    //     hive discovery, so a dir previews natively (no file picking needed).
+    //   * csv/json/… → a directory has no single stream; resolve the one file
+    //     inside it, and fail loudly if the choice is ambiguous.
+    let meta = std::fs::metadata(&path).map_err(error_to_string)?;
+    let target = if meta.is_dir() {
+        if format.is_empty() {
             return Err(format!(
-                "outputs 条目格式不支持（既不是对象也不是字符串）: {:?}",
-                entry
+                "目录产物未声明格式（format），无法预览: {path}"
             ));
         }
+        if format == "parquet" {
+            path.clone()
+        } else {
+            resolve_dir_data_path(&path, &format)?
+        }
+    } else if meta.is_file() {
+        path.clone()
+    } else {
+        return Err(format!("输出路径既不是常规文件也不是目录: {path}"));
     };
 
-    let meta = std::fs::metadata(&path).map_err(error_to_string)?;
-    if !meta.is_file() {
-        return Err(format!("输出文件不存在或不是常规文件: {}", path));
-    }
-
-    match format.as_str() {
-        "csv" => preview_csv(&path, &output_name, limit),
-        "json" | "jsonl" => preview_json(&path, &output_name, limit),
-        "parquet" => preview_parquet_via_python(&path, &output_name, limit),
-        other => Ok(OutputPreview {
-            output_name,
+    let mut preview = match format.as_str() {
+        "csv" => preview_csv(&target, &output_name, limit)?,
+        "json" | "jsonl" => preview_json(&target, &output_name, limit)?,
+        "parquet" => preview_parquet_via_python(&target, &output_name, limit)?,
+        other => OutputPreview {
+            output_name: output_name.clone(),
             format: other.to_string(),
             columns: vec![],
             rows: vec![],
@@ -837,10 +884,41 @@ pub fn preview_node_output(
             total: None,
             unsupported: Some(format!(
                 "暂不支持 '{}' 格式预览，请在服务端直接打开文件查看：\n{}",
-                other, path
+                other, target
             )),
-            file_path: path.clone(),
-        }),
+            file_path: target.clone(),
+            artifacts: vec![],
+        },
+    };
+    preview.artifacts = artifacts;
+    preview.file_path = target;
+    Ok(preview)
+}
+
+/// Pick the single data file of `format` inside `dir`. Only used for formats
+/// that cannot be previewed as a directory (csv/json); parquet dirs are handed
+/// over as-is. Errors when the choice is ambiguous so the user gets a precise
+/// message instead of a silently-wrong preview.
+fn resolve_dir_data_path(dir: &str, format: &str) -> Result<String, String> {
+    let mut matches: Vec<String> = Vec::new();
+    for entry in fs::read_dir(dir).map_err(error_to_string)? {
+        let entry = entry.map_err(error_to_string)?;
+        let p = entry.path();
+        if !p.is_file() {
+            continue;
+        }
+        let s = p.to_string_lossy().to_string();
+        if guess_format_from_path(&s) == format {
+            matches.push(s);
+        }
+    }
+    matches.sort();
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => Err(format!("目录内没有 {format} 格式的数据文件: {dir}")),
+        n => Err(format!(
+            "目录内有 {n} 个 {format} 文件，无法确定预览哪一个: {dir}（请直接指定文件路径）"
+        )),
     }
 }
 
@@ -867,6 +945,7 @@ fn preview_csv(path: &str, output_name: &str, limit: usize) -> Result<OutputPrev
         total: None,
         unsupported: None,
         file_path: path.to_string(),
+        artifacts: vec![],
     })
 }
 
@@ -924,6 +1003,7 @@ fn preview_json(path: &str, output_name: &str, limit: usize) -> Result<OutputPre
         total: None,
         unsupported: None,
         file_path: path.to_string(),
+        artifacts: vec![],
     })
 }
 
@@ -1057,6 +1137,7 @@ fn preview_parquet_via_python(
         total,
         unsupported: None,
         file_path: path.to_string(),
+        artifacts: vec![],
     })
 }
 
