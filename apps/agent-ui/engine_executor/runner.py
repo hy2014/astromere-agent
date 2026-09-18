@@ -22,6 +22,8 @@ import threading
 import time
 import uuid
 
+import config
+
 
 def _git(root, args):
     """Run a git subcommand inside ``root``; raise RuntimeError on failure."""
@@ -562,6 +564,9 @@ def run_node(
             "AGENT_UI_INPUT_PATH": input_path,
             "AGENT_UI_OUTPUT_PATH": output_path,
             "AGENT_UI_COMPONENT_ROOT": component_root,
+            # agent-ui home (~/.agent-ui), so components keep their own caches
+            # under the platform root instead of hard-coding expanduser("~").
+            "AGENT_UI_HOME": config.agent_home(),
         }
     )
     # Output dir injection: every port of the node gets a directory. The DW

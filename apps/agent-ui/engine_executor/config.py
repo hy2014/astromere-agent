@@ -34,6 +34,21 @@ def cache_root() -> str:
     return os.path.join(home, ".agent-ui", "component-cache")
 
 
+def agent_home() -> str:
+    """The agent-ui home directory (``~/.agent-ui`` by default).
+
+    Injected to component processes as ``AGENT_UI_HOME`` so components can keep
+    their own caches under the same root as the platform instead of
+    hard-coding ``~/.agent-ui``. Honor an explicit override first so tests and
+    non-default deployments can relocate everything at once.
+    """
+    p = os.environ.get("AGENT_UI_HOME")
+    if p:
+        return p
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
+    return os.path.join(home, ".agent-ui")
+
+
 def worker_id() -> str:
     """Stable identifier written to claimed executions (for multi-worker setups)."""
     return os.environ.get("ENGINE_EXECUTOR_WORKER_ID", f"worker-{os.getpid()}")
