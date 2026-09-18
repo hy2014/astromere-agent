@@ -82,6 +82,10 @@ Related: [docs/sqlite.md](sqlite.md), [docs/dag.md](dag.md), [docs/component-ses
   （如 `{"kind":"list","element":"string"}` 为字符串数组）。
 - 每种类型对应一种 UI 控件 + 一种 validation 规则；`list` 还需校验每个元素符合元素类型。
 
+> 注意：本节是**配置参数**（`components.config_schema`）的类型系统，与**端口值**形态是两回事。
+> 端口值（`node_executions.outputs`，即组件回传的产物）的形态定义见
+> `docs/engine-executor.md`「端口值契约」，不在此重复。
+
 ### 声明方（author vs UI）
 
 `config_schema` 由**用户在 UI 注册/配置组件时手动声明**（增删参数行、设类型/必填/默认值/枚举），

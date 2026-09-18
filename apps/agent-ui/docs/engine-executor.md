@@ -125,7 +125,8 @@ WHERE id=? AND status='submit';   -- rowcount == 1 才算抢到
    - `runner.run_node` 执行，把 stdout/stderr 写 `execution_logs`。
    - 成功 → `upsert_node_execution(status='success', outputs)` 并记录 `node_outputs` 与
      `node_status[node]='success'`；`outputs` 是按**输出端口 key** 索引的运行产物（如
-     `{"data": "/path/a.csv"}`），属三层模型的第三层（运行产物，由 worker 写回，非用户配置）；
+     `{"data": {"path": "/path/a.csv", "format": "csv"}}`；端口值也可为卡片列表，
+     见下「端口值契约」），属三层模型的第三层（运行产物，由 worker 写回，非用户配置）；
      失败 → 写 `failed`、`node_status[node]='failed'`、`any_failed=True` 后 **`continue`（不再终止整体，
      见上「status 门控」分支隔离）**；取消 → 写 `cancelled` 并终止整体。
    - **门控前置**：真正 clone/run 之前先查上游 `node_status`，任一 failed/skipped → 本节点写
@@ -227,6 +228,61 @@ AGENT_UI_DB_PATH=/path/to/agent-ui.db ENGINE_EXECUTOR_CACHE_ROOT=/tmp/cache pyth
 
 仅依赖标准库，无需 `pip install`。
 
+## 端口值契约（输入/输出端口）
+
+> 本文档是端口值形态的**唯一定义处**，其他文档只引用不重复描述。数组形态为**设计已定、
+> 实现待做**（见 `docs/dw-export-design.md`）；单值形态为当前实现。
+
+组件运行结束时以 `output.json`（`$AGENT_UI_OUTPUT_PATH`）回传产物，key = **裸输出端口名**。
+每个端口的值支持三种形态：
+
+| 形态 | 值 | 用途 |
+|---|---|---|
+| 标量 | 字符串 / 数字 / 布尔 | status 端口、摘要值 |
+| 单个文件卡片 | `{"path": <绝对路径>, "format": "csv"\|"parquet"\|...}` | 单产物端口 |
+| **文件卡片列表** | `[{"path": ..., "format": ...}, ...]` | 一个端口产出**多个独立产物**（如按月/按天分区落盘的表） |
+
+裸字符串路径（`"/abs/file.csv"`）是历史兼容形态，等价于只含 `path` 的卡片，平台按扩展名推断 `format`。
+
+**透传规则**：worker 只做搬运——`build_input` 把上游端口值**原样**放进下游 `input.json`。
+「上游输出什么形态，下游就收到什么形态」，引擎不做形态转换。由此：
+
+- 老组件（期望单值）在上游仍只出单值时**零改动**继续可用；
+- 消费列表形态的组件**必须用 `component_sdk` 归一化**（见下），不要手写 `isinstance` 分支——
+  类型适配属于平台契约，应收敛在一处。
+
+**列表的语义（重要）**：列表是该端口**本次执行对应数据范围的完整产出**，不是「本次新算的部分」。
+以按月分区的表为例，续跑/复用的月份**同样必须出现在列表里**。下游只对自己的输入负责，
+不需要也无法判断哪些是新算的、哪些是复用的——所以「变更集」不属于端口值语义，
+需要它应另开端口或由下游自行幂等处理。
+
+## 组件 SDK（`component_sdk`）
+
+平台契约（`AGENT_UI_*` 环境变量）由 **agent-ui 拥有并实现**，组件只是消费方。SDK 因此放在
+agent-ui 仓库内（`engine_executor/sdk`），由 `runner.run_node` 在启动组件进程时注入：
+
+| 注入项 | 内容 |
+|---|---|
+| `PYTHONPATH` | 追加 `<agent-ui>/engine_executor/sdk` |
+| `AGENT_UI_SDK_PATH` | 同上的绝对路径（非 Python 组件可直接读该变量） |
+
+组件侧：
+
+```python
+from component_sdk import read_input_files
+
+paths = read_input_files("out_features")   # 恒返回 list[str]；单值自动包成 [单值]
+```
+
+设计要点：
+
+- **SDK 随 worker 同源同版本**（同仓库同部署）：契约变更时组件自动跟上，组件仓库**不需要**
+  vendor 它、也不需要写进 `requirements.txt`；
+- 形态归一化只发生在 SDK 内部一处，组件代码里不出现类型分支；
+- 契约本体是**环境变量**，不是 Python 包——bash 等非 Python 组件不受影响，直接读 env 即可；
+- 这与「instance 配置不得泄漏进组件」的原则不冲突：SDK 承载的是**平台 I/O 契约**
+  （对所有组件一致），而非某个节点的配置决策。
+
 ## 文件卡片消费示例（helloworld）
 
 `format=file` 端口传递的是**文件卡片** `{ "path": <绝对路径>, "format": "csv"|"parquet" }`，
@@ -244,6 +300,10 @@ AGENT_UI_DB_PATH=/path/to/agent-ui.db ENGINE_EXECUTOR_CACHE_ROOT=/tmp/cache pyth
 > 端口类型对齐：消费节点的输入端口应声明 `format=file`（如 helloworld 的 `Input`）、
 > 产出文件卡片的输出端口同样声明 `format=file`（如 `output`），与 `dataset-loader` 的
 > `outputFile`(format=file) 端口语义一致，避免"文件卡片 ↔ csv 标量"的端口类型错位。
+
+> **列表形态**：若上游该端口回传卡片列表，下游拿到的 `data["Input"]` 就是数组。此时不要
+> 自己写 `isinstance` 判断——用 `component_sdk.read_input_files("<端口名>")` 归一化后逐项读取
+> （见上「组件 SDK」）。helloworld 是纯单值示例，不含该分支。
 
 ## 测试
 

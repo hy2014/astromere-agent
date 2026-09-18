@@ -125,6 +125,8 @@ Tauri WebView **未实现 `window.prompt` / `window.confirm` / `window.alert`**�
 - **右键菜单**：在节点上右键弹出自定义下拉菜单（不污染节点本体 UI），含「预览数据」「删除」等项。
 - **节点输出预览**：右键 → 「预览数据」→ 弹 `DataPreviewModal`，按**每个输出端口一个 tab** 切换，
   表格展示该端口输出文件的前 100 行（column + value）；预览取自该节点最近一次有输出的执行。
+  **端口值为卡片列表时**（见 `docs/engine-executor.md`「端口值契约」）：该 tab 内按产物逐项预览，
+  下载改为打包 zip；单值形态行为不变。
 - **尺寸**：节点固定宽度 170px、最小高度 30px，紧凑纵向风格（标题单行、超长省略号）。
 
 ## ComponentSessionPanel

@@ -24,9 +24,12 @@ DAG 是**顶层命名的组件集合**。画布上的节点（`dag_nodes`）引�
 
 `dag_edges` 用 `source_handle → target_handle` 做**端口级**连线，表达"上游某输出端口喂给下游某输入端口"。
 
-- 运行产物按**输出端口 key** 索引（如 `outputs: {"data": "/path/a.csv", "metrics": "/path/m.json"}`），
+- 运行产物按**输出端口 key** 索引（如 `outputs: {"data": {"path": "/path/a.csv", "format": "csv"}, "metrics": "/path/m.json"}`），
   `engine_executor/worker.py` 的 `build_input` 据边把上游输出地址作为下游 input 地址，组装 `input.json` 执行下游 `run.py`。
 - 多输出 → 多下游时，各下游按自己的边取对应的那份输出地址。
+- **端口值是"某个地址"而非必然单个文件**：可以是标量、单个文件卡片，或**文件卡片列表**
+  （一个端口产出多个独立产物，如按分区落盘的表）。worker **原样透传**，不做形态转换；
+  形态定义见 `docs/engine-executor.md` 的「端口值契约」，消费方用 `component_sdk` 归一化。
 
 ### handle 命名约定（2026-07-11 修复）
 
