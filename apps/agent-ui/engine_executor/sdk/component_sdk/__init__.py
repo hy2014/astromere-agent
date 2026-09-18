@@ -17,15 +17,29 @@ Python 侧的便利封装。它随 worker 同源同版本发布，组件仓库�
     文件卡片                {"path": "/abs/a", "format": "parquet"}
     上述两者的列表（可混用）  [...]
 
-单元素列表与单值**语义等价**——调用方用 :func:`read_input_files` 归一化后
-逐项读取即可，不需要判断类型。路径可以是常规文件，也可以是目录（如按时序
-分区的 `month=YYYYMM/`）；pandas 的 ``read_parquet`` 对两者写法相同。
+单元素列表与单值**语义等价**——调用方用 :func:`read_input_cards` 归一化后逐项
+处理即可，不需要判断类型。路径可以是常规文件，也可以是目录（如按时序分区的
+`month=YYYYMM/`）；pandas 的 ``read_parquet`` 对两者写法相同。
+
+逐项读表（细粒度、内存只驻留一份）::
+
+    for card in read_input_cards("out_features"):
+        df = read_as_df_from_card(card)
+        ...  # 逐项聚合
+
+只要路径（想自己用别的库读）用 :func:`read_input_files`。
 """
 
 import json
 import os
 
-__all__ = ["read_input_port", "read_input_files", "resolve_output_dir"]
+__all__ = [
+    "read_input_port",
+    "read_input_cards",
+    "read_input_files",
+    "read_as_df_from_card",
+    "resolve_output_dir",
+]
 
 
 def _load_input():
@@ -44,36 +58,80 @@ def _load_input():
 def read_input_port(name):
     """读取输入端口 ``name`` 的原始值；缺失返回 ``None``。
 
-    需要自己处理形态时使用；多数场景应直接用 :func:`read_input_files`。
+    需要自己处理形态时使用；多数场景应直接用 :func:`read_input_cards`。
     """
     return _load_input().get(name)
+
+
+def read_input_cards(name):
+    """读取输入端口 ``name`` 并归一化为**产物列表** ``[{path, format}, ...]``。
+
+    接受任意端口值形态（裸路径 / 文件卡片 / 列表，可混用）。单值包成单元素
+    列表，因此调用方永远只需 ``for card in ...``，不写 ``isinstance`` 分支。
+    裸路径按扩展名补 format。无法识别的条目会被跳过（不是文件的东西不该出现
+    在文件端口上）。
+    """
+    return _normalize_cards(read_input_port(name))
 
 
 def read_input_files(name):
     """读取输入端口 ``name`` 并归一化为**路径列表**。
 
-    接受任意端口值形态（裸路径 / 文件卡片 / 列表，可混用）。单值会包成单元素
-    列表，因此调用方永远只需 ``for path in read_input_files(...)``，不写
-    ``isinstance`` 分支。无法识别的条目会被跳过（不是路径的东西不该出现在
-    文件端口上）。
+    只要路径、不需要 format 时使用（例如想自己用 pyarrow dataset 读）。
     """
-    return _normalize_paths(read_input_port(name))
+    return [card["path"] for card in read_input_cards(name)]
 
 
-def _normalize_paths(value):
+def _normalize_cards(value):
     if value is None:
         return []
     items = value if isinstance(value, list) else [value]
-    paths = []
+    cards = []
     for item in items:
         if isinstance(item, str):
             if item:
-                paths.append(item)
+                cards.append({"path": item, "format": _guess_format(item)})
         elif isinstance(item, dict):
             path = item.get("path")
             if isinstance(path, str) and path:
-                paths.append(path)
-    return paths
+                declared = item.get("format")
+                cards.append({
+                    "path": path,
+                    "format": declared if isinstance(declared, str) and declared
+                    else _guess_format(path),
+                })
+    return cards
+
+
+def _guess_format(path):
+    """裸路径按扩展名推 format；目录推不出来时返回空串（由读取方明确报错）。"""
+    lower = path.lower()
+    if lower.endswith(".csv"):
+        return "csv"
+    if lower.endswith((".jsonl", ".json")):
+        return "json"
+    if lower.endswith((".parquet", ".pq", ".parq")):
+        return "parquet"
+    return ""
+
+
+def read_as_df_from_card(card):
+    """把一个产物（card: ``{path, format}``）读成 DataFrame。
+
+    按 ``format`` 分派：parquet / csv / json。parquet 对文件和目录写法相同
+    （目录走 hive 分区发现）。format 不认识或不是表格数据 → 抛 ``ValueError``。
+    """
+    import pandas as pd  # 懒加载：SDK 本身不硬依赖 pandas
+
+    path = card.get("path")
+    fmt = card.get("format")
+    if fmt == "parquet":
+        return pd.read_parquet(path)
+    if fmt == "csv":
+        return pd.read_csv(path)
+    if fmt == "json":
+        return pd.read_json(path, lines=str(path).lower().endswith(".jsonl"))
+    raise ValueError(f"产物 format={fmt!r} 不是表格数据，读不成 DataFrame: {path}")
 
 
 def resolve_output_dir(port):

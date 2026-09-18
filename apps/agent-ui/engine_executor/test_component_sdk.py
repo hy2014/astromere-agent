@@ -2,11 +2,14 @@
 it into component processes.
 
 Covers:
-  1. Port-value normalization: raw path / file card / list (mixed) → list[str];
-     single value wraps to a one-element list; unusable entries are skipped.
-  2. `resolve_output_dir`: unset env → None (standalone runs fall back to their
+  1. Port-value normalization: raw path / file card / list (mixed) → list[str]
+     and → list[{path, format}]; single value wraps to a one-element list;
+     unusable entries are skipped.
+  2. `read_as_df_from_card`: per-format dispatch (csv / parquet file / parquet
+     dir with hive partitions), and a clear error for non-tabular formats.
+  3. `resolve_output_dir`: unset env → None (standalone runs fall back to their
      own temp dir), malformed JSON → None, unknown port → None.
-  3. End-to-end through `runner.run_node`: the component subprocess can
+  4. End-to-end through `runner.run_node`: the component subprocess can
      `import component_sdk` (PYTHONPATH + AGENT_UI_SDK_PATH are injected) and
      reads a list-valued input port as a plain path list.
 
@@ -27,7 +30,13 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "sdk"))
 
 import runner  # noqa: E402
-from component_sdk import read_input_files, read_input_port, resolve_output_dir  # noqa: E402
+from component_sdk import (  # noqa: E402
+    read_as_df_from_card,
+    read_input_cards,
+    read_input_files,
+    read_input_port,
+    resolve_output_dir,
+)
 
 
 class _Env:
@@ -113,7 +122,96 @@ class NormalizationTests(unittest.TestCase):
     def test_no_input_path_yields_empty(self):
         with _Env(AGENT_UI_INPUT_PATH=None):
             self.assertEqual(read_input_files("p"), [])
+            self.assertEqual(read_input_cards("p"), [])
             self.assertIsNone(read_input_port("p"))
+
+
+class CardTests(unittest.TestCase):
+    """`read_input_cards` keeps the declared format (or infers it from a raw
+    path) so callers can dispatch per artifact."""
+
+    def _with_input(self, port, value):
+        tmp = tempfile.mkdtemp(prefix="sdk_cards_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        path = os.path.join(tmp, "input.json")
+        with open(path, "w") as f:
+            json.dump({port: value}, f)
+        return _Env(AGENT_UI_INPUT_PATH=path)
+
+    def test_declared_format_wins(self):
+        card = {"path": "/dw/month=202401", "format": "parquet"}
+        with self._with_input("p", card):
+            self.assertEqual(read_input_cards("p"), [card])
+
+    def test_raw_path_infers_format_from_extension(self):
+        value = ["/abs/a.csv", "/abs/b.parquet", "/abs/c.jsonl", "/abs/d.bin"]
+        with self._with_input("p", value):
+            self.assertEqual(
+                [c["format"] for c in read_input_cards("p")],
+                ["csv", "parquet", "json", ""],
+            )
+
+    def test_missing_format_falls_back_to_extension(self):
+        # A card without `format` (e.g. hand-written) still reads sensibly.
+        with self._with_input("p", {"path": "/abs/a.parquet"}):
+            self.assertEqual(read_input_cards("p"), [{"path": "/abs/a.parquet", "format": "parquet"}])
+
+    def test_directory_with_declared_format_is_kept(self):
+        # Directories have no extension — the declared format is the only signal.
+        card = {"path": "/dw/month=202401", "format": "parquet"}
+        with self._with_input("p", [card]):
+            self.assertEqual(read_input_cards("p")[0]["format"], "parquet")
+
+    def test_unusable_entries_are_skipped(self):
+        value = ["", {"format": "csv"}, 42, None, "/kept.csv"]
+        with self._with_input("p", value):
+            self.assertEqual(read_input_cards("p"), [{"path": "/kept.csv", "format": "csv"}])
+
+    def test_read_input_files_matches_cards(self):
+        value = [{"path": "/dw/a", "format": "parquet"}, "/dw/b"]
+        with self._with_input("p", value):
+            self.assertEqual(read_input_files("p"), ["/dw/a", "/dw/b"])
+
+
+class ReadAsDfFromCardTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="sdk_read_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_reads_csv(self):
+        import pandas as pd
+
+        path = os.path.join(self.tmp, "a.csv")
+        pd.DataFrame({"x": [1, 2]}).to_csv(path, index=False)
+        df = read_as_df_from_card({"path": path, "format": "csv"})
+        self.assertEqual(list(df["x"]), [1, 2])
+
+    def test_reads_parquet_file_and_directory(self):
+        import pandas as pd
+
+        # A hive-partitioned layout: <root>/month=YYYYMM/data.parquet, read
+        # either as the partition dir or as the whole table root.
+        root = os.path.join(self.tmp, "table")
+        for ym, val in [("202401", 1), ("202402", 2)]:
+            part = os.path.join(root, f"month={ym}")
+            os.makedirs(part)
+            pd.DataFrame({"v": [val]}).to_parquet(os.path.join(part, "data.parquet"), index=False)
+
+        one = read_as_df_from_card({"path": os.path.join(root, "month=202401"), "format": "parquet"})
+        self.assertEqual(list(one["v"]), [1])
+
+        both = read_as_df_from_card({"path": root, "format": "parquet"})
+        self.assertEqual(sorted(both["v"].tolist()), [1, 2])
+
+    def test_unknown_format_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            read_as_df_from_card({"path": "/abs/a.bin", "format": ""})
+        self.assertIn("不是表格数据", str(ctx.exception))
+
+    def test_directory_without_format_raises(self):
+        # A dir has no extension → format stays "" → must fail loudly, not guess.
+        with self.assertRaises(ValueError):
+            read_as_df_from_card({"path": "/dw/month=202401", "format": ""})
 
 
 class ResolveOutputDirTests(unittest.TestCase):

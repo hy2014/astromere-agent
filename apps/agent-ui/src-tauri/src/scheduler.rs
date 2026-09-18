@@ -4,7 +4,7 @@ use crate::dag::{get_dag, cron_matches};
 use crate::dag_server_config::log_dir;
 use crate::sqlite::open_sqlite_database;
 use crate::types::{DagDetail, DagExecution, ExecutionLog, NodeExecution, NodeLogFile};
-use chrono::{Local, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
 use rusqlite::params;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -135,6 +135,114 @@ pub fn output_artifacts(
     parse_port_entry(entry)
 }
 
+/// Resolve date expressions in every string value of a node's `params`
+/// (list elements included). See `resolve_param_expr`.
+fn resolve_params(params: &mut Value, now: DateTime<Local>) -> Result<(), String> {
+    let map = match params.as_object_mut() {
+        Some(map) => map,
+        None => return Ok(()),
+    };
+    for (key, value) in map.iter_mut() {
+        match value {
+            Value::String(s) => {
+                *s = resolve_param_expr(s, now).map_err(|e| format!("参数 {key}: {e}"))?;
+            }
+            Value::Array(items) => {
+                for (i, item) in items.iter_mut().enumerate() {
+                    if let Value::String(s) = item {
+                        *s = resolve_param_expr(s, now)
+                            .map_err(|e| format!("参数 {key}[{i}]: {e}"))?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// 把参数值里的日期表达式换成具体值，提交时解析一次：
+///
+///     $current_month(yyyyMM, -1)   上月，如 202608
+///     $current_day(yyyyMMdd, -1)   昨天，如 20260917
+///
+/// `fmt` 用 yyyy / MM / dd 记号，其余字符原样输出（如 `yyyy-MM`）。`$current_month`
+/// 只到月，fmt 里出现 dd 报错。不是表达式的值原样返回；形状像表达式但写错则报错
+/// （避免把 `$current_month(...)` 当普通字符串传给组件，让组件报看不懂的日期错）。
+fn resolve_param_expr(value: &str, now: DateTime<Local>) -> Result<String, String> {
+    let body = match value.strip_prefix('$') {
+        Some(body) => body,
+        None => return Ok(value.to_string()),
+    };
+    let open = match body.find('(') {
+        Some(i) if body.ends_with(')') => i,
+        _ => return Ok(value.to_string()),
+    };
+    let name = &body[..open];
+    let args: Vec<&str> = body[open + 1..body.len() - 1]
+        .split(',')
+        .map(str::trim)
+        .collect();
+
+    if name != "current_month" && name != "current_day" {
+        return Err(format!("未知函数 ${name}（支持 $current_month / $current_day）"));
+    }
+    if args.len() != 2 || args[0].is_empty() {
+        return Err(format!("${name} 需要 2 个参数：fmt, delta"));
+    }
+    let (fmt, delta_arg) = (args[0], args[1]);
+    let delta: i64 = delta_arg
+        .parse()
+        .map_err(|_| format!("delta 必须是整数: {delta_arg:?}"))?;
+
+    let today = now.date_naive();
+    let date = if name == "current_month" {
+        shift_months(today, delta)?
+    } else {
+        today
+            .checked_add_signed(chrono::Duration::days(delta))
+            .ok_or_else(|| format!("日期越界: 今天 {delta} 天"))?
+    };
+    format_date(date, fmt, name == "current_day")
+}
+
+/// `date` 所在月平移 delta 个月后的 1 号。
+fn shift_months(date: NaiveDate, delta: i64) -> Result<NaiveDate, String> {
+    let total = date.year() as i64 * 12 + (date.month() as i64 - 1) + delta;
+    NaiveDate::from_ymd_opt(
+        total.div_euclid(12) as i32,
+        (total.rem_euclid(12) + 1) as u32,
+        1,
+    )
+    .ok_or_else(|| format!("月份越界: delta={delta}"))
+}
+
+fn format_date(date: NaiveDate, fmt: &str, allow_day: bool) -> Result<String, String> {
+    let chars: Vec<char> = fmt.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let rest: String = chars[i..].iter().collect();
+        if rest.starts_with("yyyy") {
+            out.push_str(&format!("{:04}", date.year()));
+            i += 4;
+        } else if rest.starts_with("MM") {
+            out.push_str(&format!("{:02}", date.month()));
+            i += 2;
+        } else if rest.starts_with("dd") {
+            if !allow_day {
+                return Err("$current_month 的 fmt 不支持 dd（只能用 yyyy / MM）".to_string());
+            }
+            out.push_str(&format!("{:02}", date.day()));
+            i += 2;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    Ok(out)
+}
+
 /// Capture a frozen snapshot of the DAG plan at submit time: the node configs,
 /// edges, and execution order. Stored as JSON on the `dag_executions` row so a
 /// run always replays / displays the exact config it was launched with, even
@@ -149,10 +257,11 @@ pub(crate) fn build_snapshot(detail: &DagDetail) -> Result<String, String> {
     } else {
         Vec::new()
     };
+    let now = Local::now();
     let nodes: Vec<Value> = detail
         .nodes
         .iter()
-        .map(|n| {
+        .map(|n| -> Result<Value, String> {
             // Merge the component's git source into the node's config so the
             // Python worker reads the configuration truth-source from this frozen
             // snapshot. dag_nodes.config is only a runtime cache; see the binding
@@ -180,13 +289,22 @@ pub(crate) fn build_snapshot(detail: &DagDetail) -> Result<String, String> {
                 // history view's "per-node" snapshot display.
                 config.insert("name".to_string(), serde_json::Value::String(component.name));
             }
-            serde_json::json!({
+            // 参数里的日期表达式在这里解析成具体值，冻结进快照（见 resolve_param_expr）。
+            let label = config
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&n.id)
+                .to_string();
+            if let Some(params) = config.get_mut("params") {
+                resolve_params(params, now).map_err(|e| format!("节点「{label}」{e}"))?;
+            }
+            Ok(serde_json::json!({
                 "id": n.id,
                 "component_id": n.component_id,
                 "config": Value::Object(config),
-            })
+            }))
         })
-        .collect();
+        .collect::<Result<Vec<Value>, String>>()?;
     let edges: Vec<Value> = detail
         .edges
         .iter()
@@ -1183,6 +1301,84 @@ pub fn save_bytes_to_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+
+    fn at(y: i32, m: u32, d: u32) -> DateTime<Local> {
+        Local.with_ymd_and_hms(y, m, d, 18, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn param_expr_current_month() {
+        let now = at(2026, 9, 18);
+        assert_eq!(resolve_param_expr("$current_month(yyyyMM, 0)", now).unwrap(), "202609");
+        assert_eq!(resolve_param_expr("$current_month(yyyyMM, -1)", now).unwrap(), "202608");
+        assert_eq!(resolve_param_expr("$current_month(yyyy-MM, 1)", now).unwrap(), "2026-10");
+        assert_eq!(resolve_param_expr("$current_month(yyyyMM, -13)", now).unwrap(), "202508");
+    }
+
+    #[test]
+    fn param_expr_current_month_crosses_year() {
+        let now = at(2026, 12, 5);
+        assert_eq!(resolve_param_expr("$current_month(yyyyMM, 1)", now).unwrap(), "202701");
+        assert_eq!(resolve_param_expr("$current_month(yyyyMM, -12)", now).unwrap(), "202512");
+    }
+
+    #[test]
+    fn param_expr_current_day() {
+        let now = at(2026, 9, 18);
+        assert_eq!(resolve_param_expr("$current_day(yyyyMMdd, 0)", now).unwrap(), "20260918");
+        assert_eq!(resolve_param_expr("$current_day(yyyyMMdd, -1)", now).unwrap(), "20260917");
+        assert_eq!(resolve_param_expr("$current_day(yyyy-MM-dd, 14)", now).unwrap(), "2026-10-02");
+        // 跨月/跨年
+        let nye = at(2026, 1, 1);
+        assert_eq!(resolve_param_expr("$current_day(yyyyMMdd, -1)", nye).unwrap(), "20251231");
+    }
+
+    #[test]
+    fn param_expr_passes_through_plain_values() {
+        let now = at(2026, 9, 18);
+        for v in ["202001", "000001", "/home/x/run.sh", "", "$HOME/x", "a(b)c"] {
+            assert_eq!(resolve_param_expr(v, now).unwrap(), v, "value={v}");
+        }
+    }
+
+    #[test]
+    fn param_expr_rejects_bad_input() {
+        let now = at(2026, 9, 18);
+        for v in [
+            "$current_month(yyyyMMdd, 0)",  // 月函数不支持 dd
+            "$current_month(yyyyMM)",       // 参数个数
+            "$current_month(yyyyMM, x)",    // delta 非整数
+            "$current_month(, 0)",          // fmt 为空
+            "$current_week(yyyyMM, 0)",     // 未知函数
+        ] {
+            assert!(resolve_param_expr(v, now).is_err(), "应当报错: {v}");
+        }
+    }
+
+    #[test]
+    fn resolve_params_walks_strings_and_lists() {
+        let now = at(2026, 9, 18);
+        let mut params = serde_json::json!({
+            "start_month": "$current_month(yyyyMM, -1)",
+            "end_month": "$current_month(yyyyMM, 0)",
+            "symbols": ["$current_month(yyyyMM, -2)", "000001"],
+            "cb_to_stock": false,
+            "limit": 10,
+        });
+        resolve_params(&mut params, now).unwrap();
+        assert_eq!(params["start_month"], "202608");
+        assert_eq!(params["end_month"], "202609");
+        assert_eq!(params["symbols"][0], "202607");
+        assert_eq!(params["symbols"][1], "000001");
+        assert_eq!(params["cb_to_stock"], false);
+        assert_eq!(params["limit"], 10);
+
+        // 报错信息带上参数名，方便定位
+        let mut bad = serde_json::json!({"start_month": "$current_month(yyyyMMdd, 0)"});
+        let err = resolve_params(&mut bad, now).unwrap_err();
+        assert!(err.contains("start_month") && err.contains("dd"), "err={err}");
+    }
 
     #[test]
     fn guess_format_from_path_handles_csv() {

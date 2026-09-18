@@ -20,6 +20,24 @@ DAG 是**顶层命名的组件集合**。画布上的节点（`dag_nodes`）引�
   **注入**冻结进 `dag_executions.snapshot`（而非读取活 node.config 的冗余字段），
   运行中途改 DAG 不影响本次运行（见 [docs/components.md](components.md) 三层模型）。
 
+### 参数里的日期表达式
+
+`params` 的**字符串值**可以是日期表达式，`build_snapshot` 在提交时解析成具体值再冻结：
+
+| 表达式 | 含义 | 例（2026-09-18 提交） |
+| --- | --- | --- |
+| `$current_month(fmt, delta)` | 当月平移 `delta` 个月（取该月 1 号）；`fmt` 只能用 `yyyy` / `MM` | `$current_month(yyyyMM, -1)` → `202608` |
+| `$current_day(fmt, delta)` | 今天平移 `delta` 天；`fmt` 可用 `yyyy` / `MM` / `dd` | `$current_day(yyyyMMdd, -1)` → `20260917` |
+
+`fmt` 里 `yyyy` / `MM` / `dd` 之外的字符原样输出（如 `yyyy-MM`）。
+
+- 不是表达式的值原样保留（`202001`、`000001`、`/home/x/run.sh` 都不受影响）
+- 形状像表达式但写错（未知函数 / 参数个数不对 / `delta` 非整数 / 月函数带 `dd`）→ **提交失败**，
+  报错指明节点与参数名；不会把 `$current_month(...)` 当普通字符串透传给组件
+- 用服务器本地时区
+- **与触发方式无关**：手动运行 / cron / 从某节点重跑都走 `build_snapshot`，都在提交那一刻解析
+- 表达式存在定义里（`dag_nodes.config.params`），解析后的具体值存在快照里 —— 执行历史能看到实际用的值
+
 ## 边与 IO 映射（dag_edges = 端口级）
 
 `dag_edges` 用 `source_handle → target_handle` 做**端口级**连线，表达"上游某输出端口喂给下游某输入端口"。
