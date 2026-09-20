@@ -170,6 +170,15 @@ export function testDatabase(name: string): Promise<DatabaseTestResult> {
   });
 }
 
+// Test the values currently in the form without saving them. An empty password
+// falls back to the stored one server-side (same semantics as update).
+export function testDatabaseAdhoc(input: DatabaseRegistrationInput): Promise<DatabaseTestResult> {
+  return dagJson<DatabaseTestResult>("/databases/test", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 // ─── Internal request helper ─────────────────────────────────────────
 
 function getDagProfile(): RemoteProfile {

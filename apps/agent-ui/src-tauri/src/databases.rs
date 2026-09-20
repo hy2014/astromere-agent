@@ -59,9 +59,6 @@ pub fn validate(reg: &DatabaseRegistration) -> Result<(), String> {
     if reg.host.trim().is_empty() {
         return Err("主机地址不能为空".to_string());
     }
-    if reg.dbname.trim().is_empty() {
-        return Err("数据库名不能为空".to_string());
-    }
     if reg.user.trim().is_empty() {
         return Err("用户名不能为空".to_string());
     }
@@ -151,8 +148,11 @@ pub async fn test_connection(reg: &DatabaseRegistration) -> DatabaseTestResult {
         .host(&reg.host)
         .port(reg.port)
         .user(&reg.user)
-        .password(&reg.password)
-        .dbname(&reg.dbname);
+        .password(&reg.password);
+    // dbname 留空 = 连用户默认库（与 user 同名）。
+    if !reg.dbname.trim().is_empty() {
+        config.dbname(&reg.dbname);
+    }
     let probe = async {
         let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
         tokio::spawn(async move {
@@ -261,6 +261,19 @@ mod tests {
         assert!(err.contains("未登记"));
         remove_database_from(&path, "dw-main").unwrap();
         assert!(load_databases_from(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_upsert_empty_dbname_allowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("databases.json");
+
+        let mut reg = sample("dw-main", "secret");
+        reg.dbname = "  ".to_string();
+        upsert_database_to(&path, reg).unwrap();
+
+        let loaded = load_databases_from(&path).unwrap();
+        assert_eq!(loaded.len(), 1);
     }
 
     #[test]

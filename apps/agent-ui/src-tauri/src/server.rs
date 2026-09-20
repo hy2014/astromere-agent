@@ -214,6 +214,7 @@ pub fn app_router(state: AppState) -> Router {
         .route("/databases", get(list_databases_handler).post(create_database_handler))
         .route("/databases/:name", put(update_database_handler).delete(delete_database_handler))
         .route("/databases/:name/test", post(test_database_handler))
+        .route("/databases/test", post(test_database_adhoc_handler))
         // workspace
         .route("/workspace/default", get(default_workspace_handler))
         .route("/workspace/open", get(open_workspace_handler))
@@ -340,6 +341,27 @@ async fn test_database_handler(
     Path(name): Path<String>,
 ) -> Result<Json<databases::DatabaseTestResult>, AppError> {
     let reg = databases::find_database(&name).map_err(AppError::not_found)?;
+    Ok(Json(databases::test_connection(&reg).await))
+}
+
+// 表单里的「测试连接」：不落盘，直接用请求体测。
+// 密码留空时沿用已登记的同名密码（与保存语义一致）。
+async fn test_database_adhoc_handler(
+    Json(reg): Json<databases::DatabaseRegistration>,
+) -> Result<Json<databases::DatabaseTestResult>, AppError> {
+    databases::validate(&reg).map_err(AppError::bad_request)?;
+    let reg = if reg.password.is_empty() {
+        match databases::find_database(&reg.name) {
+            Ok(stored) => {
+                let mut r = reg;
+                r.password = stored.password;
+                r
+            }
+            Err(_) => reg,
+        }
+    } else {
+        reg
+    };
     Ok(Json(databases::test_connection(&reg).await))
 }
 
@@ -1032,6 +1054,7 @@ pub fn stateless_test_router() -> Router {
         .route("/databases", get(list_databases_handler).post(create_database_handler))
         .route("/databases/:name", put(update_database_handler).delete(delete_database_handler))
         .route("/databases/:name/test", post(test_database_handler))
+        .route("/databases/test", post(test_database_adhoc_handler))
         .route("/workspace/default", get(default_workspace_handler))
         .route("/workspace/open", get(open_workspace_handler))
         .route("/workspaces", get(list_workspaces_handler).post(add_workspace_handler).delete(remove_workspace_handler))

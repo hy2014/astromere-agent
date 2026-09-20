@@ -9,6 +9,7 @@ import {
   saveDagServer,
   testDagServerHealth,
   testDatabase,
+  testDatabaseAdhoc,
   updateDatabase,
 } from "./api";
 import {createRemoteProfileInput} from "../../runtime/profiles";
@@ -80,6 +81,8 @@ export function DagAdvancedSettings({onServerChanged}: Props) {
   const [dbSaving, setDbSaving] = useState(false);
   const [dbTestingName, setDbTestingName] = useState<string | null>(null);
   const [dbTestResults, setDbTestResults] = useState<Record<string, DatabaseTestResult>>({});
+  const [dbFormTesting, setDbFormTesting] = useState(false);
+  const [dbFormTestResult, setDbFormTestResult] = useState<DatabaseTestResult | null>(null);
 
   const parseBaseUrl = (baseUrl: string | undefined): {ip: string; port: string} | null => {
     const m = baseUrl?.match(/^https?:\/\/([^/:]+?)(?::(\d+))?\/?$/);
@@ -206,6 +209,7 @@ export function DagAdvancedSettings({onServerChanged}: Props) {
 
   function startDbEdit(db: DatabaseInfo) {
     setDbEditingName(db.name);
+    setDbFormTestResult(null);
     setDbDraft({
       name: db.name,
       host: db.host,
@@ -219,36 +223,73 @@ export function DagAdvancedSettings({onServerChanged}: Props) {
   function closeDbForm() {
     setDbDraft(null);
     setDbEditingName(null);
+    setDbFormTestResult(null);
   }
 
-  async function handleDbSave() {
-    if (!dbDraft || dbSaving) return;
+  // 字段变更统一走这里：改动后旧的测试结果不再可信，顺手清掉。
+  function updateDbDraft(patch: Partial<DbDraft>) {
+    setDbDraft((prev) => (prev ? {...prev, ...patch} : prev));
+    setDbFormTestResult(null);
+  }
+
+  function dbFormInput(): {name: string; host: string; port: number; dbname: string; user: string; password: string} | string {
+    if (!dbDraft) return "表单未打开。";
     const name = dbDraft.name.trim();
     const host = dbDraft.host.trim();
     const portStr = dbDraft.port.trim();
-    const dbname = dbDraft.dbname.trim();
     const user = dbDraft.user.trim();
-    if (!name || !host || !dbname || !user) {
-      setDbStatus("名称、主机、数据库、用户名均为必填。");
-      return;
+    if (!name || !host || !user) {
+      return "名称、主机、用户名均为必填（库名可留空 = 连用户默认库）。";
     }
     if (!/^[A-Za-z0-9_-]+$/.test(name)) {
-      setDbStatus("名称只能包含字母、数字、下划线、连字符。");
-      return;
+      return "名称只能包含字母、数字、下划线、连字符。";
     }
     if (!/^\d{1,5}$/.test(portStr) || Number(portStr) < 1 || Number(portStr) > 65535) {
-      setDbStatus("端口需在 1–65535 之间。");
+      return "端口需在 1–65535 之间。";
+    }
+    return {
+      name,
+      host,
+      port: Number(portStr),
+      dbname: dbDraft.dbname.trim(),
+      user,
+      password: dbDraft.password,
+    };
+  }
+
+  async function handleDbFormTest() {
+    if (dbFormTesting) return;
+    const input = dbFormInput();
+    if (typeof input === "string") {
+      setDbStatus(input);
       return;
     }
-    const input = {name, host, port: Number(portStr), dbname, user, password: dbDraft.password};
+    setDbFormTesting(true);
+    setDbFormTestResult(null);
+    try {
+      setDbFormTestResult(await testDatabaseAdhoc(input));
+    } catch (reason) {
+      setDbFormTestResult({ok: false, message: String(reason)});
+    } finally {
+      setDbFormTesting(false);
+    }
+  }
+
+  async function handleDbSave() {
+    if (dbFormTesting || dbSaving) return;
+    const input = dbFormInput();
+    if (typeof input === "string") {
+      setDbStatus(input);
+      return;
+    }
     setDbSaving(true);
     try {
       if (dbEditingName) {
         await updateDatabase(dbEditingName, input);
-        setDbStatus(`已更新数据库 ${name} 的登记。`);
+        setDbStatus(`已更新数据库 ${input.name} 的登记。`);
       } else {
         await createDatabase(input);
-        setDbStatus(`已登记数据库 ${name}，可点击列表中的“测试连接”验证。`);
+        setDbStatus(`已登记数据库 ${input.name}，可点击列表中的“测试连接”验证。`);
       }
       closeDbForm();
       await loadDatabases();
@@ -421,7 +462,7 @@ export function DagAdvancedSettings({onServerChanged}: Props) {
               value={dbDraft.name}
               placeholder="例如 dw-main"
               disabled={dbEditingName !== null}
-              onChange={(e) => setDbDraft({...dbDraft, name: e.target.value})}
+              onChange={(e) => updateDbDraft({name: e.target.value})}
             />
           </div>
           <div className="dag-settings-field-row">
@@ -431,7 +472,7 @@ export function DagAdvancedSettings({onServerChanged}: Props) {
               className="dag-connect-input"
               value={dbDraft.host}
               placeholder="例如 192.168.1.50"
-              onChange={(e) => setDbDraft({...dbDraft, host: e.target.value})}
+              onChange={(e) => updateDbDraft({host: e.target.value})}
             />
           </div>
           <div className="dag-settings-field-row">
@@ -441,7 +482,7 @@ export function DagAdvancedSettings({onServerChanged}: Props) {
               className="dag-connect-input"
               value={dbDraft.port}
               placeholder="5432"
-              onChange={(e) => setDbDraft({...dbDraft, port: e.target.value})}
+              onChange={(e) => updateDbDraft({port: e.target.value})}
             />
           </div>
           <div className="dag-settings-field-row">
@@ -450,8 +491,8 @@ export function DagAdvancedSettings({onServerChanged}: Props) {
               id="dag-db-name-only"
               className="dag-connect-input"
               value={dbDraft.dbname}
-              placeholder="目标数据库名"
-              onChange={(e) => setDbDraft({...dbDraft, dbname: e.target.value})}
+              placeholder="留空 = 连用户默认库"
+              onChange={(e) => updateDbDraft({dbname: e.target.value})}
             />
           </div>
           <div className="dag-settings-field-row">
@@ -460,7 +501,7 @@ export function DagAdvancedSettings({onServerChanged}: Props) {
               id="dag-db-user"
               className="dag-connect-input"
               value={dbDraft.user}
-              onChange={(e) => setDbDraft({...dbDraft, user: e.target.value})}
+              onChange={(e) => updateDbDraft({user: e.target.value})}
             />
           </div>
           <div className="dag-settings-field-row">
@@ -471,21 +512,31 @@ export function DagAdvancedSettings({onServerChanged}: Props) {
               className="dag-connect-input"
               value={dbDraft.password}
               placeholder={dbEditingName ? "留空表示沿用已保存的密码" : "数据库密码"}
-              onChange={(e) => setDbDraft({...dbDraft, password: e.target.value})}
+              onChange={(e) => updateDbDraft({password: e.target.value})}
             />
           </div>
+          {dbFormTestResult && (
+            <div className={dbFormTestResult.ok ? "dag-db-test-ok" : "dag-db-test-fail"}>
+              {dbFormTestResult.ok
+                ? "连接成功 ✓"
+                : `连接失败：${dbFormTestResult.message}`}
+            </div>
+          )}
           <div className="dag-settings-actions">
-            <button type="button" className="dag-connect-cancel" onClick={closeDbForm} disabled={dbSaving}>
+            <button type="button" className="dag-connect-cancel" onClick={closeDbForm} disabled={dbSaving || dbFormTesting}>
               取消
             </button>
-            <button type="button" className="dag-connect-submit dag-settings-primary" onClick={handleDbSave} disabled={dbSaving}>
+            <button type="button" className="dag-connect-cancel" onClick={() => void handleDbFormTest()} disabled={dbSaving || dbFormTesting}>
+              {dbFormTesting ? "测试中…" : "测试连接"}
+            </button>
+            <button type="button" className="dag-connect-submit dag-settings-primary" onClick={handleDbSave} disabled={dbSaving || dbFormTesting}>
               {dbSaving ? "保存中…" : "保存"}
             </button>
           </div>
         </div>
       ) : (
         <div className="dag-settings-actions">
-          <button type="button" className="dag-connect-submit dag-settings-primary" onClick={() => {setDbEditingName(null); setDbDraft(emptyDbDraft());}}>
+          <button type="button" className="dag-connect-submit dag-settings-primary" onClick={() => {setDbEditingName(null); setDbDraft(emptyDbDraft()); setDbFormTestResult(null);}}>
             新增数据库
           </button>
         </div>

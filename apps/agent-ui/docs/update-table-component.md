@@ -78,7 +78,8 @@ DAG 里常见两种角色需要分开：
 | `POST /databases` | 新增 |
 | `PUT /databases/:name` | 修改；password 留空 = 保留原密码 |
 | `DELETE /databases/:name` | 删除 |
-| `POST /databases/:name/test` | 测试连接，返回 `{ok, message}` |
+| `POST /databases/:name/test` | 测试已登记连接，返回 `{ok, message}` |
+| `POST /databases/test` | 按请求体测试（不落盘，登记表单里的「测试连接」用）；password 留空 = 沿用同名已登记密码 |
 | `GET /databases/:name/tables` | 该库用户可访问的表名列表 |
 
 - **存储**：服务器侧本地持久化，凭据不进公共仓库。
