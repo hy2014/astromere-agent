@@ -43,8 +43,9 @@ pub fn validate(params: serde_json::Value) -> ValidateFuture {
                 .await
                 .map_err(|e| format!("连接数据库失败: {}", databases::error_chain_message(&e)))?;
             for (i, stmt) in statements.iter().enumerate() {
+                let explain = neutralize_query_tokens(stmt);
                 client
-                    .query_one(&format!("EXPLAIN {stmt}"), &[])
+                    .query_one(&format!("EXPLAIN {explain}"), &[])
                     .await
                     .map_err(|e| format!("第 {} 条语句: {}", i + 1, databases::error_chain_message(&e)))?;
             }
@@ -66,6 +67,44 @@ fn fail(message: impl Into<String>) -> ValidateResult {
         ok: false,
         message: message.into(),
     }
+}
+
+/// 把 `$端口.列` 模板 token 中和成字面量 `1`，以便 EXPLAIN。
+/// 运行时的 `$x.col` 会被组件替换成绑定参数 %(pN)s，两者都不能直接进
+/// EXPLAIN（PG 不认）；validate 只验证「换了占位符后语法 + 表/列/权限」。
+/// PG 自身参数 `$1`（数字）不受影响，原样保留。
+fn neutralize_query_tokens(sql: &str) -> String {
+    let b: Vec<char> = sql.chars().collect();
+    let n = b.len();
+    let mut out = String::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        if b[i] == '$' {
+            let mut j = i + 1;
+            // ident1：首字符须字母或下划线（与 PG 参数 `$1` 区分）
+            if j < n && (b[j].is_ascii_alphabetic() || b[j] == '_') {
+                let mut k = j;
+                while k < n && (b[k].is_ascii_alphanumeric() || b[k] == '_') {
+                    k += 1;
+                }
+                if k < n && b[k] == '.' {
+                    let l0 = k + 1;
+                    let mut l = l0;
+                    while l < n && (b[l].is_ascii_alphanumeric() || b[l] == '_') {
+                        l += 1;
+                    }
+                    if l > l0 {
+                        out.push('1');
+                        i = l;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    out
 }
 
 /// 剥掉 `-- 行注释` 与 `/* 块注释 */` 后按分号拆分。
@@ -151,5 +190,26 @@ mod tests {
     fn string_literals_are_kept_verbatim() {
         let out = split_statements("SELECT 'a;b' FROM t;");
         assert_eq!(out, vec!["SELECT 'a;b' FROM t"]);
+    }
+
+    #[test]
+    fn neutralizes_query_tokens_to_literal() {
+        let sql = concat!(
+            "INSERT INTO t(id, price) VALUES ($Input.id, $Input.price) ",
+            "ON CONFLICT(id) DO UPDATE SET price = EXCLUDED.price"
+        );
+        assert_eq!(
+            neutralize_query_tokens(sql),
+            concat!(
+                "INSERT INTO t(id, price) VALUES (1, 1) ",
+                "ON CONFLICT(id) DO UPDATE SET price = EXCLUDED.price"
+            )
+        );
+    }
+
+    #[test]
+    fn pg_positional_params_are_untouched() {
+        assert_eq!(neutralize_query_tokens("SELECT * FROM t WHERE id = $1"), "SELECT * FROM t WHERE id = $1");
+        assert_eq!(neutralize_query_tokens("SELECT $Input.x"), "SELECT 1");
     }
 }
