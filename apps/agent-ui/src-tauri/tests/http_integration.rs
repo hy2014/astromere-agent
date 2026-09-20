@@ -67,6 +67,7 @@ async fn stateless_endpoints_registered() {
         ("/health", Method::GET),
         ("/models/deepseek-pricing", Method::GET),
         ("/events", Method::GET),
+        ("/databases", Method::GET),
     ];
 
     for (path, method) in &direct_endpoints {

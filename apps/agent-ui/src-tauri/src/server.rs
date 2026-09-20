@@ -1,6 +1,6 @@
 // ─── HTTP Server (axum) — runs alongside Tauri IPC ──────────────────────
 
-use axum::{Json, Router, extract::{Path, Query, State}, http::StatusCode, response::{IntoResponse, sse::{Event, Sse}, Response}, routing::{get, post}};
+use axum::{Json, Router, extract::{Path, Query, State}, http::StatusCode, response::{IntoResponse, sse::{Event, Sse}, Response}, routing::{get, post, put}};
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -12,6 +12,7 @@ use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 
 use crate::control;
+use crate::databases;
 use crate::dw;
 use crate::dw::DwSettings;
 use crate::mcp_core;
@@ -39,30 +40,50 @@ use crate::engine;
 // a proper 500 status code with a JSON body like `{"error": "..."}`.
 
 #[derive(Debug)]
-pub struct AppError(String);
+pub struct AppError {
+    message: String,
+    status: StatusCode,
+}
 
 impl AppError {
     pub fn new(msg: impl Into<String>) -> Self {
-        Self(msg.into())
+        Self {
+            message: msg.into(),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    pub fn bad_request(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            status: StatusCode::BAD_REQUEST,
+        }
+    }
+
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            status: StatusCode::NOT_FOUND,
+        }
     }
 }
 
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.message)
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let body = serde_json::json!({ "error": self.0 });
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
+        let body = serde_json::json!({ "error": self.message });
+        (self.status, Json(body)).into_response()
     }
 }
 
 impl From<String> for AppError {
     fn from(s: String) -> Self {
-        Self(s)
+        Self::new(s)
     }
 }
 
@@ -189,6 +210,10 @@ pub fn app_router(state: AppState) -> Router {
         // mcp
         .route("/mcp/settings", get(load_mcp_settings_handler).put(save_mcp_settings_handler))
         .route("/dw/settings", get(load_dw_settings_handler).put(save_dw_settings_handler))
+        // databases (registered DB connections for write-to-DB components)
+        .route("/databases", get(list_databases_handler).post(create_database_handler))
+        .route("/databases/:name", put(update_database_handler).delete(delete_database_handler))
+        .route("/databases/:name/test", post(test_database_handler))
         // workspace
         .route("/workspace/default", get(default_workspace_handler))
         .route("/workspace/open", get(open_workspace_handler))
@@ -269,6 +294,53 @@ async fn save_dw_settings_handler(
     let saved = dw::save_dw_settings(settings)
         .map_err(|e| AppError::new(format!("failed to save dw settings: {e}")))?;
     Ok(Json(saved))
+}
+
+// ─── Databases (registered DB connections) handlers ───────────────────
+
+async fn list_databases_handler() -> Result<Json<Vec<databases::DatabaseInfo>>, AppError> {
+    let list = databases::load_databases().map_err(AppError::new)?;
+    Ok(Json(list.iter().map(databases::DatabaseInfo::from).collect()))
+}
+
+async fn create_database_handler(
+    Json(reg): Json<databases::DatabaseRegistration>,
+) -> Result<Json<databases::DatabaseInfo>, AppError> {
+    databases::validate(&reg).map_err(AppError::bad_request)?;
+    if databases::find_database(&reg.name).is_ok() {
+        return Err(AppError::bad_request(format!("数据库 {} 已登记", reg.name)));
+    }
+    let saved = databases::upsert_database(reg).map_err(AppError::new)?;
+    Ok(Json(saved))
+}
+
+async fn update_database_handler(
+    Path(name): Path<String>,
+    Json(reg): Json<databases::DatabaseRegistration>,
+) -> Result<Json<databases::DatabaseInfo>, AppError> {
+    if reg.name != name {
+        return Err(AppError::bad_request(format!(
+            "路径与请求体中的名称不一致：{name} vs {}",
+            reg.name
+        )));
+    }
+    databases::validate(&reg).map_err(AppError::bad_request)?;
+    databases::find_database(&name).map_err(AppError::not_found)?;
+    let saved = databases::upsert_database(reg).map_err(AppError::new)?;
+    Ok(Json(saved))
+}
+
+async fn delete_database_handler(Path(name): Path<String>) -> Result<Json<serde_json::Value>, AppError> {
+    databases::find_database(&name).map_err(AppError::not_found)?;
+    databases::remove_database(&name).map_err(AppError::new)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn test_database_handler(
+    Path(name): Path<String>,
+) -> Result<Json<databases::DatabaseTestResult>, AppError> {
+    let reg = databases::find_database(&name).map_err(AppError::not_found)?;
+    Ok(Json(databases::test_connection(&reg).await))
 }
 
 async fn test_model_handler(
@@ -956,6 +1028,10 @@ pub fn stateless_test_router() -> Router {
         .route("/models/deepseek-pricing", get(deepseek_pricing_handler))
         .route("/mcp/settings", get(load_mcp_settings_handler).put(save_mcp_settings_handler))
         .route("/dw/settings", get(load_dw_settings_handler).put(save_dw_settings_handler))
+        // databases (registered DB connections for write-to-DB components)
+        .route("/databases", get(list_databases_handler).post(create_database_handler))
+        .route("/databases/:name", put(update_database_handler).delete(delete_database_handler))
+        .route("/databases/:name/test", post(test_database_handler))
         .route("/workspace/default", get(default_workspace_handler))
         .route("/workspace/open", get(open_workspace_handler))
         .route("/workspaces", get(list_workspaces_handler).post(add_workspace_handler).delete(remove_workspace_handler))

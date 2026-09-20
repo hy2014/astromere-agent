@@ -24,6 +24,9 @@ import { createRemoteProfileInput } from "../../runtime/profiles";
 import type {
   Component,
   ComponentSession,
+  DatabaseInfo,
+  DatabaseRegistrationInput,
+  DatabaseTestResult,
   Dag,
   DagDetail,
   DagEdge,
@@ -132,6 +135,38 @@ export async function putDwSettings(settings: DwSettings): Promise<DwSettings> {
   return dagJson<DwSettings>("/dw/settings", {
     method: "PUT",
     body: JSON.stringify(settings),
+  });
+}
+
+// ─── Registered databases (server-side), referenced by name ───────────
+
+export function listDatabases(): Promise<DatabaseInfo[]> {
+  return dagJson<DatabaseInfo[]>("/databases");
+}
+
+export function createDatabase(input: DatabaseRegistrationInput): Promise<DatabaseInfo> {
+  return dagJson<DatabaseInfo>("/databases", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateDatabase(name: string, input: DatabaseRegistrationInput): Promise<DatabaseInfo> {
+  return dagJson<DatabaseInfo>(`/databases/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteDatabase(name: string): Promise<void> {
+  return dagJson<void>(`/databases/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+export function testDatabase(name: string): Promise<DatabaseTestResult> {
+  return dagJson<DatabaseTestResult>(`/databases/${encodeURIComponent(name)}/test`, {
+    method: "POST",
   });
 }
 

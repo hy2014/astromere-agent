@@ -29,6 +29,7 @@ pub mod control;
 pub mod dag;
 pub mod dag_api;
 pub mod dag_server_config;
+pub mod databases;
 pub mod dw;
 pub mod dw_core;
 pub mod engine;

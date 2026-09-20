@@ -200,6 +200,11 @@ pub fn dw_settings_path() -> Result<PathBuf, String> {
     Ok(dir.join("dw-settings.json"))
 }
 
+pub fn databases_path() -> Result<PathBuf, String> {
+    let dir = ui_config_dir()?;
+    Ok(dir.join("databases.json"))
+}
+
 pub fn workspace_registry_path() -> Result<PathBuf, String> {
     let dir = ui_config_dir()?;
     Ok(dir.join("workspace-registry.json"))

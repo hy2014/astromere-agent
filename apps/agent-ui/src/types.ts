@@ -302,6 +302,30 @@ export type DwSettings = {
   dwRoot: string;
 };
 
+// Registered DB connection on the dag server (GET /databases) — no password.
+export type DatabaseInfo = {
+  name: string;
+  host: string;
+  port: number;
+  dbname: string;
+  user: string;
+};
+
+// Create/update payload. On update, an empty password keeps the stored one.
+export type DatabaseRegistrationInput = {
+  name: string;
+  host: string;
+  port: number;
+  dbname: string;
+  user: string;
+  password: string;
+};
+
+export type DatabaseTestResult = {
+  ok: boolean;
+  message: string;
+};
+
 export type ModelConnectionTestResult = {
   ok: boolean;
   message: string;
