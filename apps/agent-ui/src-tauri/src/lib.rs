@@ -37,6 +37,7 @@ pub mod mcp;
 pub mod mcp_core;
 pub mod models;
 pub mod models_core;
+pub mod platform_components;
 pub mod permissions;
 pub mod repl;
 pub mod runtime;

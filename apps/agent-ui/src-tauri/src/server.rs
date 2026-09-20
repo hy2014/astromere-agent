@@ -1041,7 +1041,11 @@ mod tests {
 /// HTTP status-code behavior.
 #[allow(dead_code)]
 pub fn stateless_test_router() -> Router {
+    // Mount the same dag/component routes as the production router (the dag
+    // handlers are stateless), so route-coverage tests exercise the real list.
+    let dag_routes = crate::dag_api::register_dag_routes(Router::new());
     Router::new()
+        .merge(dag_routes)
         .route("/health", get(health_handler))
         .route("/sessions/:id", get(load_session_handler))
         .route("/sessions", get(list_sessions_handler).post(create_session_handler))

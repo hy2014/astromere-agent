@@ -1826,6 +1826,34 @@
   color: #b91c1c;
 }
 
+.instance-textarea {
+  min-height: 120px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.instance-validate {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #d4d4d8;
+}
+
+.instance-validate-ok {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #15803d;
+}
+
+.instance-validate-fail {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #b91c1c;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .instance-gate-warning {
   margin: 2px 0 0;
   font-size: 11px;

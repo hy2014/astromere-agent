@@ -232,6 +232,23 @@ export function getComponent(componentId: string): Promise<Component> {
   return dagJson<Component>(`/api/components/${encodeURIComponent(componentId)}`);
 }
 
+// Component names (not ids) that provide Rust-side config validation.
+export function listValidateCapabilities(): Promise<string[]> {
+  return dagJson<string[]>("/api/components/validate-capabilities");
+}
+
+export type ComponentValidateResult = {ok: boolean; message: string};
+
+export function validateComponentParams(
+  componentId: string,
+  params: Record<string, unknown>,
+): Promise<ComponentValidateResult> {
+  return dagJson<ComponentValidateResult>(
+    `/api/components/${encodeURIComponent(componentId)}/validate`,
+    {method: "POST", body: JSON.stringify(params)},
+  );
+}
+
 export function updateComponent(component: Component): Promise<Component> {
   return dagJson<Component>(`/api/components/${encodeURIComponent(component.id)}`, {
     method: "PUT",

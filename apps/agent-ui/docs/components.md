@@ -77,7 +77,7 @@ Related: [docs/sqlite.md](sqlite.md), [docs/dag.md](dag.md), [docs/component-ses
 
 ### 类型系统
 
-- 基础类型：`string` / `number` / `boolean` / `enum`（带 `enum` 选项）/ `path`（文件或目录路径）/ `date`。
+- 基础类型：`string` / `number` / `boolean` / `enum`（带 `enum` 选项）/ `path`（文件或目录路径）/ `date` / `textarea`（多行文本，适合 SQL 等长文本）。
 - `list`：列表类型，必须标明元素类型，结构为 `{"kind":"list","element":"<基础类型>"}`
   （如 `{"kind":"list","element":"string"}` 为字符串数组）。
 - 每种类型对应一种 UI 控件 + 一种 validation 规则；`list` 还需校验每个元素符合元素类型。
@@ -85,6 +85,36 @@ Related: [docs/sqlite.md](sqlite.md), [docs/dag.md](dag.md), [docs/component-ses
 > 注意：本节是**配置参数**（`components.config_schema`）的类型系统，与**端口值**形态是两回事。
 > 端口值（`node_executions.outputs`，即组件回传的产物）的形态定义见
 > `docs/engine-executor.md`「端口值契约」，不在此重复。
+
+### 共享连接登记与 `resolve_db_connection`
+
+`databases.json`（`~/.agent-ui/databases.json`）是**平台 UI 与组件共享的连接池**：
+平台负责写（高级配置 → 数据库 tab 的登记增删改），组件运行时可经 SDK 读。它不是
+「平台内部配置」——组件读它不违反平台透明性约束。
+
+组件 configSchema 里以普通字符串字段声明连接名，运行时调用 SDK：
+
+```python
+from component_sdk import resolve_db_connection
+info = resolve_db_connection(params["connection"])   # {host, port, dbname, user, password}
+```
+
+- SDK `resolve_db_connection(name)`：读共享登记文件，按 `name` 命中返回连接信息 dict，
+  组件**自己按字段拼连**（psycopg2.connect(host=, port=, ...) 或拼 postgres:// DSN）。
+- 找不到 name / 文件不可读 → 抛 `ValueError`（中文），组件明确报错，不静默空跑。
+- 登记文件的读写权限：平台写、组件读；password 只在登记文件与组件进程内出现，
+  不进快照、input.json。连接名拼错由 validate（见下）在节点表单提前暴露。
+
+### validate 协议（Rust 侧组件域逻辑）
+
+平台组件可在 `src-tauri/src/platform_components/` 下提供配置验证：一个组件一个
+`<name>.rs`，在 `mod.rs` 的 `registry()` 里按组件 name 注册。没注册的组件前端不显示
+「验证配置」按钮，行为不变。
+
+| 方法 + 路径 | 语义 |
+|---|---|
+| `GET /api/components/validate-capabilities` | 提供 validate 的组件 name 列表 |
+| `POST /api/components/:component_id/validate` | body 为该节点当前运行参数；返回 `{ok, message}`，前端原样展示 |
 
 ### 声明方（author vs UI）
 

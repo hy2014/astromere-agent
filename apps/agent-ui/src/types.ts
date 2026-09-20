@@ -480,7 +480,8 @@ export type ConfigFieldBaseType =
   | "boolean"
   | "enum"
   | "path"
-  | "date";
+  | "date"
+  | "textarea";
 
 // A `list` parameter is encoded as an object so the element type is explicit:
 // `{kind: "list", element: <base type>}`.

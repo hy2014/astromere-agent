@@ -68,6 +68,7 @@ async fn stateless_endpoints_registered() {
         ("/models/deepseek-pricing", Method::GET),
         ("/events", Method::GET),
         ("/databases", Method::GET),
+        ("/api/components/validate-capabilities", Method::GET),
     ];
 
     for (path, method) in &direct_endpoints {

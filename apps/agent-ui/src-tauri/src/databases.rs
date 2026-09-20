@@ -140,24 +140,52 @@ pub fn remove_database_from(path: &std::path::Path, name: &str) -> Result<(), St
     save_databases_to(path, &list)
 }
 
-/// 真实连一次库（TCP + 认证 + SELECT 1），8 秒超时。失败不是服务器错误，
-/// 以 ok=false 的测试结果返回。
-pub async fn test_connection(reg: &DatabaseRegistration) -> DatabaseTestResult {
+/// tokio-postgres 的顶层错误只有 "error connecting to server"，展开
+/// source 链（如 "Connection refused"）才能看出失败原因。
+pub(crate) fn error_chain_message(err: &tokio_postgres::Error) -> String {
+    let mut msg = err.to_string();
+    let mut source = std::error::Error::source(err);
+    while let Some(s) = source {
+        msg.push_str(": ");
+        msg.push_str(&s.to_string());
+        source = s.source();
+    }
+    msg
+}
+
+/// 打开连接（配置同 test_connection）。``dbname_override`` 非空时替换登记的
+/// 库名（Exec-SQL 的 database 是节点参数，不来自登记）。返回
+/// (client, connection-task)，connection 任务必须被持有，否则连接立即断开。
+pub(crate) async fn connect(
+    reg: &DatabaseRegistration,
+    dbname_override: Option<&str>,
+) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), tokio_postgres::Error> {
     let mut config = tokio_postgres::Config::new();
     config
         .host(&reg.host)
         .port(reg.port)
         .user(&reg.user)
         .password(&reg.password);
-    // dbname 留空 = 连用户默认库（与 user 同名）。
-    if !reg.dbname.trim().is_empty() {
-        config.dbname(&reg.dbname);
+    let dbname = match dbname_override {
+        Some(db) if !db.trim().is_empty() => db,
+        // dbname 留空 = 连用户默认库（与 user 同名）。
+        _ => reg.dbname.trim(),
+    };
+    if !dbname.is_empty() {
+        config.dbname(dbname);
     }
+    let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
+    let task = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    Ok((client, task))
+}
+
+/// 真实连一次库（TCP + 认证 + SELECT 1），8 秒超时。失败不是服务器错误，
+/// 以 ok=false 的测试结果返回。
+pub async fn test_connection(reg: &DatabaseRegistration) -> DatabaseTestResult {
     let probe = async {
-        let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
+        let (client, _conn_task) = connect(reg, None).await?;
         client.query_one("SELECT 1", &[]).await?;
         Ok::<(), tokio_postgres::Error>(())
     };
@@ -175,19 +203,6 @@ pub async fn test_connection(reg: &DatabaseRegistration) -> DatabaseTestResult {
             message: "连接超时（8 秒）".to_string(),
         },
     }
-}
-
-/// tokio-postgres 的顶层错误只有 "error connecting to server"，展开
-/// source 链（如 "Connection refused"）才能看出失败原因。
-fn error_chain_message(err: &tokio_postgres::Error) -> String {
-    let mut msg = err.to_string();
-    let mut source = std::error::Error::source(err);
-    while let Some(s) = source {
-        msg.push_str(": ");
-        msg.push_str(&s.to_string());
-        source = s.source();
-    }
-    msg
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────

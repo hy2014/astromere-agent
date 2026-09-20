@@ -39,6 +39,7 @@ __all__ = [
     "read_input_files",
     "read_as_df_from_card",
     "resolve_output_dir",
+    "resolve_db_connection",
 ]
 
 
@@ -132,6 +133,43 @@ def read_as_df_from_card(card):
     if fmt == "json":
         return pd.read_json(path, lines=str(path).lower().endswith(".jsonl"))
     raise ValueError(f"产物 format={fmt!r} 不是表格数据，读不成 DataFrame: {path}")
+
+
+def _agent_home():
+    """平台数据目录：AGENT_UI_HOME 优先，默认 ~/.agent-ui。"""
+    env = os.environ.get("AGENT_UI_HOME")
+    if env:
+        return env
+    return os.path.join(os.path.expanduser("~"), ".agent-ui")
+
+
+def resolve_db_connection(name):
+    """按登记名读共享连接池，返回连接信息 dict（host/port/dbname/user/password）。
+
+    ``~/.agent-ui/databases.json`` 是平台 UI 与组件**共享**的连接登记：平台负责
+    写（高级配置「数据库」tab），组件经本函数读。组件自己按返回字段拼连（如
+    psycopg2.connect(host=..., port=..., dbname=...)，或拼 postgres:// DSN）。
+    找不到 name 或文件不可读 → 抛 ``ValueError``（中文），让组件明确报错，
+    而不是拿着空信息去连。
+    """
+    path = os.path.join(_agent_home(), "databases.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        raise ValueError(f"无法读取共享连接登记文件 {path}: {e}") from e
+    if not isinstance(data, list):
+        raise ValueError(f"共享连接登记文件格式不对（应为 JSON 数组）: {path}")
+    for reg in data:
+        if isinstance(reg, dict) and reg.get("name") == name:
+            return {
+                "host": reg.get("host") or "",
+                "port": reg.get("port") or 5432,
+                "dbname": reg.get("dbname") or "",
+                "user": reg.get("user") or "",
+                "password": reg.get("password") or "",
+            }
+    raise ValueError(f"共享连接登记里没有「{name}」，请到高级配置的数据库登记中添加")
 
 
 def resolve_output_dir(port):

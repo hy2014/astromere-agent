@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import type {Component, ConfigSchemaItem, DagNode, PortDef} from "../../types";
+import {listValidateCapabilities, validateComponentParams} from "./api";
 import {isListType, schemaToPorts, validateInstanceConfig} from "./componentModel";
 
 export type InstanceConfigFormProps = {
@@ -200,6 +201,15 @@ function controlFor(
           onChange={(event) => onChange(event.target.value)}
         />
       );
+    case "textarea":
+      return (
+        <textarea
+          className="instance-input instance-textarea"
+          value={typeof value === "string" ? value : ""}
+          placeholder={item.description || "多行文本"}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      );
     default:
       return (
         <input
@@ -341,6 +351,67 @@ function DwSection({
   );
 }
 
+// 「验证配置」区块：仅当组件在 Rust 侧注册了 validate（capabilities 含其
+// name）时渲染。点击后把当前运行参数发给平台，展示组件域逻辑的校验结论。
+function ValidateSection({
+  componentName,
+  componentId,
+  values,
+}: {
+  componentName: string;
+  componentId: string;
+  values: Record<string, unknown>;
+}) {
+  const [supported, setSupported] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ok: boolean; message: string} | null>(null);
+
+  useEffect(() => {
+    setSupported(null);
+    setResult(null);
+    let cancelled = false;
+    listValidateCapabilities()
+      .then((names) => {
+        if (!cancelled) setSupported(names.includes(componentName));
+      })
+      .catch(() => {
+        if (!cancelled) setSupported(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [componentName]);
+
+  if (supported !== true) return null;
+
+  async function run() {
+    if (busy) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult(await validateComponentParams(componentId, values));
+    } catch (reason) {
+      setResult({ok: false, message: String(reason)});
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="instance-config instance-validate">
+      <h4>配置验证</h4>
+      <button type="button" className="generic-form-add" onClick={() => void run()} disabled={busy}>
+        {busy ? "验证中…" : "验证配置"}
+      </button>
+      {result && (
+        <p className={result.ok ? "instance-validate-ok" : "instance-validate-fail"}>
+          {result.ok ? `✓ ${result.message}` : `✗ ${result.message}`}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // Renders the *instance* configuration form for a node: one control per
 // declared parameter in the component's config_schema, with value stored in
 // `node.config.params` (node-level, not the component definition). Validates
@@ -418,6 +489,7 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
       <div className="instance-config">
         <h4>运行参数</h4>
         <FreeFormParams values={values} nodeId={node.id} onChange={commit} />
+        <ValidateSection componentName={component.name} componentId={component.id} values={values} />
         {dwPorts.length > 0 && (
           <DwSection node={node} ports={dwPorts} onChange={onChange} />
         )}
@@ -447,6 +519,7 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
       {hasErrors && (
         <p className="instance-gate-warning">存在必填/类型错误，运行或发布前请先修正。</p>
       )}
+      <ValidateSection componentName={component.name} componentId={component.id} values={values} />
       {dwPorts.length > 0 && <DwSection node={node} ports={dwPorts} onChange={onChange} />}
     </div>
   );

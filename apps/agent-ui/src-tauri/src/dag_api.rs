@@ -75,6 +75,26 @@ async fn get_component_handler(Path(component_id): Path<String>) -> Result<Json<
     components::get_component(component_id).map(Json).map_err(AppError::new)
 }
 
+// 提供配置验证的组件 name 列表（前端据此决定是否显示「验证配置」按钮）。
+async fn validate_capabilities_handler() -> Json<Vec<&'static str>> {
+    Json(crate::platform_components::registry().keys().copied().collect())
+}
+
+// 节点表单「验证配置」按钮的落点：body 是该节点的运行参数。
+async fn validate_component_handler(
+    Path(component_id): Path<String>,
+    Json(params): Json<serde_json::Value>,
+) -> Result<Json<crate::platform_components::ValidateResult>, AppError> {
+    let component = components::get_component(component_id).map_err(AppError::new)?;
+    let Some(handler) = crate::platform_components::registry().get(component.name.as_str()) else {
+        return Err(AppError::not_found(format!(
+            "组件「{}」未提供配置验证。",
+            component.name
+        )));
+    };
+    Ok(Json(handler(params).await))
+}
+
 async fn create_component_handler(Json(component): Json<Component>) -> Result<Json<Component>, AppError> {
     components::create_component(component).map(Json).map_err(AppError::new)
 }
@@ -366,14 +386,18 @@ fn unique_archive_name(base: &str, used: &mut HashSet<String>) -> String {
 /// given `Router<AppState>`. Taking and returning `Router<AppState>` avoids a
 /// state-type mismatch (`AppState`) with the main router that would make
 /// `merge` fail; the dag handlers do not extract State, so the router's state
-/// type stays unchanged after mounting.
-pub fn register_dag_routes(router: Router<AppState>) -> Router<AppState> {
+/// type stays unchanged after mounting. Generic over `S` so the stateless test
+/// router mounts the SAME route list (no test/production drift).
+pub fn register_dag_routes<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
     router
         // components
         .route("/api/components", get(list_components_handler).post(create_component_handler))
         .route("/api/components/:component_id", get(get_component_handler).put(update_component_handler).delete(delete_component_handler))
         .route("/api/components/:component_id/files", get(list_component_files_handler))
         .route("/api/components/:component_id/verify", get(verify_component_handler))
+        // platform component validate（Rust 侧 platform_components/ 提供）
+        .route("/api/components/validate-capabilities", get(validate_capabilities_handler))
+        .route("/api/components/:component_id/validate", post(validate_component_handler))
         // component sessions
         .route("/api/component-sessions", post(create_component_session_handler))
         .route("/api/components/:component_id/sessions", get(list_component_sessions_handler))
