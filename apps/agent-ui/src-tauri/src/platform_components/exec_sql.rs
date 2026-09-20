@@ -44,8 +44,10 @@ pub fn validate(params: serde_json::Value) -> ValidateFuture {
                 .map_err(|e| format!("连接数据库失败: {}", databases::error_chain_message(&e)))?;
             for (i, stmt) in statements.iter().enumerate() {
                 let explain = neutralize_query_tokens(stmt);
+                // query（而非 query_one）：EXPLAIN 对 INSERT/UPDATE 会返回多行
+                // 计划（外层 + 冲突仲裁 + 子计划 Result），只要执行计划能生成即可。
                 client
-                    .query_one(&format!("EXPLAIN {explain}"), &[])
+                    .query(&format!("EXPLAIN {explain}"), &[])
                     .await
                     .map_err(|e| format!("第 {} 条语句: {}", i + 1, databases::error_chain_message(&e)))?;
             }
