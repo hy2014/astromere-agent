@@ -69,10 +69,13 @@ fn fail(message: impl Into<String>) -> ValidateResult {
     }
 }
 
-/// 把 `$端口.列` 模板 token 中和成字面量 `1`，以便 EXPLAIN。
+/// 把 `$端口.列` 模板 token 中和成字面量 `NULL`，以便 EXPLAIN。
 /// 运行时的 `$x.col` 会被组件替换成绑定参数 %(pN)s，两者都不能直接进
 /// EXPLAIN（PG 不认）；validate 只验证「换了占位符后语法 + 表/列/权限」。
-/// PG 自身参数 `$1`（数字）不受影响，原样保留。
+/// 中和成 `NULL` 而非 `1`：NULL 对任何列类型都成立——若中和成 `1`，对
+/// date/boolean 等非数值列，EXPLAIN 会因类型不匹配而误报。冲突仲裁键
+/// 所在的列保持原样，EXPLAIN 仍能校验其存在。PG 自身参数 `$1`（数字）
+/// 不受影响，原样保留。
 fn neutralize_query_tokens(sql: &str) -> String {
     let b: Vec<char> = sql.chars().collect();
     let n = b.len();
@@ -94,7 +97,7 @@ fn neutralize_query_tokens(sql: &str) -> String {
                         l += 1;
                     }
                     if l > l0 {
-                        out.push('1');
+                        out.push_str("NULL");
                         i = l;
                         continue;
                     }
@@ -201,7 +204,7 @@ mod tests {
         assert_eq!(
             neutralize_query_tokens(sql),
             concat!(
-                "INSERT INTO t(id, price) VALUES (1, 1) ",
+                "INSERT INTO t(id, price) VALUES (NULL, NULL) ",
                 "ON CONFLICT(id) DO UPDATE SET price = EXCLUDED.price"
             )
         );
@@ -210,6 +213,6 @@ mod tests {
     #[test]
     fn pg_positional_params_are_untouched() {
         assert_eq!(neutralize_query_tokens("SELECT * FROM t WHERE id = $1"), "SELECT * FROM t WHERE id = $1");
-        assert_eq!(neutralize_query_tokens("SELECT $Input.x"), "SELECT 1");
+        assert_eq!(neutralize_query_tokens("SELECT $Input.x"), "SELECT NULL");
     }
 }

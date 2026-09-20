@@ -38,8 +38,9 @@ INSERT INTO t(id, price) VALUES ($t.id, $t.price)
 `src-tauri/src/platform_components/exec_sql.rs`，按组件 name `Exec-SQL` 注册。
 校验内容：连接名已登记 + 能连上 + 每条 SQL 均能被数据库 `EXPLAIN`（只做执行计划，
 不执行写入，表/列/权限错误在这一步就会暴露）。含 `$端口.列` 的语句在 EXPLAIN
-前把模板 token 中和成字面量（运行时会换成绑定参数，EXPLAIN 不认）；PG 自带
-`$1` 这类位置参数不受影响。多语句按分号拆分，注释与字符串字面量里的分号不参与拆分。
+前把模板 token 中和成字面量 `NULL`（对任何列类型都成立，EXPLAIN 不会因类型
+不匹配误报；运行时才会换回绑定参数）；PG 自带 `$1` 这类位置参数不受影响。
+多语句按分号拆分，注释与字符串字面量里的分号不参与拆分。
 
 ## 注册信息
 

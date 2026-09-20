@@ -264,6 +264,7 @@ export function RegisterComponentForm({onRegister, onCancel, editing, onUpdate, 
                     <option value="enum">enum</option>
                     <option value="path">path</option>
                     <option value="date">date</option>
+                    <option value="textarea">textarea</option>
                     <option value="list">list</option>
                   </select>
                   {base === "list" && (
