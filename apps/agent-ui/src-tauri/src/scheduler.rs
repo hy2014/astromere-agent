@@ -1267,15 +1267,51 @@ fn preview_parquet_via_python(
 #[cfg_attr(feature = "gui", tauri::command)]
 pub fn cancel_execution(execution_id: String) -> Result<(), String> {
     let (conn, _path) = open_sqlite_database()?;
-    // Only request cancellation for runs that are still in flight. Terminal
-    // states (success / failed / cancelled) are left untouched. The Python
-    // execution engine polls for `cancel_requested` and terminates the process.
-    conn.execute(
-        "UPDATE dag_executions SET status = 'cancel_requested' \
-         WHERE id = ?1 AND status NOT IN ('success', 'failed', 'cancelled')",
-        params![execution_id],
-    )
-    .map_err(error_to_string)?;
+    // First, check current status. If the execution hasn't started running yet
+    // (submit / accepted), we can cancel it directly — there's no running
+    // process to signal, so `cancel_requested` would just sit there forever
+    // (workers only claim `submit` status). If it's already running, set
+    // `cancel_requested` and let the Python worker detect it and shut down
+    // gracefully. Terminal states are left untouched.
+    let mut stmt = conn
+        .prepare("SELECT status FROM dag_executions WHERE id = ?1")
+        .map_err(error_to_string)?;
+    let mut rows = stmt.query(params![execution_id]).map_err(error_to_string)?;
+    let status: Option<String> = if let Some(row) = rows.next().map_err(error_to_string)? {
+        Some(row.get(0).map_err(error_to_string)?)
+    } else {
+        None
+    };
+    drop(rows);
+    drop(stmt);
+
+    match status.as_deref() {
+        Some("submit") | Some("accepted") | Some("preparing") | Some("pending") => {
+            // Not running yet — cancel immediately
+            let now_ms = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            conn.execute(
+                "UPDATE dag_executions SET status = 'cancelled', completed_at_ms = ?2 \
+                 WHERE id = ?1",
+                params![execution_id, now_ms],
+            )
+            .map_err(error_to_string)?;
+        }
+        Some("running") | Some("cancel_requested") => {
+            // Running — ask the worker to stop gracefully
+            conn.execute(
+                "UPDATE dag_executions SET status = 'cancel_requested' \
+                 WHERE id = ?1 AND status NOT IN ('success', 'failed', 'cancelled')",
+                params![execution_id],
+            )
+            .map_err(error_to_string)?;
+        }
+        _ => {
+            // Terminal or unknown — no-op
+        }
+    }
     Ok(())
 }
 
