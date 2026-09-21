@@ -1157,11 +1157,16 @@ def main():
             sys.exit(2)
 
     # pyarrow scalars / numpy types -> native JSON-friendly values.
+    import datetime as _dt
     def _clean(v):
         if v is None:
             return None
         if hasattr(v, "as_py"):
-            return v.as_py()
+            v = v.as_py()
+        if isinstance(v, _dt.datetime):
+            return v.isoformat()
+        if isinstance(v, _dt.date):
+            return v.isoformat()
         return v
 
     rows = [[_clean(c) for c in row] for row in rows]

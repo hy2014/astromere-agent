@@ -215,28 +215,28 @@ class Worker:
         value lands in this node's input. This lets a multi-output component feed
         different downstream nodes different artifacts.
 
-        Source nodes (no upstream edges) receive their instance ``params``
-        (the ``node.config.params`` map) as the input payload.
+        Instance params (``node.config.params``) are injected for every node —
+        source or downstream. Downstream nodes that need both an upstream input
+        port and their own runtime params (e.g. Exec-SQL's connection/database
+        /sql) must receive them; ``if-not-upstream`` would silently drop them.
+        `system.*` / `dw.*` keys are UI-only knobs (interpreter path, DW export)
+        and stay out of the payload for either kind. Upstream port values are
+        layered on top, so a landing key that collides with a param wins (the
+        edge is the data source of record).
         """
         cfg = self.parse_config(node)
-        upstream = [e for e in plan["edges"] if e["target_node_id"] == node["id"]]
-        if not upstream:
-            # Source node: instance params (node.config.params) as the input
-            # payload. `system.*` / `dw.*` keys are UI-only knobs (interpreter
-            # path, DW registration) — never business input data.
-            inp = {}
-            params = cfg.get("params")
-            if isinstance(params, dict):
-                for key, value in params.items():
-                    if isinstance(key, str) and (
-                        key.startswith("system.") or key.startswith("dw.")
-                    ):
-                        continue
-                    inp[key] = value
-            return inp
-
-        upstream_seed = plan.get("upstream_outputs") or {}
         inp = {}
+        params = cfg.get("params")
+        if isinstance(params, dict):
+            for key, value in params.items():
+                if isinstance(key, str) and (
+                    key.startswith("system.") or key.startswith("dw.")
+                ):
+                    continue
+                inp[key] = value
+
+        upstream = [e for e in plan["edges"] if e["target_node_id"] == node["id"]]
+        upstream_seed = plan.get("upstream_outputs") or {}
         for e in upstream:
             out = node_outputs.get(e["source_node_id"])
             if out is None:

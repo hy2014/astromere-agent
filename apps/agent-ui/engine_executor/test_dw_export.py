@@ -5,8 +5,9 @@ Covers:
   1. worker.resolve_dw_export: disabled → None; valid config →
      {port, table, table_dir}; missing dw_root / port / schema and a bad
      table name all fail loudly.
-  2. worker.build_input: source nodes never leak `dw.*` / `system.*` UI knobs
-     into the input payload.
+  2. worker.build_input: instance params are injected for every node (source
+     or downstream); `dw.*` / `system.*` UI knobs never leak into the input
+     payload, and an upstream port value wins over a colliding param.
   3. runner.run_node output-dir injection: EVERY port gets a directory via
      AGENT_UI_OUTPUT_DATA_DIRS — the DW table dir for the registered port, a
      runner-managed dir for the rest. Components stay DW-ignorant.
@@ -133,6 +134,49 @@ class BuildInputFilterTests(unittest.TestCase):
         plan = {"nodes": [node], "edges": []}
         inp = self.w.build_input(node, plan, {})
         self.assertEqual(inp, {"symbol": "000001"})
+
+    def _downstream_input(self, params, src_handle="out:idx", tgt_handle="in:t",
+                          upstream_value=None):
+        upstream = {"id": "u1", "component_id": "u0", "config": {"params": {}}}
+        node = _node_with_params(params)
+        node["id"] = "n1"
+        edge = {
+            "target_node_id": "n1",
+            "source_node_id": "u1",
+            "source_handle": src_handle,
+            "target_handle": tgt_handle,
+        }
+        plan = {"nodes": [upstream, node], "edges": [edge]}
+        return self.w.build_input(
+            node, plan, {upstream["id"]: upstream_value or {"idx": ["/f.csv"]}}
+        )
+
+    def test_downstream_node_receives_params_plus_port(self):
+        inp = self._downstream_input(
+            {
+                "connection": "Pg-trade",
+                "database": "postgres",
+                "system.python_path": "/usr/bin/python3",
+            }
+        )
+        self.assertEqual(
+            inp, {"connection": "Pg-trade", "database": "postgres", "t": ["/f.csv"]}
+        )
+
+    def test_downstream_node_skips_ui_knobs(self):
+        inp = self._downstream_input(
+            {
+                "sql": "SELECT 1",
+                "dw.enabled": True,
+                "dw.port": "out",
+                "dw.table": "t",
+            }
+        )
+        self.assertEqual(inp, {"sql": "SELECT 1", "t": ["/f.csv"]})
+
+    def test_port_wins_on_param_collision(self):
+        inp = self._downstream_input({"t": "PARAM"})
+        self.assertEqual(inp, {"t": ["/f.csv"]})
 
 
 class RunNodeOutputDirTests(unittest.TestCase):
