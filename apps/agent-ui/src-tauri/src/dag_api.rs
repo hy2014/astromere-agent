@@ -318,6 +318,25 @@ async fn download_node_output_handler(
     ))
 }
 
+/// 下载某个节点本次运行的落盘日志原始文件（完整 stdout/stderr，非分页）。
+/// 文件不存在（文件日志上线前的旧运行）→ 报错，前端据此隐藏下载入口。
+async fn download_node_log_handler(
+    Path((execution_id, node_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, AppError> {
+    let path = scheduler::node_log_path(&execution_id, &node_id).map_err(AppError::new)?;
+    let bytes = std::fs::read(&path)
+        .map_err(|e| AppError::new(format!("读取节点日志失败 {}: {}", path.display(), e)))?;
+    // node_id 已由 node_log_path 限制在 [A-Za-z0-9_-]，可直接进文件名。
+    let cd = format!("attachment; filename=\"{}.log\"", node_id);
+    let header_val = HeaderValue::from_str(&cd)
+        .map_err(|e| AppError::new(format!("构造 Content-Disposition 失败: {}", e)))?;
+    Ok((
+        StatusCode::OK,
+        [(HeaderName::from_static("content-disposition"), header_val)],
+        bytes,
+    ))
+}
+
 /// Pack EVERY artifact of an output port into one streamed zip archive.
 ///
 /// The archive is produced as a byte stream (see `zip_store`), so a table with
@@ -421,6 +440,10 @@ pub fn register_dag_routes<S: Clone + Send + Sync + 'static>(router: Router<S>) 
         .route(
             "/api/executions/:execution_id/nodes/:node_id/log",
             get(get_node_log_handler),
+        )
+        .route(
+            "/api/executions/:execution_id/nodes/:node_id/log/download",
+            get(download_node_log_handler),
         )
         .route("/api/executions/:execution_id/nodes", get(get_node_executions_handler))
         .route("/api/executions/:execution_id/cancel", post(cancel_execution_handler))

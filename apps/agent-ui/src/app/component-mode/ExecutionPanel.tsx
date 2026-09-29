@@ -1,6 +1,14 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import type {DagExecution, ExecutionLog, NodeExecution, NodeLogFile} from "../../types";
-import {getExecutionLogs, getNodeExecutions, getNodeLog, listExecutions} from "./api";
+import {formatDateTimeNoLocale} from "../file-utils";
+import {
+  downloadNodeLog,
+  getExecutionLogs,
+  getNodeExecutions,
+  getNodeLog,
+  listExecutions,
+  type DownloadHandle,
+} from "./api";
 
 export type ExecutionPanelProps = {
   dagId: string | null;
@@ -69,6 +77,38 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
   useEffect(() => {
     selectedIdRef.current = selectedExecutionId;
   }, [selectedExecutionId]);
+
+  // 各节点状态里「详情」下拉：展开哪个节点（同时只开一个）。
+  const [detailNodeId, setDetailNodeId] = useState<string | null>(null);
+  // 日志下载的进度反馈，只针对当前展开的那个节点。
+  const [logDownload, setLogDownload] = useState<
+    {nodeId: string; busy: boolean; savedPath?: string; error?: string} | null
+  >(null);
+  const logDownloadHandleRef = useRef<DownloadHandle | null>(null);
+
+  const handleDownloadLog = useCallback(
+    async (nodeId: string) => {
+      if (!selectedExecutionId) return;
+      setLogDownload({nodeId, busy: true});
+      try {
+        const handle = downloadNodeLog(selectedExecutionId, nodeId);
+        logDownloadHandleRef.current = handle;
+        setLogDownload({nodeId, busy: false, savedPath: await handle.promise});
+      } catch (e: any) {
+        setLogDownload({nodeId, busy: false, error: e?.message ?? "下载失败"});
+      } finally {
+        logDownloadHandleRef.current = null;
+      }
+    },
+    [selectedExecutionId],
+  );
+
+  // 「查看」= 切到运行日志 tab 并选中该节点；纯前端状态切换，不请求新接口。
+  const handleViewLog = useCallback((nodeId: string) => {
+    setSelectedLogNodeId(nodeId);
+    setLogOffset(0);
+    setDetailTab("logs");
+  }, []);
 
   // Load the execution list and auto-select the most recent *non-terminal* run
   // when nothing is manually selected — so after clicking "运行 DAG" the live
@@ -256,7 +296,7 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
                   </span>
                   <span className="execution-time">
                     {execution.startedAtMs
-                      ? new Date(execution.startedAtMs).toLocaleTimeString()
+                      ? formatDateTimeNoLocale(execution.startedAtMs)
                       : "pending"}
                   </span>
                 </div>
@@ -342,8 +382,60 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
                         <span className={`execution-status execution-status--${ne.status}`}>
                           {statusLabel(ne.status)}
                         </span>
+                        <button
+                          type="button"
+                          className="execution-node-detail-toggle"
+                          onClick={() =>
+                            setDetailNodeId((cur) => (cur === ne.nodeId ? null : ne.nodeId))
+                          }
+                          title="日志路径与下载"
+                        >
+                          详情 {detailNodeId === ne.nodeId ? "▴" : "▾"}
+                        </button>
                       </div>
                       {ne.error && <div className="execution-node-error">{ne.error}</div>}
+                      {detailNodeId === ne.nodeId && (
+                        <div className="execution-node-detail">
+                          <div className="execution-node-detail-path" title={ne.logPath ?? ""}>
+                            {ne.logPath ?? "本次运行没有落盘日志（文件日志上线前的旧运行）"}
+                          </div>
+                          <div className="execution-node-detail-actions">
+                            <button
+                              type="button"
+                              className="execution-node-detail-link"
+                              disabled={!ne.logPath || logDownload?.busy}
+                              onClick={() => void handleDownloadLog(ne.nodeId)}
+                              title="把完整日志下载到本地"
+                            >
+                              ⬇ 下载
+                            </button>
+                            <button
+                              type="button"
+                              className="execution-node-detail-link"
+                              onClick={() => handleViewLog(ne.nodeId)}
+                              title="跳转到该节点的运行日志"
+                            >
+                              查看
+                            </button>
+                            {logDownload?.nodeId === ne.nodeId && logDownload.savedPath && (
+                              <span
+                                className="execution-node-detail-saved"
+                                title={logDownload.savedPath}
+                              >
+                                ✓ 已保存到 {logDownload.savedPath}
+                              </span>
+                            )}
+                            {logDownload?.nodeId === ne.nodeId && logDownload.error && (
+                              <span
+                                className="execution-node-detail-error"
+                                title={logDownload.error}
+                              >
+                                ⚠ {logDownload.error}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))
                 )}

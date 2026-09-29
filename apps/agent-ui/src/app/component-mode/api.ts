@@ -479,6 +479,19 @@ export function downloadAllNodeOutputs(
   return startDownload(url, profile, `${outputName}.zip`, outputName);
 }
 
+/**
+ * Download a node's full on-disk run log (untruncated stdout/stderr) as a
+ * `<nodeId>.log` attachment. 404s for runs that predate file-based logging.
+ */
+export function downloadNodeLog(
+  executionId: string,
+  nodeId: string,
+): DownloadHandle {
+  const profile = getDagProfile();
+  const url = `${profile.baseUrl}/api/executions/${encodeURIComponent(executionId)}/nodes/${encodeURIComponent(nodeId)}/log/download`;
+  return startDownload(url, profile, `${nodeId}.log`, nodeId);
+}
+
 function startDownload(
   url: string,
   profile: {token?: string},

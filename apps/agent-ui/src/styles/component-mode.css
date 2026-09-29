@@ -931,6 +931,79 @@
   overflow-y: auto;
 }
 
+/* ── 各节点状态里的「详情」下拉：日志路径 + 下载/查看 ── */
+.execution-node-detail-toggle {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 11px;
+  color: #2563eb;
+  cursor: pointer;
+}
+
+.execution-node-detail-toggle:hover {
+  text-decoration: underline;
+}
+
+.execution-node-detail {
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #f8fafc;
+  padding: 6px 8px;
+  margin: 2px 0 6px;
+}
+
+/* 路径要能完整读出来（用户常拿它去服务器上找文件），所以换行而不是省略号。 */
+.execution-node-detail-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  color: #475569;
+  word-break: break-all;
+}
+
+.execution-node-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 5px;
+}
+
+.execution-node-detail-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  color: #2563eb;
+  cursor: pointer;
+}
+
+.execution-node-detail-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.execution-node-detail-link:disabled {
+  color: #cbd5e1;
+  cursor: not-allowed;
+}
+
+.execution-node-detail-saved,
+.execution-node-detail-error {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-node-detail-saved {
+  color: #166534;
+}
+
+.execution-node-detail-error {
+  color: #b91c1c;
+}
+
 .execution-snapshot {
   font-size: 11px;
   border: 1px solid #e5e7eb;

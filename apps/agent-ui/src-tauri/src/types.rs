@@ -406,6 +406,9 @@ pub struct NodeExecution {
     pub started_at_ms: Option<i64>,
     pub completed_at_ms: Option<i64>,
     pub output_path: Option<String>,
+    /// 该节点这次运行的落盘日志路径（`<log_dir>/<execution_id>/<node_id>.log`）。
+    /// 派生字段：DB 里没有这一列，由 get_node_executions 现算；文件不存在时为 None。
+    pub log_path: Option<String>,
     /// Per-output-port runtime artifacts (third layer = runtime artifacts), indexed by
     /// output port key, e.g. `{"data": "/path/a.csv", "metrics": "/path/m.json"}`.
     /// Written by the Python execution engine; NOT a user configuration input.

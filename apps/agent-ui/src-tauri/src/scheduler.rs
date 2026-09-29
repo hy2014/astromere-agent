@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 fn error_to_string(error: impl std::fmt::Display) -> String {
@@ -764,6 +765,26 @@ pub fn get_execution_logs(execution_id: String) -> Result<Vec<ExecutionLog>, Str
     Ok(logs)
 }
 
+/// 节点日志的落盘路径：`<log_dir>/<execution_id>/<node_id>.log`。
+///
+/// 两个 id 都来自 URL 路径，只接受 [A-Za-z0-9_-]（实际都是 UUID）；含分隔符或
+/// `..` 一律报错，避免拼出日志目录之外的路径。
+pub fn node_log_path(execution_id: &str, node_id: &str) -> Result<PathBuf, String> {
+    let safe = |v: &str| {
+        !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    if !safe(execution_id) || !safe(node_id) {
+        return Err(format!("非法的执行/节点 id: {execution_id} / {node_id}"));
+    }
+    Ok(log_dir().join(execution_id).join(format!("{node_id}.log")))
+}
+
+/// 同上，但文件不存在时返回 None（旧运行还没有落盘日志）。
+fn node_log_path_if_exists(execution_id: &str, node_id: &str) -> Option<String> {
+    let path = node_log_path(execution_id, node_id).ok()?;
+    path.exists().then(|| path.display().to_string())
+}
+
 /// Read a single page of a node's on-disk log file.
 ///
 /// The Python engine writes each node's full (untruncated) stdout/stderr to
@@ -780,7 +801,7 @@ pub fn get_node_log(
     offset: usize,
     limit: usize,
 ) -> Result<NodeLogFile, String> {
-    let path = log_dir().join(&execution_id).join(format!("{node_id}.log"));
+    let path = node_log_path(&execution_id, &node_id)?;
     if !path.exists() {
         return Err(format!("node log file not found: {}", path.display()));
     }
@@ -846,14 +867,18 @@ pub fn get_node_executions(execution_id: String) -> Result<Vec<NodeExecution>, S
     let rows = statement
         .query_map(params![execution_id], |row| {
             let outputs_json: Option<String> = row.get("outputs")?;
+            let execution_id: String = row.get("execution_id")?;
+            let node_id: String = row.get("node_id")?;
+            let log_path = node_log_path_if_exists(&execution_id, &node_id);
             Ok(NodeExecution {
                 id: row.get("id")?,
-                execution_id: row.get("execution_id")?,
-                node_id: row.get("node_id")?,
+                execution_id,
+                node_id,
                 status: row.get("status")?,
                 started_at_ms: row.get("started_at_ms")?,
                 completed_at_ms: row.get("completed_at_ms")?,
                 output_path: row.get("output_path")?,
+                log_path,
                 outputs: outputs_json.and_then(|s| serde_json::from_str(&s).ok()),
                 error: row.get("error")?,
             })
@@ -884,14 +909,18 @@ pub fn get_node_execution(
     let mut rows = statement
         .query_map(params![execution_id, node_id], |row| {
             let outputs_json: Option<String> = row.get("outputs")?;
+            let execution_id: String = row.get("execution_id")?;
+            let node_id: String = row.get("node_id")?;
+            let log_path = node_log_path_if_exists(&execution_id, &node_id);
             Ok(NodeExecution {
                 id: row.get("id")?,
-                execution_id: row.get("execution_id")?,
-                node_id: row.get("node_id")?,
+                execution_id,
+                node_id,
                 status: row.get("status")?,
                 started_at_ms: row.get("started_at_ms")?,
                 completed_at_ms: row.get("completed_at_ms")?,
                 output_path: row.get("output_path")?,
+                log_path,
                 outputs: outputs_json.and_then(|s| serde_json::from_str(&s).ok()),
                 error: row.get("error")?,
             })
@@ -1346,6 +1375,40 @@ mod tests {
 
     fn at(y: i32, m: u32, d: u32) -> DateTime<Local> {
         Local.with_ymd_and_hms(y, m, d, 18, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn node_log_path_rejects_traversal() {
+        // 正常 id（UUID 形态）拼在日志目录下
+        let ok = node_log_path("18d95cb2-0484-4e08-a5a5-5a5c53c3b4b4", "3306d2bf-935d-4b33")
+            .unwrap();
+        assert!(ok.starts_with(log_dir()));
+        assert!(ok.to_string_lossy().ends_with("/3306d2bf-935d-4b33.log"));
+        // 相对路径 / 分隔符 / 空值一律拒绝，避免读到日志目录外
+        assert!(node_log_path("../etc", "x").is_err());
+        assert!(node_log_path("abc", "../../etc/passwd").is_err());
+        assert!(node_log_path("abc", "a/b").is_err());
+        assert!(node_log_path("abc", "a\\b").is_err());
+        assert!(node_log_path("abc", "").is_err());
+    }
+
+    #[test]
+    fn node_execution_serializes_log_path_as_camel_case() {
+        // 前端按 logPath 读（ExecutionPanel 的「详情」下拉）；字段名写错会静默变 undefined。
+        let ne = NodeExecution {
+            id: "ne-1".into(),
+            execution_id: "exec-1".into(),
+            node_id: "node-1".into(),
+            status: "success".into(),
+            started_at_ms: None,
+            completed_at_ms: None,
+            output_path: None,
+            log_path: Some("/tmp/x/node-1.log".into()),
+            outputs: None,
+            error: None,
+        };
+        let v = serde_json::to_value(&ne).unwrap();
+        assert_eq!(v["logPath"], "/tmp/x/node-1.log");
     }
 
     #[test]

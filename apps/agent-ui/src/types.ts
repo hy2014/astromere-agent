@@ -635,6 +635,9 @@ export type NodeExecution = {
   startedAtMs?: number;
   completedAtMs?: number;
   outputPath?: string;
+  // 该节点这次运行的落盘日志路径（服务器上 <log_dir>/<execution_id>/<node_id>.log）。
+  // 文件日志上线前的旧运行没有这个文件 → 字段为 undefined。
+  logPath?: string;
   // Per-output-port runtime artifacts (third layer = run artifacts), indexed by
   // output port key, e.g. {"data": "/path/a.csv", "metrics": "/path/m.json"}.
   outputs?: Record<string, unknown>;
