@@ -1,19 +1,20 @@
 import {useCallback, useEffect, useRef, useState} from "react";
-import type {DagExecution, ExecutionLog, NodeExecution, NodeLogFile} from "../../types";
+import type {DagExecution, NodeExecution} from "../../types";
 import {formatDateTimeNoLocale} from "../file-utils";
 import {
   downloadNodeLog,
-  getExecutionLogs,
   getNodeExecutions,
-  getNodeLog,
   listExecutions,
   type DownloadHandle,
 } from "./api";
+import type {NodeLogTarget} from "./NodeLogPanel";
 
 export type ExecutionPanelProps = {
   dagId: string | null;
   runSignal?: number;
   onClose?: () => void;
+  /** 「各节点状态 → 详情 → 查看」：把该节点的日志交给最右侧属性栏显示。 */
+  onViewNodeLog: (target: NodeLogTarget) => void;
 };
 
 type SnapshotNode = {
@@ -58,19 +59,11 @@ function statusLabel(status: string): string {
   }
 }
 
-export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelProps) {
+export function ExecutionPanel({dagId, runSignal = 0, onClose, onViewNodeLog}: ExecutionPanelProps) {
   const [executions, setExecutions] = useState<DagExecution[]>([]);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
   const [nodeExecutions, setNodeExecutions] = useState<NodeExecution[]>([]);
   const [snapshotNodes, setSnapshotNodes] = useState<SnapshotNode[] | null>(null);
-  // Per-node on-disk log (file source of truth) + paging + legacy fallback.
-  const [selectedLogNodeId, setSelectedLogNodeId] = useState<string | null>(null);
-  const [nodeLogFile, setNodeLogFile] = useState<NodeLogFile | null>(null);
-  const [logOffset, setLogOffset] = useState(0);
-  const [logLoading, setLogLoading] = useState(false);
-  const [fallbackLogs, setFallbackLogs] = useState<ExecutionLog[] | null>(null);
-  // 右侧分两个 tab：本次运行状态 / 运行日志（原来上下堆叠，状态被日志挤没）。
-  const [detailTab, setDetailTab] = useState<"status" | "logs">("status");
   // selectedExecutionId 的镜像，供 2s 轮询回调读取（避免闭包过期，
   // 也保持轮询 effect 的依赖稳定、interval 不被重置）。
   const selectedIdRef = useRef<string | null>(null);
@@ -103,31 +96,27 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
     [selectedExecutionId],
   );
 
-  // 「查看」= 切到运行日志 tab 并选中该节点；纯前端状态切换，不请求新接口。
-  const handleViewLog = useCallback((nodeId: string) => {
-    setSelectedLogNodeId(nodeId);
-    setLogOffset(0);
-    setDetailTab("logs");
-  }, []);
+  // 「查看」= 让最右侧属性栏显示这个节点的日志。
+  const handleViewLog = (nodeId: string) => {
+    if (!selectedExecutionId) return;
+    onViewNodeLog({executionId: selectedExecutionId, nodeId, nodeName: nodeNameOf(nodeId)});
+  };
 
   // Load the execution list and auto-select the most recent *non-terminal* run
   // when nothing is manually selected — so after clicking "运行 DAG" the live
-  // log view appears automatically (IDEA/VSCode-style) without a click.
+  // node statuses appear automatically without a click.
   const loadExecutions = useCallback(async () => {
     if (!dagId) return;
     try {
       const result = await listExecutions(dagId);
       setExecutions(result);
-      // Auto-select the most recent non-terminal run when nothing is manually
-      // selected — after 运行 DAG the live view appears without a click, and
-      // lands directly on the log tab.
+      // Auto-select the most recent non-terminal run when nothing is manually selected.
       if (!selectedIdRef.current) {
         const running = result
           .filter((e) => !TERMINAL.has(e.status))
           .sort((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0))[0];
         if (running) {
           setSelectedExecutionId(running.id);
-          setDetailTab("logs");
         }
       }
     } catch (error) {
@@ -140,68 +129,16 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
     if (!execId) {
       setNodeExecutions([]);
       setSnapshotNodes(null);
-      setSelectedLogNodeId(null);
-      setNodeLogFile(null);
-      setFallbackLogs(null);
       return;
     }
     try {
       const nodes = await getNodeExecutions(execId);
       const sorted = [...nodes].sort((a, b) => (a.startedAtMs ?? 0) - (b.startedAtMs ?? 0));
       setNodeExecutions(sorted);
-      // Default the log viewer to the first failed node (the one you usually
-      // care about), else the first node. Only auto-pick when the user hasn't
-      // already chosen one, so the 2s refresh doesn't yank their selection.
-      const def =
-        sorted.find((n) => n.status === "failed")?.nodeId ??
-        sorted[0]?.nodeId ??
-        null;
-      setSelectedLogNodeId((cur) => cur ?? def);
-      // 注意: 这里不能重置 logOffset —— loadDetail 每 2s 轮询一次,
-      // 无条件归零会把用户正在看的日志分页拽回第一页。
-      // 页码归零只发生在用户切换节点/切换执行时(select onChange / selectExecution)。
     } catch (error) {
       console.error("[execution-panel] failed to load run detail", error);
     }
   }, []);
-
-  // Load a node's full on-disk log, paged. Falls back to the legacy DB-backed
-  // (merged) logs when the file doesn't exist (runs before file-logging).
-  const LOG_PAGE = 2000;
-  const loadNodeLog = useCallback(
-    async (execId: string, nodeId: string | null, offset: number) => {
-      if (!nodeId) {
-        setNodeLogFile(null);
-        setFallbackLogs(null);
-        return;
-      }
-      setLogLoading(true);
-      try {
-        const nf = await getNodeLog(execId, nodeId, offset, LOG_PAGE);
-        setNodeLogFile(nf);
-        setFallbackLogs(null);
-      } catch {
-        // File-based logging unavailable for this run → legacy DB logs.
-        try {
-          const rows = await getExecutionLogs(execId);
-          setFallbackLogs(rows);
-          setNodeLogFile(null);
-        } catch {
-          setFallbackLogs(null);
-          setNodeLogFile(null);
-        }
-      } finally {
-        setLogLoading(false);
-      }
-    },
-    [],
-  );
-
-  // (Re)load the selected node's log whenever the run, node, or page changes.
-  useEffect(() => {
-    if (!selectedExecutionId || !selectedLogNodeId) return;
-    void loadNodeLog(selectedExecutionId, selectedLogNodeId, logOffset);
-  }, [selectedExecutionId, selectedLogNodeId, logOffset, loadNodeLog]);
 
   // Auto-refresh the execution list every 2s while the panel is mounted (the
   // bottom dock is only rendered when open, so polling stops when closed).
@@ -222,9 +159,6 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
 
   const selectExecution = (execution: DagExecution) => {
     setSelectedExecutionId(execution.id);
-    setSelectedLogNodeId(null);
-    setLogOffset(0);
-    setDetailTab("status");
     if (execution.snapshot) {
       try {
         const parsed = JSON.parse(execution.snapshot) as {nodes?: SnapshotNode[]};
@@ -306,27 +240,10 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
         </div>
 
         <div className="execution-detail-col">
-          <div className="execution-tabs">
-            <button
-              type="button"
-              className={`execution-tab ${detailTab === "status" ? "active" : ""}`}
-              onClick={() => setDetailTab("status")}
-            >
-              本次运行状态
-            </button>
-            <button
-              type="button"
-              className={`execution-tab ${detailTab === "logs" ? "active" : ""}`}
-              onClick={() => setDetailTab("logs")}
-            >
-              运行日志
-            </button>
-          </div>
-
-          {detailTab === "status" && !selected && (
+          {!selected && (
             <p className="execution-empty">Select an execution to view details.</p>
           )}
-          {detailTab === "status" && selected && (
+          {selected && (
             <div className="execution-detail">
               <div className="execution-detail-head">
                 <span>本次运行状态</span>
@@ -471,91 +388,6 @@ export function ExecutionPanel({dagId, runSignal = 0, onClose}: ExecutionPanelPr
                 </details>
               )}
             </div>
-          )}
-
-          {detailTab === "logs" && (
-          <>
-          <div className="execution-logs-header">
-            <div className="execution-log-toolbar">
-              <label className="execution-log-toolbar-label">节点日志</label>
-              {nodeExecutions.length > 0 ? (
-                <select
-                  className="execution-log-node-select"
-                  value={selectedLogNodeId ?? ""}
-                  onChange={(e) => {
-                    setSelectedLogNodeId(e.target.value || null);
-                    setLogOffset(0);
-                  }}
-                >
-                  {nodeExecutions.map((ne) => (
-                    <option key={ne.nodeId} value={ne.nodeId}>
-                      {nodeNameOf(ne.nodeId)}
-                      {ne.status === "failed" ? "（失败）" : ""}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-              {nodeLogFile && (
-                <div className="execution-log-pager">
-                  <select
-                    className="execution-log-page-select"
-                    value={Math.floor(logOffset / LOG_PAGE)}
-                    onChange={(e) => setLogOffset(Number(e.target.value) * LOG_PAGE)}
-                  >
-                    {Array.from(
-                      {length: Math.max(1, Math.ceil(nodeLogFile.total / LOG_PAGE))},
-                      (_, i) => (
-                        <option key={i} value={i}>
-                          第 {i + 1} 页
-                        </option>
-                      ),
-                    )}
-                  </select>
-                  <span className="execution-log-page-info">
-                    {nodeLogFile.offset + 1}–
-                    {nodeLogFile.offset + nodeLogFile.lines.length} / 共 {nodeLogFile.total} 行
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="execution-logs">
-            {logLoading ? (
-              <p className="execution-empty">加载日志中…</p>
-            ) : nodeLogFile ? (
-              nodeLogFile.lines.length === 0 ? (
-                <p className="execution-empty">该节点无日志输出。</p>
-              ) : (
-                nodeLogFile.lines.map((line, i) => (
-                  <div key={i} className="execution-log-line">
-                    <span className="execution-log-lineno">{nodeLogFile.offset + i + 1}</span>
-                    <span className="execution-log-text">{line}</span>
-                  </div>
-                ))
-              )
-            ) : fallbackLogs ? (
-              fallbackLogs.length === 0 ? (
-                <p className="execution-empty">Select an execution to view logs.</p>
-              ) : (
-                fallbackLogs.map((log) => (
-                  <div
-                    key={log.id ?? `${log.timestampMs}-${log.message}`}
-                    className={`execution-log execution-log--${log.level}`}
-                  >
-                    <span className="execution-log-level">{log.level}</span>
-                    {log.nodeId && (
-                      <span className="execution-log-node">{nodeNameOf(log.nodeId)}</span>
-                    )}
-                    <span className="execution-log-message">{log.message}</span>
-                  </div>
-                ))
-              )
-            ) : (
-              <p className="execution-empty">Select an execution to view logs.</p>
-            )}
-          </div>
-          </>
           )}
         </div>
       </div>

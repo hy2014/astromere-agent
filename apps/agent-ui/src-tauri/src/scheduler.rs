@@ -805,7 +805,11 @@ pub fn get_node_log(
     if !path.exists() {
         return Err(format!("node log file not found: {}", path.display()));
     }
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    // Read as bytes: worker logs occasionally contain a stray non-UTF-8 byte
+    // (a split multi-byte char), and read_to_string would reject the whole
+    // file over one bad byte. Lossy decoding keeps every other line readable.
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    let content = String::from_utf8_lossy(&bytes);
     let all: Vec<&str> = content.split('\n').collect();
     // A trailing newline yields one spurious empty final element; drop it.
     let total = if all.last().map_or(false, |l| l.is_empty()) {

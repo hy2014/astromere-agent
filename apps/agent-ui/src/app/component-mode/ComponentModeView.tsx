@@ -47,6 +47,7 @@ import {ComponentFunctionList} from "./ComponentFunctionList";
 import {DataPreviewModal} from "./DataPreviewModal";
 import {PropertiesPanel} from "./PropertiesPanel";
 import {ExecutionPanel} from "./ExecutionPanel";
+import {NodeLogPanel, type NodeLogTarget} from "./NodeLogPanel";
 import {RegisterComponentForm} from "./RegisterComponentForm";
 import {ModeToggle} from "../ModeToggle";
 import "../../styles/component-mode.css";
@@ -151,6 +152,9 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   // Node output-data preview: set when the right-click menu's "Preview Data"
   // is clicked; when null the modal is not rendered.
   const [previewNode, setPreviewNode] = useState<{nodeId: string; label: string} | null>(null);
+  // 节点运行日志：由「执行历史 → 各节点状态 → 详情 → 查看」设置，占用最右侧
+  // 属性栏（取代 PropertiesPanel），点「返回」清空。
+  const [nodeLogTarget, setNodeLogTarget] = useState<NodeLogTarget | null>(null);
   // Center view in dag mode: "list" = published-DAG catalog table (the default
   // landing when entering dag mode), "detail" = the selected DAG's canvas.
   // Clicking "enter" in the table (or a DAG in the sidebar) switches to detail.
@@ -500,6 +504,8 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   const handleSelectNode = useCallback(
     async (nodeId: string) => {
       setSelectedNodeId(nodeId);
+      // 选中节点要看到它的配置面板，所以退出「节点日志」视图。
+      setNodeLogTarget(null);
       // Self-heal: if the selected node is bound to a component that isn't in
       // the in-memory store yet (the DB has it, but the store was never seeded
       // for this node), fetch it so the config panel resolves instead of
@@ -848,7 +854,9 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
         </div>
       </main>
       <aside className="component-mode-properties">
-        {registering || viewingComponent ? (
+        {nodeLogTarget ? (
+          <NodeLogPanel target={nodeLogTarget} onBack={() => setNodeLogTarget(null)} />
+        ) : registering || viewingComponent ? (
           <RegisterComponentForm
             key={editingComponent?.id ?? viewingComponent?.id ?? "new"}
             editing={editingComponent ?? undefined}
@@ -875,6 +883,7 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
             dagId={activeDagId}
             runSignal={runSignal}
             onClose={() => setShowExecHistory(false)}
+            onViewNodeLog={setNodeLogTarget}
           />
         </div>
       )}

@@ -736,39 +736,7 @@
   margin-right: 6px;
 }
 
-/* Per-node log toolbar (node selector + pager) and file-log line rendering */
-.execution-logs-header {
-  flex-shrink: 0;
-  padding: 8px 16px 4px;
-}
-.execution-log-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.execution-log-toolbar-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: #64748b;
-}
-.execution-log-node-select {
-  font-size: 12px;
-  padding: 3px 6px;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  background: #fff;
-  color: #0f172a;
-  max-width: 60%;
-}
-.execution-log-pager {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: #64748b;
-}
+/* 落盘日志的行渲染（NodeLogPanel 与属性栏共用） */
 .execution-log-page-select {
   font-size: 11px;
   padding: 2px 4px;
@@ -799,28 +767,6 @@
 }
 
 /* History detail: overall status + per-node statuses + frozen config snapshot */
-.execution-tabs {
-  flex-shrink: 0;
-  display: flex;
-  gap: 2px;
-  padding-top: 6px;
-  border-bottom: 1px solid #e2e4e9;
-}
-.execution-tab {
-  font-size: 12px;
-  padding: 6px 12px;
-  border: none;
-  background: transparent;
-  color: #64748b;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-}
-.execution-tab.active {
-  color: #1d4ed8;
-  font-weight: 600;
-  border-bottom-color: #1d4ed8;
-}
 .execution-detail {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -1002,6 +948,66 @@
 
 .execution-node-detail-error {
   color: #b91c1c;
+}
+
+/* ── 最右侧属性栏里的节点日志视图（由「各节点状态 → 查看」进入）── */
+.node-log-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.node-log-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e2e4e9;
+}
+
+.node-log-panel-back {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: #2563eb;
+  cursor: pointer;
+}
+
+.node-log-panel-back:hover {
+  text-decoration: underline;
+}
+
+.node-log-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-log-panel-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 0;
+  font-size: 11px;
+  color: #64748b;
+}
+
+/* 面板只有 280px 宽，日志区收紧内边距并把行号列收窄，给正文留出空间。 */
+.node-log-panel .execution-logs {
+  padding: 8px 10px;
+}
+
+.node-log-panel .execution-log-lineno {
+  width: 34px;
 }
 
 .execution-snapshot {
