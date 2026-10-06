@@ -12,7 +12,7 @@ Persisted DB path: `~/.agent-ui/sqlite/agent-ui.db`（由 `ui_config_dir()` 决�
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
-| `components` | `id, name, description, status, workspace_root, git_url, git_branch, git_ref, entry_point, input_schema, output_schema, tags, global, created_at_ms, updated_at_ms` | **组件定义表**：身份/生命周期 + 会话锚点 + 可运行定义。`status`: draft/exploring/generated/published/deprecated。`git_url`/`git_branch`/`git_ref` = git 来源（**配置真相源**）；`entry_point` = git 入口文件相对路径（如 `run.py`）；`input_schema`/`output_schema` = IO 端口定义。`global` (`INTEGER` 0/1，默认 0)：`1` = 已在「组件」注册表、可被多 DAG 复用的组件；`0` = 通用组件（拖拽即建、非共享、不进注册表列表）。`workspace_root` 为**遗留 deprecated 列**（保留以避免危险 DROP 重建，逻辑上不再使用；会话路径已由 `component_id` 承担）。注册/通用组件都写本表；拖拽组件到画布只写 `dag_nodes`(引用 `component_id`)，实现跨 DAG 复用。 |
+| `components` | `id, name, description, status, workspace_root, git_url, git_branch, git_ref, entry_point, input_schema, output_schema, tags, global, created_at_ms, updated_at_ms` | **组件定义表**：身份/生命周期 + 会话锚点 + 可运行定义。`status`: draft/exploring/generated/published/deprecated。`git_url`/`git_branch`/`git_ref` = git 来源（**配置真相源**）；`entry_point` = git 入口文件相对路径（如 `run.py`）；`input_schema`/`output_schema` = IO 端口定义。`global` (`INTEGER` 0/1，默认 0)：`1` = 已在「组件」注册表、可被多 DAG 复用的组件；`0` = 内联组件（拖拽即建、非共享、不进注册表列表）。`workspace_root` 为**遗留 deprecated 列**（保留以避免危险 DROP 重建，逻辑上不再使用；会话路径已由 `component_id` 承担）。注册/内联组件都写本表；拖拽组件到画布只写 `dag_nodes`(引用 `component_id`)，实现跨 DAG 复用。 |
 | `component_sessions` | `id, component_id, session_id, session_path, title, created_at_ms, updated_at_ms` | 组件↔Code 模式会话关联，FK 级联删除 |
 | `dags` | `id, name, description, status, execution_order, created_at_ms, updated_at_ms` | 顶层组件集合。`execution_order` = 发布时的拓扑序 JSON 数组；`status`: draft/published/archived |
 | `dag_nodes` | `id, dag_id, component_id, label, pos_x, pos_y, config` | 画布节点（组件**实例**），FK 级联删除。`component_id` **正常流程恒非空**：拖拽「组件」分组的**已注册组件**即写一条引用该 `component_id` 的节点（不再拖拽时新建空白组件）。`config` 为 JSON 文本列，是组件配置的**运行时缓存**；`build_snapshot` 在提交时把 `components` 的 git 配置并入，故历史回看正确，最终可停用（见 Deferred）。 |
@@ -60,7 +60,7 @@ Persisted DB path: `~/.agent-ui/sqlite/agent-ui.db`（由 `ui_config_dir()` 决�
 
 ### 可空 `component_id` 迁移（2026-07-08）
 
-通用组件实例（`component_id` 为空）此前因 `dag_nodes.component_id` 带
+内联组件实例（`component_id` 为空）此前因 `dag_nodes.component_id` 带
 `NOT NULL REFERENCES components(id)` 而无法持久化。修复方式：`ensure_component_tables()`
 调用 `relax_dag_nodes_component_id()` —— 当该列当前为 `NOT NULL` 时，临时 `PRAGMA
 foreign_keys=OFF` 后重建表（`CREATE TABLE dag_nodes_new` → `INSERT ... SELECT` →

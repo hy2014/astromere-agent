@@ -114,8 +114,8 @@ WHERE id=? AND status='submit';   -- rowcount == 1 才算抢到
 4. 逐节点：
    - `upsert_node_execution(status='preparing')`；检查 `cancel_requested`。
    - `resolve_node`：
-     - 节点的 `component_id` **永远非空**——拖通用组件到画布即创建一条 `components` 行并
-       与之绑定（见 `docs/sqlite.md` 的"通用组件即组件"约定）。`resolve_node` 一律查
+     - 节点的 `component_id` **永远非空**——拖内联组件到画布即创建一条 `components` 行并
+       与之绑定（见 `docs/sqlite.md` 的"内联组件即组件"约定）。`resolve_node` 一律查
        `components` 表取 `git_url/git_branch/git_ref/entry_point`，再 `prepare_env` 解析根目录。
      - **不存在**"空 component_id、git 只存 node.config"的例外：活 `node.config` 只含实例
        参数 `params`，绝不含 git 字段；历史展示用的 git 由 `build_snapshot` 冻结进

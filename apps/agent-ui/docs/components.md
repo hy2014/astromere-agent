@@ -10,7 +10,7 @@ Related: [docs/sqlite.md](sqlite.md), [docs/dag.md](dag.md), [docs/component-ses
 
 组件有**两种身份**，由 `global` 列区分：
 
-- **通用组件（`global = 0`，默认 / 日常）**：从「组件」分组**顶部「通用组件」拖拽项**
+- **内联组件（`global = 0`，默认 / 日常）**：从「组件」分组**顶部「内联组件」拖拽项**
   拖到画布即 `createComponent`（`global=0`）+ 写 `dag_nodes` 引用它。**拖拽即建**，
   不复用、**不进**「组件」注册表列表。这是最常见用法。
 - **已注册组件（`global = 1`，跨 DAG 复用）**：经「组件」分组的「注册组件」表单
@@ -19,7 +19,7 @@ Related: [docs/sqlite.md](sqlite.md), [docs/dag.md](dag.md), [docs/component-ses
 
 写入路径：
 
-- **通用（拖拽即建）** = 拖「通用组件」项 → 画布 `onDrop` 调 `createComponent`（`global=0`）
+- **通用（拖拽即建）** = 拖「内联组件」项 → 画布 `onDrop` 调 `createComponent`（`global=0`）
   + 写 `dag_nodes`。
 - **注册** = 「注册组件」表单写 `components`（`global=1`）；之后从「组件」列表拖拽引用
   （`application/claw-component` = component_id），**拖拽时不再新建组件**。
@@ -156,7 +156,7 @@ info = resolve_db_connection(params["connection"])   # {host, port, dbname, user
 - **两个调用方**：
   - 「注册组件」表单：填 git 来源/入口/参数/IO 后提交，写入 `global=1` 的组件定义，
     随后出现在「组件」注册表列表供复用。
-  - 「通用组件」拖拽项：拖到画布时 `ComponentCanvas.onDrop` 调 `create_component`
+  - 「内联组件」拖拽项：拖到画布时 `ComponentCanvas.onDrop` 调 `create_component`
     写入 `global=0` 的组件 + 写 `dag_nodes` 引用它（拖拽即建，不复用）。
   - 组件配置表单的「注册此组件」勾选可在 `global=0/1` 间切换。
   - 拖「已注册组件」到画布时**不再**调 `create_component`（只写 `dag_nodes`

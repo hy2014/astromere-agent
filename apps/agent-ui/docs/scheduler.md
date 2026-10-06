@@ -71,6 +71,6 @@ Related: [docs/dag.md](dag.md), [docs/executor.md](executor.md)
 
 ## 已知缺口（Known gap）
 
-- 通用组件（第三层 runtime instance）的 **DAG 级输入/输出衔接**（上游 output 作为下游
+- 内联组件（第三层 runtime instance）的 **DAG 级输入/输出衔接**（上游 output 作为下游
   input）在 `engine_executor` 中已支持合并上游输出，但复杂端口映射（parquet/csv 文件
   传递）仍为 v1 简化版。

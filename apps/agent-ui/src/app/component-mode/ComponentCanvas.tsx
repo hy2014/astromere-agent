@@ -134,7 +134,7 @@ function ComponentNode({data}: {data: ComponentNodeData}) {
         />
       ))}
       <div className="component-node-header">
-        <span className="component-node-type">{isGeneric ? "通" : "注"}</span>
+        <span className="component-node-type">{isGeneric ? "内" : "注"}</span>
         <span className="component-node-sep">｜</span>
         <span className="component-node-label">{dagNode.label || component.name}</span>
       </div>
@@ -339,14 +339,14 @@ function ComponentCanvasInner({
       event.preventDefault();
       const position = screenToFlowPosition({x: event.clientX, y: event.clientY});
       try {
-        // (1) Generic component (default path): dragging "generic component" creates a
-        // fresh, NON-SHARED component row on drop — no registration needed.
+        // (1) Inline component (default path): dragging the "内联组件" item creates
+        // a fresh, NON-SHARED component row on drop — no registration needed.
         const genericRaw = event.dataTransfer.getData(GENERIC_DRAG_KEY);
         if (genericRaw) {
           const now = Date.now();
           const newComponent: Component = {
             id: makeUuid(),
-            name: `通用组件-${randomSuffix()}`,
+            name: `内联组件-${randomSuffix()}`,
             description: "",
             status: "draft",
             workspaceRoot: "",
@@ -494,6 +494,18 @@ function ComponentCanvasInner({
               }}
             >
               ▶ 在此节点继续执行
+            </button>
+          )}
+          {onDeleteNode && (
+            <button
+              type="button"
+              className="node-context-item"
+              onClick={() => {
+                onDeleteNode(menu.nodeId);
+                setMenu(null);
+              }}
+            >
+              删除
             </button>
           )}
         </div>

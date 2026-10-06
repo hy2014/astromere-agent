@@ -83,9 +83,9 @@ export function ComponentFunctionList({
             event.dataTransfer.setData(GENERIC_DRAG_KEY, "generic");
             event.dataTransfer.effectAllowed = "copy";
           }}
-          title="拖到画布即创建一个非共享的通用组件节点（默认用法）"
+          title="拖到画布即创建一个非共享的内联组件节点（默认用法）"
         >
-          <span className="fn-generic-name">通用组件</span>
+          <span className="fn-generic-name">内联组件</span>
           <span className="fn-generic-hint">拖入即建（不共享）</span>
         </div>
 

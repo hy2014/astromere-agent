@@ -350,8 +350,16 @@ pub fn delete_dag_node(dag_id: String, node_id: String) -> Result<(), String> {
             )
             .unwrap_or(0);
         if remaining == 0 {
-            conn.execute("DELETE FROM components WHERE id = ?1", params![component_id])
-                .map_err(error_to_string)?;
+            // Only the node-local ("generic") ones go away with the node.
+            // Registered components are reusable assets: removing the last node
+            // that referenced one must NOT unregister it.
+            // `global` can be NULL on legacy rows — COALESCE treats those as
+            // generic (0), same as the read path does.
+            conn.execute(
+                "DELETE FROM components WHERE id = ?1 AND COALESCE(global, 0) = 0",
+                params![component_id],
+            )
+            .map_err(error_to_string)?;
         }
     }
 

@@ -12,7 +12,7 @@ Related: [docs/mode-toggle.md](mode-toggle.md), [docs/components.md](components.
 - 左侧栏（自上而下）：`ModeToggle`（切回 Code）→ brand → **功能列表手风琴**
   （`ComponentFunctionList`）：三个一级栏目 `组件` / `dag` / `高级`，每个带 `>>`
   （逆时针 90°）chevron 可展开/收起；二级是各组的功能/列表：
-  - `组件`：**顶部「通用组件」拖拽项**（拖入即建非共享节点，默认用法）+ 已注册组件列表
+  - `组件`：**顶部「内联组件」拖拽项**（拖入即建非共享节点，默认用法）+ 已注册组件列表
     （`global=1`，拖拽到画布实例化复用）+「注册组件」按钮（写 `components` 表 `global=1`）。
   - `dag`：原 `DagListPanel` 内容。
   - `高级`：占位骨架（设置/调试后续填）。
@@ -37,7 +37,7 @@ Related: [docs/mode-toggle.md](mode-toggle.md), [docs/components.md](components.
   列表（选中高亮、kebab 展开 下线/删除）+ **底部整宽虚线靛蓝「+ 新建 DAG」按钮**
   （`.fn-add-btn`，点击就地弹出 `InlineTextPrompt` 取名字）。
 - `组件` 栏目下：
-  - **顶部「通用组件」拖拽项**：`dataTransfer` key `application/claw-generic`，拖到画布
+  - **顶部「内联组件」拖拽项**：`dataTransfer` key `application/claw-generic`，拖到画布
     即 `createComponent`（`global=0`）+ 写 `dag_nodes` 引用它（**拖拽即建、非共享、不进注册表**，
     见 [docs/dag-interaction-map.md](dag-interaction-map.md) #17）。这是默认/日常用法。
   - **已注册组件列表**：读 `components` 表**仅 `global=1`**（按 `updated_at_ms` 倒序），
@@ -58,23 +58,23 @@ Related: [docs/mode-toggle.md](mode-toggle.md), [docs/components.md](components.
     取消直接退出。表单不内联在左侧栏（避免挤占手风琴）。
 - `高级` 栏目下：占位骨架（设置/调试后续填）。
 
-## 通用组件 vs 已注册组件 vs 拖拽
+## 内联组件 vs 已注册组件 vs 拖拽
 
-- **通用组件（默认）** = 从「组件」栏目顶部「通用组件」拖拽项拖到画布：`onDrop` 调
+- **内联组件（默认）** = 从「组件」栏目顶部「内联组件」拖拽项拖到画布：`onDrop` 调
   `createComponent`（`global=0`）+ 写 `dag_nodes` 引用它。拖拽即建，**不复用**、**不进**注册表列表。
-  IO 端口在画布「配置」tab 手画（`+ 输入 / + 输出`）——这是通用组件的专属能力。
+  IO 端口在画布「配置」tab 手画（`+ 输入 / + 输出`）——这是内联组件的专属能力。
 - **注册** = 写 `components` 表（`global=1`：组件定义 git 来源 / 入口 / 参数 / IO）。
   注册表单内含「输入/输出端口」编辑区（key + 类型，默认 `file`），注册即声明 IO，画布只读展示。
 - **组件名全局唯一（2026-07-14）**：`components` 表中**所有组件**（无论 `global=0` 通用还是 `global=1` 注册）的 `name` 必须全局唯一。
   后端 `create_component` / `update_component` 写入前按 `name` 全局查重（update 排除自身 `id`），
   命中即返回「已存在同名组件「X」」中文错误；前端 `RegisterComponentForm` 也实时查重（对所有组件生效、排除正在编辑的自身），
-  重名时红字提示「已存在同名组件」并禁用「注册 / 保存修改」。通用组件（`global=0`）拖入时即按 `通用组件-<随机后缀>` 赋**区分默认名**
+  重名时红字提示「已存在同名组件」并禁用「注册 / 保存修改」。内联组件（`global=0`）拖入时即按 `内联组件-<随机后缀>` 赋**区分默认名**
   （不共享、不复用），实践上不会撞名、拖多个互不拦截，但仍受全局唯一约束（手动改成已存在名字会被拦）。
   与「被引用则拦截」同为业务层友好错误，不动 schema、免迁移。
 - **拖拽（复用）** = 从「组件」列表拖一个已注册组件到画布，写 `dag_nodes`（`component_id`
   引用已注册组件）。拖拽时**不再新建空白组件**。
 - **IO 端口编辑按组件类型区分（2026-07-10 决策）**：
-  - 通用组件（`global=0`）：画布「配置」tab 可手画端口（`+ 输入 / + 输出`，可编辑改名/类型/删除）。
+  - 内联组件（`global=0`）：画布「配置」tab 可手画端口（`+ 输入 / + 输出`，可编辑改名/类型/删除）。
   - 注册的 global 组件（`global=1`）：IO 由注册时声明的 `input_schema` / `output_schema` 决定，
     画布「配置」tab 对其**只读展示**端口 key，**不可手画、不可编辑**。注册组件只关心 input/output 的 key。
   - 端口**种类（kind）有两种：`file` 与 `status`**。
@@ -87,9 +87,9 @@ Related: [docs/mode-toggle.md](mode-toggle.md), [docs/components.md](components.
       [docs/engine-executor.md](engine-executor.md) status 门控）。
     - 连线**同类型校验**：只能 `file→file`、`status→status`，禁止交叉连接（画布
       `isValidConnection` 拦截）。画布圆点：**实心 = file，空心 = status**，鼠标悬浮显示端口类型。
-  - 画布节点圆点严格按 schema 渲染，**0 声明 ⇒ 0 点**，通用组件与已注册组件完全一致，
+  - 画布节点圆点严格按 schema 渲染，**0 声明 ⇒ 0 点**，内联组件与已注册组件完全一致，
     无任何兜底画点（画布即 schema 镜像：看到几个点就是几个端口，没有写死的隐藏点）。
-    通用组件想连线，先在配置 tab 用「+ 输入 / + 输出」声明端口，圆点才出现。
+    内联组件想连线，先在配置 tab 用「+ 输入 / + 输出」声明端口，圆点才出现。
   - 旧文档「配置 tab 可编辑 IO」的笼统说法已作废。
 - 同一 `component_id` 可被多个 DAG 的节点引用 → 跨 DAG 复用组件定义
   （见 [docs/components.md](components.md)）。
@@ -119,8 +119,8 @@ Tauri WebView **未实现 `window.prompt` / `window.confirm` / `window.alert`**�
 
 ### 节点渲染
 
-- **标题格式**：单行 `类型短字｜label`。通用组件显示 `通｜<名字>`，注册组件显示
-  `注｜<名字>`；「通 / 注」为蓝色字、`label` 为黑色字、分隔符 `｜` 灰色。名字取
+- **标题格式**：单行 `类型短字｜label`。内联组件显示 `内｜<名字>`，注册组件显示
+  `注｜<名字>`；「内 / 注」为蓝色字、`label` 为黑色字、分隔符 `｜` 灰色。名字取
   `dag_nodes.label || component.name`（节点显示名可单独编辑，不影响组件定义）。
 - **右键菜单**：在节点上右键弹出自定义下拉菜单（不污染节点本体 UI），含「预览数据」「删除」等项。
 - **节点输出预览**：右键 → 「预览数据」→ 弹 `DataPreviewModal`，按**每个输出端口一个 tab** 切换，
@@ -166,8 +166,8 @@ Tauri WebView **未实现 `window.prompt` / `window.confirm` / `window.alert`**�
 
 ## 典型流程
 
-**默认（通用组件，不共享）：**
-1. DAG 模式 → 左侧「组件」栏目顶部「通用组件」拖拽项 → 拖到画布 → 自动建一个 `global=0`
+**默认（内联组件，不共享）：**
+1. DAG 模式 → 左侧「组件」栏目顶部「内联组件」拖拽项 → 拖到画布 → 自动建一个 `global=0`
    的组件 + 节点（关联当前 DAG）。
 2. 点该节点 → 右侧「配置」tab 编辑组件定义（git/分支/入口/参数/名称；IO 端口在此**手画**，
    见上「IO 端口编辑按组件类型区分」）；连线表达依赖。

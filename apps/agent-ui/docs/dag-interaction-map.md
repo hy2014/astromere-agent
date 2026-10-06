@@ -10,7 +10,7 @@
 | 1 | 切进 DAG 模式 | `App.tsx` mode=dag | — | — | 渲染三栏布局 |
 | 2 | 新建 DAG | `DagListPanel` +New | `create_dag` | `dags` | 列表出现 + 画布打开 |
 | 3 | 选中/切换 DAG | `DagListPanel` item | `get_dag` | `dags`+`dag_nodes`+`dag_edges` | 画布渲染节点/边 |
-| 4 | 编辑画布（拖入/连线/移动） | `ComponentCanvas` onDrop（通用组件或已注册组件） | `update_dag` / `create_component`+`update_dag` | `dags`+`dag_nodes`+`dag_edges`(+`components`) | 画布实时更新 |
+| 4 | 编辑画布（拖入/连线/移动） | `ComponentCanvas` onDrop（内联组件或已注册组件） | `update_dag` / `create_component`+`update_dag` | `dags`+`dag_nodes`+`dag_edges`(+`components`) | 画布实时更新 |
 | 5 | 发布 DAG | 点击 DAG → 中栏头部展示发布信息；未发布时**必填**合法 cron +「发布」 | `publish_dag` | `dags`(status/execution_order/cron) | 头部变「已发布」+ cron 徽标 |
 | 6 | 删除 DAG | 每行右侧「⋯」或右键 → 操作菜单「删除」（**已发布项置灰禁用，须先下线**） | `delete_dag` | `dags` + 子表物理级联删 | 列表移除该项；若正选中则画布清空 |
 | 7 | 选中节点看会话 | `ComponentCanvas` 节点点击 | `list_component_sessions` | `component_sessions` | 右侧列出 sessions |
@@ -22,8 +22,8 @@
 | 13 | 取消执行 | Cancel 按钮 | `cancel_execution` | — | ⚠️ 桩，无效果 |
 | 14 | 下线 DAG | 每行右侧「⋯」或右键 → 操作菜单「下线」（仅已发布项显示） | `unpublish_dag` | `dags`(status→draft) | 头部/列表状态回到草稿，cron/execution_order 保留 |
 | 15 | 注册组件 + 拖入画布（复用） | 左栏「组件」栏目「注册组件」写 `components` 表（`global=1`）；从组件列表拖已注册组件到画布 | `createComponent`（注册）+ `onDrop`(引用 component_id) + `update_dag` | `components`(注册时新建) + `dag_nodes`(component_id=已注册id + config缓存) | 注册后出现在组件列表；拖到画布生成引用该 component_id 的节点；同一组件可拖到多个 DAG（跨 DAG 复用） |
-| 17 | 通用组件拖入画布（默认/非共享） | 左栏「组件」栏目**顶部「通用组件」拖拽项**，拖到画布 | `onDrop`(命中 `application/claw-generic`)→ `createComponent`(`global=0`) + `update_dag` | `components`(拖拽即建, global=0) + `dag_nodes`(component_id=新建id) | 拖到画布立即建一个非共享组件 + 节点（**不进**组件注册表列表）；这是日常默认用法 |
-| 16 | 组件配置（右侧属性面板） | 点击节点 → 右侧面板分三块：①**节点名称**（`dag_nodes.label`，实例级显示名）；②组件定义（`GenericComponentForm`）；③运行参数（`InstanceConfigForm`） | **节点名称**：改 `dag_nodes.label` → `update_dag`（仅本节点）；**通用组件**定义：可编辑 → `updateComponent`(写 `components`)；**已注册组件（global=1）**定义：**只读**、不写 `components`；运行参数始终写 `dag_nodes.config.params`；`build_snapshot` 把组件 git/`configSchema`/name 注入冻结快照 | `dag_nodes.label`(节点名) + `components`(仅通用可改) + `dag_nodes`(运行参数) + `dag_executions.snapshot`(冻结副本) | 画布标题 = `label || component.name`（节点名兜底组件名，实时刷新）；已注册组件定义不可在此改（避免波及所有引用 DAG）；活 `dag_nodes.config` 仅含 `params` |
+| 17 | 内联组件拖入画布（默认/非共享） | 左栏「组件」栏目**顶部「内联组件」拖拽项**，拖到画布 | `onDrop`(命中 `application/claw-generic`)→ `createComponent`(`global=0`) + `update_dag` | `components`(拖拽即建, global=0) + `dag_nodes`(component_id=新建id) | 拖到画布立即建一个非共享组件 + 节点（**不进**组件注册表列表）；这是日常默认用法 |
+| 16 | 组件配置（右侧属性面板） | 点击节点 → 右侧面板分三块：①**节点名称**（`dag_nodes.label`，实例级显示名）；②组件定义（`GenericComponentForm`）；③运行参数（`InstanceConfigForm`） | **节点名称**：改 `dag_nodes.label` → `update_dag`（仅本节点）；**内联组件**定义：可编辑 → `updateComponent`(写 `components`)；**已注册组件（global=1）**定义：**只读**、不写 `components`；运行参数始终写 `dag_nodes.config.params`；`build_snapshot` 把组件 git/`configSchema`/name 注入冻结快照 | `dag_nodes.label`(节点名) + `components`(仅通用可改) + `dag_nodes`(运行参数) + `dag_executions.snapshot`(冻结副本) | 画布标题 = `label || component.name`（节点名兜底组件名，实时刷新）；已注册组件定义不可在此改（避免波及所有引用 DAG）；活 `dag_nodes.config` 仅含 `params` |
 
 ---
 
@@ -52,7 +52,7 @@
 
 ## 4. 编辑画布（拖入组件 / 连线 / 移动）
 
-- **拖入（通用组件，默认）**：从「组件」栏目**顶部「通用组件」拖拽项**，`handleDragStart`
+- **拖入（内联组件，默认）**：从「组件」栏目**顶部「内联组件」拖拽项**，`handleDragStart`
   写 `dataTransfer["application/claw-generic"]`；`ComponentCanvas.onDrop` 命中该 key →
   `createComponent`（`global=0`）+ 以该 `component_id` 生成 `DagNode` →
   `onChange`(`create_component` + `update_dag`)。拖拽即建、非共享、不进注册表。
@@ -193,7 +193,7 @@
 - **渲染**：`onChange` → `handleChangeDag` 更新 `activeDagDetail.nodes`；画布出现引用该组件的节点；
   因自动选中，右侧属性面板立即展开配置表单（见 #16）。
 - **复用**：同一 component_id 可再被另一个 DAG 的节点引用 → 跨 DAG 复用组件定义。
-- 说明：拖拽时**不再 `createComponent`**；`components` 仅由「注册组件」表单或通用组件拖拽写入。
+- 说明：拖拽时**不再 `createComponent`**；`components` 仅由「注册组件」表单或内联组件拖拽写入。
 
 ## 16. 组件配置（右侧属性面板）
 
@@ -214,26 +214,26 @@
   - **已注册组件（global=1）：此面板定义字段全部只读**——定义是共享契约，节点配置里**不允许改动**
     （否则会波及所有引用它的 DAG）；字段 `disabled` 且有 hover 说明「已注册组件定义不可在节点配置中修改」。
     要改定义请走组件库的「修改」入口。
-  - **通用组件（global=0）：可在此编辑并写回 `components` 表**（`updateComponent`）。
+  - **内联组件（global=0）：可在此编辑并写回 `components` 表**（`updateComponent`）。
   - 字段：`name`（写 `components.name`，**不再**写 `dag_nodes.label`——节点显示名已独立为上面的
     「节点名称」字段）、`inputs`/`outputs`（端口，kind 仅 `file`，可再选 `format` 子属性
     `parquet`/`csv`/`json`/…；留空=任意文件）、`gitUrl`、`gitBranch`、`gitRef`、`entryPoint`。
 - **实例参数（`InstanceConfigForm`，即「运行参数」）**：
   - 写 `dag_nodes.config.params`，**仅作用于当前节点**，与组件定义解耦；
-    注册/通用组件都在此填实例值（如 dataset-loader 的 `file` 路径）。
+    注册/内联组件都在此填实例值（如 dataset-loader 的 `file` 路径）。
   - 前端：`onChange(updatedNode)` → `update_dag` 落库节点。
 - **前端**：`GenericComponentForm` 受控于 `component`（本地 state 仅在切换节点时同步，避免输入丢焦点）；
-  通用组件任一字段变更即 `onChange(updatedComponent)` → `updateComponent` 落库、同步画布标题。
-- **说明**：通用组件的「配置」tab 编辑的是 component 定义本身（多节点可共享同一 component，改一处全生效）；
+  内联组件任一字段变更即 `onChange(updatedComponent)` → `updateComponent` 落库、同步画布标题。
+- **说明**：内联组件的「配置」tab 编辑的是 component 定义本身（多节点可共享同一 component，改一处全生效）；
   **已注册组件的「配置」tab 只展示定义（只读），真正可改的是下方「运行参数」（实例级，写 `dag_nodes`）**。
 
-## 17. 通用组件拖入画布（默认 / 非共享）
+## 17. 内联组件拖入画布（默认 / 非共享）
 
-- **用户操作**：左栏「组件」栏目**顶部「通用组件」拖拽项** → 拖到中栏画布。
+- **用户操作**：左栏「组件」栏目**顶部「内联组件」拖拽项** → 拖到中栏画布。
 - **前端**：拖拽项 `onDragStart` 写 `dataTransfer` 键 `application/claw-generic`（payload 任意非空，
   仅用于命中）；`ComponentCanvas.onDrop` 先查该 key，命中后：
   1. 以 `makeUuid()` 生成 `component_id`，构造 `global=0` 的 `Component`
-     （名称「通用组件」、git/IO 为空、未配置）；
+     （名称「内联组件」、git/IO 为空、未配置）；
   2. 调 `createComponent(component)` 写 `components` 表（随即 `onComponentCreated` 刷新前端 store，
      使节点→组件查找可命中）；
   3. 以该 `component_id` 生成 `DagNode`（`config` 仅缓存 name，真正配置留空待填）；
@@ -242,5 +242,5 @@
   （`component_id` = 新建组件 id，非空）。
 - **渲染**：画布立即出现一个非共享组件节点；因自动选中，右侧属性面板展开配置表单，可即时填 git/IO。
 - **特征**：该组件 `global=0`，**不出现**在「组件」注册表列表，不被复用；若需复用，见 #16 勾选「注册此组件」。
-- 说明：通用组件与已注册组件**数据结构完全相同**（都是 `components` 行），仅 `global` 位不同；
+- 说明：内联组件与已注册组件**数据结构完全相同**（都是 `components` 行），仅 `global` 位不同；
   删节点级联删 `components` 仍仅在无其它节点引用时发生（见 #6/#16 删除语义）。

@@ -9,10 +9,10 @@
   color: #1a1a1a;
 }
 
-/* Bottom execution-history dock (VSCode/IDEA-style panel): spans the full
-   width on the second grid row, fixed height, internally scrollable. */
+/* Bottom execution-history dock (VSCode/IDEA-style panel): 占第二行左侧导航 +
+   中间画布两列（不挤占最右属性栏），固定高度，内部滚动。 */
 .component-mode-exec-dock {
-  grid-column: 1 / -1;
+  grid-column: 1 / 3;
   grid-row: 2;
   height: 320px;
   min-height: 0;
@@ -40,6 +40,8 @@
 
 .component-mode-shell.registering .component-mode-properties {
   border-left: none;
+  /* registering 只有两列，显式改回第 2 列，否则会多出一个隐式第 3 列。 */
+  grid-column: 2;
 }
 
 .component-mode-shell.registering .register-page {
@@ -472,13 +474,44 @@
   font-size: 14px;
 }
 
+/* 最右列贯穿两行：底部 dock 不覆盖它，属性栏/日志视图一直到底。
+   列必须写死：grid 布局里「行明确、列 auto」的元素先于 auto 元素落位，
+   不写死的话初始渲染（dock 还没挂载）它会占到第 1 列去。 */
 .component-mode-properties {
+  grid-column: 3;
+  grid-row: 1 / -1;
+  position: relative;
   border-left: 1px solid #e2e4e9;
   background: #ffffff;
   min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* 最右列左边缘的拖拽手柄：贴住边框的窄条，hover / 拖动时显蓝。 */
+.component-mode-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  z-index: 5;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.component-mode-resize-handle:hover,
+.component-mode-shell.resizing .component-mode-resize-handle {
+  background: #2563eb;
+}
+
+/* 拖动期间整页保持列宽光标，且不选中文本。 */
+.component-mode-shell.resizing,
+.component-mode-shell.resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .properties-section {
@@ -2224,7 +2257,7 @@
   cursor: pointer;
 }
 
-/* 「通用组件」拖拽项（默认/日常用法）：拖入即建非共享节点 */
+/* 「内联组件」拖拽项（默认/日常用法）：拖入即建非共享节点 */
 .fn-generic-item {
   display: flex;
   align-items: center;

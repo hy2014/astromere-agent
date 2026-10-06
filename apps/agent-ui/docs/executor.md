@@ -23,5 +23,5 @@ Related: [docs/components.md](components.md), [docs/scheduler.md](scheduler.md),
 - 执行器**只认磁盘上的真实文件**：`entry_point`、`requirements.txt` 必须存在于
   `component_root`。
 - venv 随组件目录走，不在全局位置，便于多组件隔离。
-- **不支持 `component_id` 为空的通用组件节点**（`get_component("")` 会失败）；通用组件
+- **不支持 `component_id` 为空的内联组件节点**（`get_component("")` 会失败）；内联组件
   请走 `engine_executor`。

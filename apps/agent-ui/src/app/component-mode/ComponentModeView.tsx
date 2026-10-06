@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from "react";
+import type {MouseEvent as ReactMouseEvent} from "react";
 import type {Component, Dag, DagDetail, DagEdge, DagExecution, DagNode} from "../../types";
 import {
   createComponent,
@@ -104,6 +105,23 @@ function isValidCron(expr: string): boolean {
   );
 }
 
+// 最右侧面板（属性栏 / 节点日志）宽度可拖拽调整，宽度记在 localStorage。
+const RIGHT_WIDTH_KEY = "agent-ui.componentMode.rightWidth";
+const RIGHT_WIDTH_MIN = 240;
+const RIGHT_WIDTH_MAX = 720;
+const RIGHT_WIDTH_DEFAULT = 280;
+const LEFT_COLUMN = 240;
+
+function clampRightWidth(width: number): number {
+  return Math.min(RIGHT_WIDTH_MAX, Math.max(RIGHT_WIDTH_MIN, width));
+}
+
+function loadRightWidth(): number {
+  const saved = Number(localStorage.getItem(RIGHT_WIDTH_KEY));
+  if (!Number.isFinite(saved) || saved <= 0) return RIGHT_WIDTH_DEFAULT;
+  return clampRightWidth(saved);
+}
+
 export type ComponentModeViewProps = {
   onSwitchToCode: () => void;
   onOpenCode: (workspaceRoot: string, sessionId: string) => void;
@@ -155,6 +173,10 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   // 节点运行日志：由「执行历史 → 各节点状态 → 详情 → 查看」设置，占用最右侧
   // 属性栏（取代 PropertiesPanel），点「返回」清空。
   const [nodeLogTarget, setNodeLogTarget] = useState<NodeLogTarget | null>(null);
+  // 最右侧面板宽度：拖它左边缘调整，拖动结束后写回 localStorage。
+  const [rightWidth, setRightWidth] = useState<number>(loadRightWidth);
+  const [resizing, setResizing] = useState(false);
+  const resizeRef = useRef<{startX: number; startWidth: number} | null>(null);
   // Center view in dag mode: "list" = published-DAG catalog table (the default
   // landing when entering dag mode), "detail" = the selected DAG's canvas.
   // Clicking "enter" in the table (or a DAG in the sidebar) switches to detail.
@@ -531,9 +553,9 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
   const handleDeleteNode = useCallback(
     async (nodeId: string) => {
       if (!activeDagDetail) return;
-      const ok = await confirm("删除该组件节点？关联的组件（若无其它节点引用）也会被删除。", {
-        title: "删除组件",
-      });
+      // 确认文案统一，不区分组件类型；组件行删不删由后端按 global 判断
+      // （内联组件随节点删、已注册组件保留，见 dag.rs delete_dag_node）。
+      const ok = await confirm("删除该节点？此操作不可恢复。", {title: "删除节点"});
       if (!ok) return;
       try {
         await deleteDagNode(activeDagDetail.id, nodeId);
@@ -651,6 +673,40 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
     addComponent(component);
   }, []);
 
+  // ── 最右侧面板：拖左边缘调宽 ─────────────────────────────────────
+  // mousedown 记下起点，随后在 document 上监听 mousemove / mouseup，
+  // 这样光标移出那条 5px 手柄也照样能拖。向左拖 = 变宽。
+  const handleResizeStart = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resizeRef.current = {startX: event.clientX, startWidth: rightWidth};
+    setResizing(true);
+  };
+
+  useEffect(() => {
+    if (!resizing) return;
+    const onMove = (event: MouseEvent) => {
+      const start = resizeRef.current;
+      if (!start) return;
+      setRightWidth(clampRightWidth(start.startWidth + (start.startX - event.clientX)));
+    };
+    const onUp = () => {
+      resizeRef.current = null;
+      setResizing(false);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [resizing]);
+
+  // 记住宽度（拖动过程中不写，松手后才写一次）。
+  useEffect(() => {
+    if (resizing) return;
+    localStorage.setItem(RIGHT_WIDTH_KEY, String(Math.round(rightWidth)));
+  }, [rightWidth, resizing]);
+
   // Resolve the currently selected node and (if it is bound to a real
   // component) the component itself. Every node is bound to a component, so a
   // null `selectedComponent` only happens transiently while the store is still
@@ -660,12 +716,21 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
     ? components.find((c) => c.id === selectedNode.componentId) ?? null
     : null;
 
+  // 注册/查看组件时最右列是一整页表单（由 .registering 的 CSS 控制列宽），
+  // 这时不写内联列宽——内联样式优先级更高，会把整页表单压回 280px。
+  const rightPanelResizable = !registering && !viewingComponent;
+
   return (
     <div
       className={
-        registering || viewingComponent
+        (registering || viewingComponent
           ? "component-mode-shell registering"
-          : "component-mode-shell"
+          : "component-mode-shell") + (resizing ? " resizing" : "")
+      }
+      style={
+        rightPanelResizable
+          ? {gridTemplateColumns: `${LEFT_COLUMN}px 1fr ${rightWidth}px`}
+          : undefined
       }
     >
       {successToast && (
@@ -854,6 +919,15 @@ export function ComponentModeView({onSwitchToCode, onOpenCode}: ComponentModeVie
         </div>
       </main>
       <aside className="component-mode-properties">
+        {rightPanelResizable && (
+          <div
+            className="component-mode-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            title="拖动调整宽度"
+            onMouseDown={handleResizeStart}
+          />
+        )}
         {nodeLogTarget ? (
           <NodeLogPanel target={nodeLogTarget} onBack={() => setNodeLogTarget(null)} />
         ) : registering || viewingComponent ? (
