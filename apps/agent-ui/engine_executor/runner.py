@@ -55,6 +55,42 @@ def _prepend_pythonpath(env: dict, directory: str) -> None:
     )
 
 
+# Built-in, platform-provided entrypoints keyed by reserved ``@`` keywords.
+# These are NOT files inside the business repo — they live in the platform SDK
+# directory (``engine_executor/sdk``) which is put on PYTHONPATH for every
+# component process. The keyword maps to the argv tail after the interpreter,
+# e.g. "@global_components.script_runner" -> ["-m", "global_components.script_runner"].
+BUILTIN_ENTRYPOINTS = {
+    "@global_components.script_runner": ["-m", "global_components.script_runner"],
+}
+
+BUILTIN_ENTRYPOINT_PREFIX = "@"
+
+
+def resolve_argv(py: str, entry_point: str) -> list[str]:
+    """Translate a component ``entry_point`` into the full process argv.
+
+    Two shapes are supported:
+
+    * Repo-local file (default): ``"run.py"`` / ``"subdir/main.py"``
+      -> ``[py, entry_point]``, executed with cwd = component checkout root.
+    * Built-in keyword: ``"@global_components.<name>"`` — resolved from
+      :data:`BUILTIN_ENTRYPOINTS` -> ``[py, "-m", "<module>"]``. The keyword is
+      a platform namespace, not a path; unknown keywords fail loudly with the
+      list of available entries instead of producing an opaque file-not-found.
+    """
+    ep = (entry_point or "").strip()
+    if ep.startswith(BUILTIN_ENTRYPOINT_PREFIX):
+        argv_tail = BUILTIN_ENTRYPOINTS.get(ep)
+        if argv_tail is None:
+            available = ", ".join(sorted(BUILTIN_ENTRYPOINTS)) or "(暂无)"
+            raise ValueError(
+                f"未知内置入口 {ep!r}；可用内置入口: {available}"
+            )
+        return [py, *argv_tail]
+    return [py, ep]
+
+
 def _cache_key(git_url: str, branch: str, git_ref: str = "") -> str:
     return hashlib.sha256(f"{git_url}@{branch}@{git_ref}".encode()).hexdigest()[:16]
 
@@ -619,14 +655,15 @@ def run_node(
     if dw_export and log_fn:
         log_fn("info", f"DW 落库目录已就绪: 端口={dw_port} → {dw_table_dir}")
 
+    argv = resolve_argv(py, entry_point)
     if log_fn:
-        log_fn("info", f"启动组件进程: {py} {entry_point} (cwd={component_root})")
+        log_fn("info", f"启动组件进程: {' '.join(argv)} (cwd={component_root})")
     t0 = time.time()
 
     # start_new_session puts the component in its own process group so a cancel
     # can kill the entire subtree (not just the immediate python interpreter).
     proc = subprocess.Popen(
-        [py, entry_point],
+        argv,
         cwd=component_root,
         env=env,
         stdout=subprocess.PIPE,

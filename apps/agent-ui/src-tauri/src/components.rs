@@ -28,6 +28,16 @@ pub fn component_root_from_entry_point(entry_point: &str) -> Result<PathBuf, Str
     Ok(parent.to_path_buf())
 }
 
+/// Reserved prefix for platform-builtin entrypoints (e.g.
+/// "@global_components.script_runner"). Such an entrypoint is a keyword
+/// resolved by the Python worker at runtime, NOT a file inside the component
+/// checkout, so all repo-local file checks must be skipped for it.
+pub const BUILTIN_ENTRYPOINT_PREFIX: &str = "@";
+
+pub fn is_builtin_entry_point(entry_point: &str) -> bool {
+    entry_point.trim_start().starts_with(BUILTIN_ENTRYPOINT_PREFIX)
+}
+
 fn row_to_component(row: &rusqlite::Row) -> Result<Component, rusqlite::Error> {
     let input_schema_json: String = row.get("input_schema")?;
     let input_schema: Value =
@@ -281,11 +291,20 @@ pub fn delete_component(component_id: String) -> Result<(), String> {
 /// - requirements.txt
 /// - SKILL.md
 ///
+/// Builtin entrypoints ("@global_components.*") are platform keywords with no
+/// repo-local files; verification is a pass-through — the Python worker owns
+/// the keyword registry and fails at runtime on unknown ones.
+///
 /// (`component.json` was removed as a required file on 2026-07-11: its contents
 /// were never read at runtime and it drifted from the database contract.)
 #[cfg_attr(feature = "gui", tauri::command)]
 pub fn verify_component(component_id: String) -> Result<Vec<String>, String> {
     let component = get_component(component_id)?;
+
+    if is_builtin_entry_point(&component.entry_point) {
+        return Ok(Vec::new());
+    }
+
     let root = component_root_from_entry_point(&component.entry_point)?;
     let mut missing = Vec::new();
 
@@ -408,6 +427,24 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // A builtin entrypoint is a reserved keyword starting with "@"; leading
+    // whitespace from UI input must be tolerated.
+    #[test]
+    fn test_is_builtin_entry_point() {
+        assert!(is_builtin_entry_point("@global_components.script_runner"));
+        assert!(is_builtin_entry_point("  @global_components.script_runner"));
+        assert!(is_builtin_entry_point("\t@global_components.script_runner\n"));
+        assert!(is_builtin_entry_point("@anything"));
+
+        // Repo-local paths — including paths that merely CONTAIN an "@" — are
+        // not builtin keywords; the prefix has to be the first non-space char.
+        assert!(!is_builtin_entry_point("run.py"));
+        assert!(!is_builtin_entry_point(" subdir/run.py"));
+        assert!(!is_builtin_entry_point("a@b/run.py"));
+        assert!(!is_builtin_entry_point(""));
+        assert!(!is_builtin_entry_point("   "));
+    }
+
     // The git columns are the configuration truth-source: a round-trip through
     // the DB must preserve them.
     #[test]
@@ -448,6 +485,56 @@ mod tests {
         let r = get_component("c-global-registered".to_string()).expect("get registered");
         assert!(!g.global, "generic component must be global=false");
         assert!(r.global, "registered component must be global=true");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    // A component whose entry_point is a builtin keyword needs NO repo-local
+    // files: verification must short-circuit to Ok([]) even when nothing
+    // exists on disk and the git checkout has never happened. A repo-local
+    // entry point must still go through the file-existence checks.
+    #[test]
+    fn test_verify_component_builtin_keyword_skips_file_checks() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let db_path = with_temp_db();
+
+        let mut builtin = sample_component("c-builtin-1");
+        builtin.git_url = String::new();
+        builtin.entry_point = "@global_components.script_runner".to_string();
+        insert_component(&builtin).expect("insert builtin");
+        let missing = verify_component("c-builtin-1".to_string())
+            .expect("builtin keyword must pass verification without any files");
+        assert!(missing.is_empty(), "builtin keyword must report no missing files");
+
+        // Leading whitespace is tolerated the same way as in the worker.
+        let mut padded = sample_component("c-builtin-2");
+        padded.entry_point = "  @global_components.script_runner".to_string();
+        insert_component(&padded).expect("insert padded builtin");
+        assert!(
+            verify_component("c-builtin-2".to_string())
+                .expect("padded builtin keyword must pass")
+                .is_empty()
+        );
+
+        // Control case: a repo-local entry point under a nonexistent directory
+        // must still report the missing required files (no blanket bypass).
+        let mut local = sample_component("c-local-1");
+        local.entry_point = "/tmp/agent-ui-nonexistent-verify-dir/run.py".to_string();
+        insert_component(&local).expect("insert local");
+        let missing_local =
+            verify_component("c-local-1".to_string()).expect("local entry returns missing list");
+        assert!(
+            missing_local.contains(&"run.py".to_string()),
+            "missing run.py must be reported, got: {missing_local:?}"
+        );
+        assert!(
+            missing_local.contains(&"requirements.txt".to_string()),
+            "missing requirements.txt must be reported, got: {missing_local:?}"
+        );
+        assert!(
+            missing_local.contains(&"SKILL.md".to_string()),
+            "missing SKILL.md must be reported, got: {missing_local:?}"
+        );
 
         let _ = std::fs::remove_file(&db_path);
     }
