@@ -10,20 +10,21 @@
 业务协议
 --------
 
-模块中定义一个可被 ``(params, ctx)`` 两个位置参数构造的类，默认类名 ``Job``
-（可通过节点参数 ``script.class`` 覆盖），并实现无参 ``run()`` 方法::
+模块中定义一个**不写带参 ``__init__``** 的任务类，类名由节点参数
+``script.class`` 显式指定；类里实现一个 ``run`` 方法，形参决定平台怎么调::
 
-    from global_components.script_runner import ScriptJob
+    class SyncTask:
+        def run(self, params):
+            value = params["some_param"]
 
-    class Job(ScriptJob):
-        def run(self):
-            value = self.params["some_param"]
-            self.log.info("running")
+    class LoggingTask:
+        def run(self, params, ctx):
+            ctx.log.info("running")
 
 节点参数（组件定义里固定这三个，不含任何业务字段）：
 
     script.module   必填  业务模块的 import 路径，如 "jobs.daily_job"
-    script.class    选填  任务类名，默认 "Job"
+    script.class    必填  任务类名，如 "SyncTask"
     args            选填  命令行风格的任务参数文本，如
                           '--date 2026-01-01 --mode=full --dry-run'
 
@@ -35,7 +36,6 @@ args 语法：``--键 值`` / ``--键=值``（值为字符串），``--标志``�
 下游自动 skip）。
 """
 
-from .base import ScriptJob
 from .context import RunContext
 
-__all__ = ["ScriptJob", "RunContext"]
+__all__ = ["RunContext"]

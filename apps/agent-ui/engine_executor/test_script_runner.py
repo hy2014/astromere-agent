@@ -8,22 +8,23 @@ Covers:
   2. `_parse_args`: argv-style node args (`--k v`, `--k=v`, `--flag`, quoted
      values, repeats, multiline) -> named dict; positional tokens / short
      options / empty keys / unclosed quotes rejected; dict passthrough.
-  3. core.main status-only protocol, in-process: success with a ScriptJob
-     subclass and the default class name, duck-typed class with a custom name,
-     whitespace trimming, no params, run() return values deliberately ignored,
-     args expanded into params while routing/container/other top-level keys
-     never reach the job, every protocol violation (missing/blank/wrong-typed
-     routing params, bad args, import failure, missing class with a hint,
-     non-class target, bad constructor, missing run(), business exception
-     keeping its traceback), malformed input (bad JSON / top-level non-object
-     / missing env / unreadable file), the fixed exec_status payload (ok /
-     error), missing output env not affecting the exit code, and atomic
-     writes.
+  3. core.main status-only protocol, in-process: task classes without a custom
+     ``__init__``, ``run(self, params)`` and ``run(self, params, ctx)``
+     dispatched by signature inspection, explicit ``script.class`` routing
+     (including multiple classes in one module), whitespace trimming, no
+     params, run() return values deliberately ignored, args expanded into
+     params while routing/container/other top-level keys never reach the task,
+     every protocol violation (missing/blank/wrong-typed routing params, bad
+     args, import failure, missing class with a hint, non-class target,
+     parameterized constructor, constructor raising, missing run(), bad run
+     signatures, business exception keeping its traceback), malformed input
+     (bad JSON / top-level non-object / missing env / unreadable file), the
+     fixed exec_status payload (ok / error), missing output env not affecting
+     the exit code, and atomic writes.
   4. RunContext: env snapshot, stderr logging.
-  5. ScriptJob base: params/ctx storage, log forwarding, abstract run.
-  6. End-to-end through runner.run_node: a business repo containing only a
-     task class runs via the ``@global_components.script_runner`` keyword;
-     the task manages its own file paths; success and failure paths.
+  5. End-to-end through runner.run_node: a business repo containing only task
+     classes runs via the ``@global_components.script_runner`` keyword; the
+     task manages its own file paths; success and failure paths.
 
 All examples use generic names only — the platform must stay ignorant of any
 specific business project.
@@ -46,7 +47,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "sdk"))
 
 import runner  # noqa: E402
-from global_components.script_runner import RunContext, ScriptJob  # noqa: E402
+from global_components.script_runner import RunContext  # noqa: E402
 from global_components.script_runner import core as sr_core  # noqa: E402
 
 ENV_KEYS = (
@@ -58,106 +59,131 @@ ENV_KEYS = (
 )
 
 # --- Generic business-module sources (no project-specific information) ---
-# Jobs cannot return data anymore (status-only component), so test jobs expose
-# what they received by dumping params to the probe file named by $SR_PROBE.
+# Tasks cannot return data anymore (status-only component), so probe tasks
+# expose what they received by dumping params to the file named by $SR_PROBE.
 
-PROBE_TEMPLATE = """
+PARAMS_PROBE_JOB = """
 import json
 import os
 
-{base_import}
 
-class {class_name}({base_class}):
-    def run(self):
+class ParamsProbeTask:
+    def run(self, params):
         probe = os.environ.get("SR_PROBE")
         if probe:
             with open(probe, "w", encoding="utf-8") as f:
-                json.dump(dict(sorted(self.params.items())), f)
-        {extra_body}
+                json.dump(dict(sorted(params.items())), f)
 """
 
-SUBCLASS_PROBE_JOB = PROBE_TEMPLATE.format(
-    base_import="from global_components.script_runner import ScriptJob",
-    class_name="Job",
-    base_class="ScriptJob",
-    extra_body="self.log.info('probe ok')",
-)
-
-DUCK_PROBE_JOB = """
+CTX_PROBE_JOB = """
 import json
 import os
 
 
-class CustomTask:
-    def __init__(self, params, ctx):
-        self.params = params
-        self.ctx = ctx
-
-    def run(self):
+class CtxProbeTask:
+    def run(self, params, ctx):
+        ctx.log.info("ctx marker present")
         probe = os.environ.get("SR_PROBE")
         if probe:
             with open(probe, "w", encoding="utf-8") as f:
-                json.dump(dict(sorted(self.params.items())), f)
+                json.dump(
+                    {
+                        "params": dict(sorted(params.items())),
+                        "ctx_type": type(ctx).__name__,
+                    },
+                    f,
+                )
+"""
+
+TWO_TASKS_ONE_MODULE = """
+class FullTask:
+    def run(self, params):
+        pass
+
+
+class IncrementalTask:
+    def run(self, params, ctx):
+        pass
 """
 
 OK_JOB = """
-class Job:
-    def __init__(self, params, ctx):
-        pass
-
-    def run(self):
+class SimpleTask:
+    def run(self, params):
         return None
 """
 
 RETURN_VALUE_IGNORED_JOB = """
-class Job:
-    def __init__(self, params, ctx):
-        pass
-
-    def run(self):
+class SimpleTask:
+    def run(self, params):
         # The component ignores return values: this must still succeed.
         return {"anything": ["unexpected"], "n": 1}
 """
 
-BAD_CONSTRUCTOR_JOB = """
-class Job:
-    def __init__(self):
-        pass
+RUN_WITH_DEFAULT_CTX = """
+class DefaultCtxTask:
+    def run(self, params, optional_ctx=None):
+        # Two declared parameters => the platform always passes ctx
+        # positionally, so the default never matters but must stay callable.
+        if optional_ctx is None or not hasattr(optional_ctx, "log"):
+            raise AssertionError("ctx should have been passed")
+"""
 
-    def run(self):
+BAD_CONSTRUCTOR_JOB = """
+class TaskWithCtor:
+    def __init__(self, required):
+        self.required = required
+
+    def run(self, params):
         pass
 """
 
 RAISING_CONSTRUCTOR_JOB = """
-class Job:
-    def __init__(self, params, ctx):
+class TaskRaisingCtor:
+    def __init__(self):
         raise ValueError("constructor boom")
 
-    def run(self):
+    def run(self, params):
         pass
 """
 
 NO_RUN_JOB = """
-class Job:
-    def __init__(self, params, ctx):
+class TaskWithoutRun:
+    pass
+"""
+
+RUN_ZERO_PARAMS = """
+class TaskRunNoParams:
+    def run(self):
+        pass
+"""
+
+RUN_THREE_PARAMS = """
+class TaskRunThreeParams:
+    def run(self, params, ctx, extra):
+        pass
+"""
+
+RUN_VARARGS = """
+class TaskRunVarArgs:
+    def run(self, params, *extra):
+        pass
+"""
+
+RUN_KWARGS = """
+class TaskRunKwArgs:
+    def run(self, params, **extra):
         pass
 """
 
 BUSINESS_EXCEPTION_JOB = """
-class Job:
-    def __init__(self, params, ctx):
-        pass
-
-    def run(self):
+class FailingTask:
+    def run(self, params):
         raise RuntimeError("business boom")
 """
 
 OTHER_CLASS_ONLY = """
 class Other:
-    def __init__(self, params, ctx):
-        pass
-
-    def run(self):
+    def run(self, params):
         pass
 
 
@@ -165,7 +191,7 @@ not_a_class = 42
 """
 
 NOT_A_CLASS_JOB = """
-Job = 42
+SimpleTask = 42
 """
 
 IMPORT_TIME_FAILURE = """
@@ -176,28 +202,21 @@ E2E_JOB = """
 import csv
 import os
 
-from global_components.script_runner import ScriptJob
 
-
-class Job(ScriptJob):
-    def run(self):
+class BuildReport:
+    def run(self, params):
         # The component has no file ports: the task owns its output path,
         # received like any other parameter (including creating directories).
-        outfile = self.params["outfile"]
+        outfile = params["outfile"]
         os.makedirs(os.path.dirname(outfile), exist_ok=True)
         with open(outfile, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["date", "value"])
-            writer.writerow([self.params["date"], 1])
-        self.log.info("report written")
-"""
+            writer.writerow([params["date"], 1])
 
-E2E_FAILING_JOB = """
-class Job:
-    def __init__(self, params, ctx):
-        pass
 
-    def run(self):
+class FailingTask:
+    def run(self, params):
         raise RuntimeError("business boom")
 """
 
@@ -313,7 +332,7 @@ class ParseArgsTests(unittest.TestCase):
 
     def test_values_are_always_strings(self):
         # No smart type coercion: versions / leading-zero ids / dates must
-        # survive verbatim; jobs do their own int()/bool().
+        # survive verbatim; tasks do their own int()/bool().
         parsed = sr_core._parse_args("--limit 100 --ratio 0.5 --zero 007")
         self.assertEqual(parsed, {"limit": "100", "ratio": "0.5", "zero": "007"})
         self.assertIsInstance(parsed["limit"], str)
@@ -442,7 +461,7 @@ class _Sandbox(unittest.TestCase):
             os.environ.pop("AGENT_UI_OUTPUT_PATH", None)
         os.environ["AGENT_UI_COMPONENT_ROOT"] = self.biz_root
         os.environ.pop("AGENT_UI_OUTPUT_DATA_DIRS", None)
-        # Probe target for jobs that record the params they were constructed with.
+        # Probe target for tasks that record the params they received.
         os.environ["SR_PROBE"] = self.probe_path
         return input_path, output_path
 
@@ -470,10 +489,14 @@ class _Sandbox(unittest.TestCase):
 class ScriptRunnerCoreTests(_Sandbox):
     # ---- success paths ----
 
-    def test_success_subclass_default_class_name(self):
-        module = self._write_module(SUBCLASS_PROBE_JOB)
+    def test_success_run_with_params_only(self):
+        module = self._write_module(PARAMS_PROBE_JOB)
         _, out_path = self._wire_env(
-            {"script.module": module, "args": "--message hello --count 3"}
+            {
+                "script.module": module,
+                "script.class": "ParamsProbeTask",
+                "args": "--message hello --count 3",
+            }
         )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
@@ -482,23 +505,41 @@ class ScriptRunnerCoreTests(_Sandbox):
             self._read_probe(), {"message": "hello", "count": "3"}
         )
 
-    def test_success_duck_typed_custom_class(self):
-        module = self._write_module(DUCK_PROBE_JOB)
+    def test_success_run_with_params_and_ctx(self):
+        module = self._write_module(CTX_PROBE_JOB)
         _, out_path = self._wire_env(
-            {"script.module": module, "script.class": "CustomTask",
-             "args": "--value 42"}
+            {
+                "script.module": module,
+                "script.class": "CtxProbeTask",
+                "args": "--value 42",
+            }
         )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(self._read_output(out_path), OK_STATUS)
-        self.assertEqual(self._read_probe(), {"value": "42"})
+        # ctx was actually injected (not None), and the task could log.
+        self.assertEqual(
+            self._read_probe(),
+            {"params": {"value": "42"}, "ctx_type": "RunContext"},
+        )
+        self.assertIn("ctx marker present", err)
+
+    def test_explicit_class_selects_between_two_tasks(self):
+        module = self._write_module(TWO_TASKS_ONE_MODULE)
+        for class_name in ("FullTask", "IncrementalTask"):
+            _, out_path = self._wire_env(
+                {"script.module": module, "script.class": class_name}
+            )
+            rc, err = self._run_main()
+            self.assertEqual(rc, 0, msg=f"{class_name}: {err}")
+            self.assertEqual(self._read_output(out_path), OK_STATUS)
 
     def test_module_and_class_names_are_trimmed(self):
-        module = self._write_module(DUCK_PROBE_JOB, file_name="daily_job.py")
+        module = self._write_module(PARAMS_PROBE_JOB, file_name="daily_job.py")
         _, out_path = self._wire_env(
             {
                 "script.module": f"  {module}  ",
-                "script.class": "  CustomTask\n",
+                "script.class": "  ParamsProbeTask\n",
                 "args": "--value ok",
             }
         )
@@ -509,7 +550,9 @@ class ScriptRunnerCoreTests(_Sandbox):
 
     def test_success_without_any_params(self):
         module = self._write_module(OK_JOB)
-        _, out_path = self._wire_env({"script.module": module})
+        _, out_path = self._wire_env(
+            {"script.module": module, "script.class": "SimpleTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(self._read_output(out_path), OK_STATUS)
@@ -519,16 +562,28 @@ class ScriptRunnerCoreTests(_Sandbox):
         # Status-only contract: run() must not need to return anything, and a
         # stray non-None value must not be treated as an error either.
         module = self._write_module(RETURN_VALUE_IGNORED_JOB)
-        _, out_path = self._wire_env({"script.module": module})
+        _, out_path = self._wire_env(
+            {"script.module": module, "script.class": "SimpleTask"}
+        )
+        rc, err = self._run_main()
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(self._read_output(out_path), OK_STATUS)
+
+    def test_run_with_default_second_param_still_gets_ctx(self):
+        module = self._write_module(RUN_WITH_DEFAULT_CTX)
+        _, out_path = self._wire_env(
+            {"script.module": module, "script.class": "DefaultCtxTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(self._read_output(out_path), OK_STATUS)
 
     def test_args_expanded_into_params(self):
-        module = self._write_module(SUBCLASS_PROBE_JOB)
+        module = self._write_module(PARAMS_PROBE_JOB)
         _, out_path = self._wire_env(
             {
                 "script.module": module,
+                "script.class": "ParamsProbeTask",
                 "args": "--date 2026-01-01 --mode=full --dry-run --msg \"hi there\"",
             }
         )
@@ -541,26 +596,28 @@ class ScriptRunnerCoreTests(_Sandbox):
         )
         self.assertEqual(self._read_output(out_path), OK_STATUS)
 
-    def test_routing_and_container_keys_never_reach_job(self):
-        module = self._write_module(SUBCLASS_PROBE_JOB)
+    def test_routing_and_container_keys_never_reach_task(self):
+        module = self._write_module(PARAMS_PROBE_JOB)
         _, out_path = self._wire_env(
             {
                 "script.module": module,
-                "script.class": "Job",
+                "script.class": "ParamsProbeTask",
                 "args": "--date 2026-01-01",
             }
         )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(self._read_probe(), {"date": "2026-01-01"})
+        self.assertEqual(self._read_output(out_path), OK_STATUS)
 
     def test_other_top_level_keys_are_not_inputs(self):
         # Status-only component has no data input ports: stray top-level keys
         # (e.g. leftover edge payloads) must NOT be smuggled into params.
-        module = self._write_module(SUBCLASS_PROBE_JOB)
+        module = self._write_module(PARAMS_PROBE_JOB)
         _, _ = self._wire_env(
             {
                 "script.module": module,
+                "script.class": "ParamsProbeTask",
                 "args": "--date 2026-01-01",
                 "upstream_file": "/data/input.csv",
                 "nested": {"a": 1},
@@ -571,9 +628,15 @@ class ScriptRunnerCoreTests(_Sandbox):
         self.assertEqual(self._read_probe(), {"date": "2026-01-01"})
 
     def test_missing_or_blank_args_means_empty_params(self):
-        module = self._write_module(SUBCLASS_PROBE_JOB)
+        module = self._write_module(PARAMS_PROBE_JOB)
         for args in (None, "", "   \n"):
-            self._wire_env({"script.module": module, "args": args})
+            self._wire_env(
+                {
+                    "script.module": module,
+                    "script.class": "ParamsProbeTask",
+                    "args": args,
+                }
+            )
             rc, err = self._run_main()
             self.assertEqual(rc, 0, msg=err)
             self.assertEqual(self._read_probe(), {})
@@ -581,7 +644,11 @@ class ScriptRunnerCoreTests(_Sandbox):
     def test_bad_args_fails_as_config_error(self):
         module = self._write_module(OK_JOB)
         _, out_path = self._wire_env(
-            {"script.module": module, "args": "positional-token"}
+            {
+                "script.module": module,
+                "script.class": "SimpleTask",
+                "args": "positional-token",
+            }
         )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
@@ -593,7 +660,9 @@ class ScriptRunnerCoreTests(_Sandbox):
 
     def test_output_written_atomically_with_no_tmp_left(self):
         module = self._write_module(OK_JOB)
-        _, out_path = self._wire_env({"script.module": module})
+        _, out_path = self._wire_env(
+            {"script.module": module, "script.class": "SimpleTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
         parent = os.path.dirname(out_path)
@@ -602,7 +671,9 @@ class ScriptRunnerCoreTests(_Sandbox):
     def test_component_root_added_to_sys_path(self):
         module = self._write_module(OK_JOB, file_name="daily_job.py")
         pkg = module.split(".")[0]
-        self._wire_env({"script.module": f"{pkg}.daily_job"})
+        self._wire_env(
+            {"script.module": f"{pkg}.daily_job", "script.class": "SimpleTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
         self.assertIn(self.biz_root, sys.path)
@@ -610,33 +681,48 @@ class ScriptRunnerCoreTests(_Sandbox):
     # ---- config/parameter errors ----
 
     def test_missing_module_param(self):
-        _, _ = self._wire_env({"script.class": "Job"})
+        _, _ = self._wire_env({"script.class": "SimpleTask"})
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("script.module", err)
 
     def test_blank_module_param(self):
-        _, _ = self._wire_env({"script.module": "   "})
+        _, _ = self._wire_env(
+            {"script.module": "   ", "script.class": "SimpleTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("script.module", err)
 
     def test_non_string_module_param(self):
-        _, _ = self._wire_env({"script.module": 123})
+        _, _ = self._wire_env(
+            {"script.module": 123, "script.class": "SimpleTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("script.module", err)
 
-    def test_non_string_class_param(self):
-        module = self._write_module(DUCK_PROBE_JOB)
-        _, _ = self._wire_env({"script.module": module, "script.class": 7})
+    def test_missing_class_param(self):
+        # script.class is mandatory: there is no implicit default class name.
+        _, _ = self._wire_env({"script.module": "some.module"})
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("script.class", err)
 
     def test_blank_class_param(self):
-        module = self._write_module(DUCK_PROBE_JOB)
-        _, _ = self._wire_env({"script.module": module, "script.class": " "})
+        module = self._write_module(PARAMS_PROBE_JOB)
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": " "}
+        )
+        rc, err = self._run_main()
+        self.assertEqual(rc, 1)
+        self.assertIn("script.class", err)
+
+    def test_non_string_class_param(self):
+        module = self._write_module(PARAMS_PROBE_JOB)
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": 7}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("script.class", err)
@@ -644,7 +730,12 @@ class ScriptRunnerCoreTests(_Sandbox):
     # ---- module/class resolution ----
 
     def test_module_not_found(self):
-        _, out_path = self._wire_env({"script.module": "no_such_pkg_xyz.missing"})
+        _, out_path = self._wire_env(
+            {
+                "script.module": "no_such_pkg_xyz.missing",
+                "script.class": "SimpleTask",
+            }
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("导入业务模块失败", err)
@@ -655,7 +746,9 @@ class ScriptRunnerCoreTests(_Sandbox):
 
     def test_import_time_exception_is_wrapped(self):
         module = self._write_module(IMPORT_TIME_FAILURE)
-        _, _ = self._wire_env({"script.module": module})
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "SimpleTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("导入业务模块失败", err)
@@ -663,7 +756,9 @@ class ScriptRunnerCoreTests(_Sandbox):
 
     def test_missing_class_lists_defined_classes(self):
         module = self._write_module(OTHER_CLASS_ONLY)
-        _, _ = self._wire_env({"script.module": module, "script.class": "Job"})
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "SimpleTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("找不到类", err)
@@ -671,45 +766,95 @@ class ScriptRunnerCoreTests(_Sandbox):
 
     def test_module_without_classes_reports_empty_hint(self):
         module = self._write_module("value = 1\n")
-        _, _ = self._wire_env({"script.module": module})
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "Anything"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("模块内没有定义任何类", err)
 
     def test_target_is_not_a_class(self):
         module = self._write_module(NOT_A_CLASS_JOB)
-        _, _ = self._wire_env({"script.module": module})
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "SimpleTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("不是类", err)
 
-    # ---- instantiation / execution ----
+    # ---- instantiation / run signature ----
 
-    def test_constructor_signature_wrong(self):
+    def test_constructor_with_params_rejected(self):
         module = self._write_module(BAD_CONSTRUCTOR_JOB)
-        _, _ = self._wire_env({"script.module": module})
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "TaskWithCtor"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
-        self.assertIn("(params, ctx)", err)
+        self.assertIn("无参实例化", err)
+        self.assertIn("__init__", err)
 
     def test_constructor_other_exception_is_wrapped(self):
         module = self._write_module(RAISING_CONSTRUCTOR_JOB)
-        _, _ = self._wire_env({"script.module": module})
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "TaskRaisingCtor"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
-        self.assertIn("构造失败", err)
+        self.assertIn("实例化失败", err)
         self.assertIn("constructor boom", err)
 
     def test_missing_run_method(self):
         module = self._write_module(NO_RUN_JOB)
-        _, _ = self._wire_env({"script.module": module})
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "TaskWithoutRun"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("run()", err)
 
+    def test_run_without_params_rejected(self):
+        module = self._write_module(RUN_ZERO_PARAMS)
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "TaskRunNoParams"}
+        )
+        rc, err = self._run_main()
+        self.assertEqual(rc, 1)
+        self.assertIn("run(self, params)", err)
+
+    def test_run_with_three_params_rejected(self):
+        module = self._write_module(RUN_THREE_PARAMS)
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "TaskRunThreeParams"}
+        )
+        rc, err = self._run_main()
+        self.assertEqual(rc, 1)
+        self.assertIn("run(self, params)", err)
+        self.assertIn("3 个位置形参", err)
+
+    def test_run_with_varargs_rejected(self):
+        module = self._write_module(RUN_VARARGS)
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "TaskRunVarArgs"}
+        )
+        rc, err = self._run_main()
+        self.assertEqual(rc, 1)
+        self.assertIn("*args/**kwargs", err)
+
+    def test_run_with_kwargs_rejected(self):
+        module = self._write_module(RUN_KWARGS)
+        _, _ = self._wire_env(
+            {"script.module": module, "script.class": "TaskRunKwArgs"}
+        )
+        rc, err = self._run_main()
+        self.assertEqual(rc, 1)
+        self.assertIn("*args/**kwargs", err)
+
     def test_business_exception_keeps_full_traceback_and_error_status(self):
         module = self._write_module(BUSINESS_EXCEPTION_JOB)
-        _, out_path = self._wire_env({"script.module": module})
+        _, out_path = self._wire_env(
+            {"script.module": module, "script.class": "FailingTask"}
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         # Business failures surface WITH a traceback, not flattened into a
@@ -757,7 +902,10 @@ class ScriptRunnerCoreTests(_Sandbox):
         # Success is decided by the exit code, not the status file: without
         # AGENT_UI_OUTPUT_PATH the run still succeeds, status write is skipped.
         module = self._write_module(OK_JOB)
-        self._wire_env({"script.module": module}, with_output_env=False)
+        self._wire_env(
+            {"script.module": module, "script.class": "SimpleTask"},
+            with_output_env=False,
+        )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(err, "")
@@ -799,28 +947,6 @@ class RunContextTests(unittest.TestCase):
         )
 
 
-class ScriptJobBaseTests(unittest.TestCase):
-    class _StubCtx:
-        def __init__(self):
-            self.log = "LOGGER"
-
-    def test_stores_params_and_ctx(self):
-        params = {"a": "1"}
-        ctx = self._StubCtx()
-        job = ScriptJob(params, ctx)
-        self.assertIs(job.params, params)
-        self.assertIs(job.ctx, ctx)
-
-    def test_forwards_log(self):
-        job = ScriptJob({}, self._StubCtx())
-        self.assertIs(job.log, "LOGGER")
-
-    def test_run_is_abstract(self):
-        job = ScriptJob({}, self._StubCtx())
-        with self.assertRaises(NotImplementedError):
-            job.run()
-
-
 class ScriptRunnerEndToEndTests(unittest.TestCase):
     """Full path through runner.run_node with the reserved keyword: the
     business repo contains only task classes, no component boilerplate."""
@@ -837,10 +963,10 @@ class ScriptRunnerEndToEndTests(unittest.TestCase):
         os.makedirs(jobs_dir)
         open(os.path.join(root, "requirements.txt"), "w").close()
         open(os.path.join(jobs_dir, "__init__.py"), "w").close()
+        # Both task classes live in one module; script.class picks which one
+        # the node executes.
         with open(os.path.join(jobs_dir, "daily_job.py"), "w") as f:
             f.write(E2E_JOB)
-        with open(os.path.join(jobs_dir, "failing_job.py"), "w") as f:
-            f.write(E2E_FAILING_JOB)
         return root
 
     def test_run_node_success_writes_ok_status(self):
@@ -852,6 +978,7 @@ class ScriptRunnerEndToEndTests(unittest.TestCase):
             "@global_components.script_runner",
             {
                 "script.module": "jobs.daily_job",
+                "script.class": "BuildReport",
                 "args": f"--date 2026-01-01 --outfile {outfile}",
             },
             work_dir,
@@ -868,12 +995,15 @@ class ScriptRunnerEndToEndTests(unittest.TestCase):
         with open(outfile, newline="") as f:
             self.assertIn("2026-01-01,1", f.read())
 
-    def test_run_node_business_exception_fails_node(self):
+    def test_run_node_class_routing_to_failing_task(self):
         root = self._make_repo()
         result = runner.run_node(
             root,
             "@global_components.script_runner",
-            {"script.module": "jobs.failing_job"},
+            {
+                "script.module": "jobs.daily_job",
+                "script.class": "FailingTask",
+            },
             os.path.join(self.tmp, "work_fail"),
             python_path=sys.executable,
             output_ports=["exec_status"],
@@ -892,7 +1022,10 @@ class ScriptRunnerEndToEndTests(unittest.TestCase):
             runner.run_node(
                 root,
                 "@no.such.builtin",
-                {"script.module": "jobs.daily_job"},
+                {
+                    "script.module": "jobs.daily_job",
+                    "script.class": "BuildReport",
+                },
                 os.path.join(self.tmp, "work2"),
                 python_path=sys.executable,
             )

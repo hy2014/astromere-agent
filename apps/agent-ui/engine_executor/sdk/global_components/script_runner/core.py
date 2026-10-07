@@ -1,8 +1,8 @@
 """script_runner 核心执行逻辑。
 
-流程：读平台注入的 input.json → 按 ``script.module`` / ``script.class``
-定位业务任务类 → 把节点 ``args`` 解析成参数字典，用 ``(params, ctx)``
-实例化任务类并调用其无参 ``run()``。
+流程：读平台注入的 input.json → 按必填的 ``script.module`` /
+``script.class`` 定位业务任务类 → 无参实例化 → 把节点 ``args`` 解析成
+参数字典，按 ``run`` 的签名调用 ``run(params)`` 或 ``run(params, ctx)``。
 
 成败口径与执行 bash 脚本一致：``run()`` 正常结束即成功，抛出异常即失败
 （进程退出码 1，DAG 下游自动 skip）。组件没有数据输入输出端口，只固定写
@@ -26,13 +26,11 @@ from .context import RunContext
 __all__ = [
     "main",
     "ScriptRunnerError",
-    "DEFAULT_CLASS_NAME",
     "ROUTING_KEYS",
     "ARGS_KEY",
     "STATUS_PORT",
 ]
 
-DEFAULT_CLASS_NAME = "Job"
 ROUTING_KEYS = ("script.module", "script.class")
 # Node param carrying the task's own arguments. It is a container (not a
 # business value itself): parsed by `_parse_args` into the task params, so the
@@ -199,22 +197,58 @@ def _resolve_job_class(module_name: str, class_name: str):
     return cls
 
 
-def _instantiate_job(cls, params: dict, ctx: RunContext):
+def _make_job_instance(cls):
+    """无参实例化任务类。
+
+    任务类不允许定义带参 ``__init__``——没有需要跨方法持有的状态，参数统一
+    由 ``run(params)`` 接收。
+    """
     try:
-        job = cls(params, ctx)
+        return cls()
     except TypeError as e:
         raise ScriptRunnerError(
-            f"任务类 {cls.__name__} 必须能用 (params, ctx) 两个位置参数构造: {e}"
+            f"任务类 {cls.__name__} 必须能无参实例化：不要定义带参数的 __init__，"
+            f"任务参数统一由 run(params) 接收: {e}"
         ) from e
     except Exception as e:
         raise ScriptRunnerError(
-            f"任务类 {cls.__name__} 构造失败: {type(e).__name__}: {e}"
+            f"任务类 {cls.__name__} 实例化失败: {type(e).__name__}: {e}"
         ) from e
 
+
+def _bind_run(job, cls):
+    """找到 ``run`` 方法并按其形参决定调用方式。
+
+    绑定后的方法已不含 ``self``：
+      - 1 个形参 → ``run(params)``
+      - 2 个形参 → ``run(params, ctx)``
+    其他形态（0 个、3 个、``*args``/``**kwargs``）一律报协议错误。
+    """
     run = getattr(job, "run", None)
     if not callable(run):
         raise ScriptRunnerError(f"任务类 {cls.__name__} 没有可调用的 run() 方法")
-    return job
+    try:
+        sig = inspect.signature(run)
+    except (TypeError, ValueError) as e:
+        raise ScriptRunnerError(
+            f"无法识别任务类 {cls.__name__}.run 的方法签名: {e}"
+        ) from e
+
+    ordinary = [
+        p for p in sig.parameters.values()
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    has_var = any(
+        p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+        for p in sig.parameters.values()
+    )
+    if len(ordinary) not in (1, 2) or has_var:
+        suffix = "（不支持 *args/**kwargs）" if has_var else ""
+        raise ScriptRunnerError(
+            f"任务类 {cls.__name__}.run 签名必须是 run(self, params) 或 "
+            f"run(self, params, ctx)，实际有 {len(ordinary)} 个位置形参{suffix}"
+        )
+    return run, len(ordinary) == 2
 
 
 def _write_status(status: str, error: str = "") -> None:
@@ -247,9 +281,11 @@ def main() -> int:
             raise ScriptRunnerError(
                 "缺少节点参数 script.module（业务模块的 import 路径，如 'jobs.daily_job'）"
             )
-        class_name = raw_inputs.get("script.class", DEFAULT_CLASS_NAME)
+        class_name = raw_inputs.get("script.class")
         if not isinstance(class_name, str) or not class_name.strip():
-            raise ScriptRunnerError("节点参数 script.class 必须是非空字符串")
+            raise ScriptRunnerError(
+                "缺少节点参数 script.class（任务类名，如 SyncIndexConstituents）"
+            )
 
         # 本组件没有数据输入端口：任务参数只来自 args 文本；路由键不下发。
         params = _parse_args(raw_inputs.get(ARGS_KEY))
@@ -257,10 +293,14 @@ def main() -> int:
         _ensure_component_root_on_path()
         cls = _resolve_job_class(module_name.strip(), class_name.strip())
         ctx = RunContext()
-        job = _instantiate_job(cls, params, ctx)
+        job = _make_job_instance(cls)
+        run, with_ctx = _bind_run(job, cls)
 
         # 返回值刻意忽略：成败只看是否抛异常（与执行脚本看退出码同构）。
-        job.run()
+        if with_ctx:
+            run(params, ctx)
+        else:
+            run(params)
         _write_status("ok")
         return 0
 
