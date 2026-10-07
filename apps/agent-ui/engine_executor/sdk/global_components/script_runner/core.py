@@ -1,8 +1,12 @@
 """script_runner 核心执行逻辑。
 
 流程：读平台注入的 input.json → 按 ``script.module`` / ``script.class``
-定位业务任务类 → 用 ``(inputs, ctx)`` 实例化并调用其无参 ``run()`` →
-把返回的端口字典原子写入 output.json。
+定位业务任务类 → 把节点 ``args`` 解析成参数字典，用 ``(params, ctx)``
+实例化任务类并调用其无参 ``run()``。
+
+成败口径与执行 bash 脚本一致：``run()`` 正常结束即成功，抛出异常即失败
+（进程退出码 1，DAG 下游自动 skip）。组件没有数据输入输出端口，只固定写
+一个 ``exec_status`` 状态端口供 DAG 连控制依赖边；任务要写文件自己管路径。
 
 任何协议违例抛 :class:`ScriptRunnerError`（简洁中文错误）；业务代码自身
 抛出的未知异常保留完整 traceback，便于排查。
@@ -13,17 +17,31 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
-import math
 import os
 import sys
 import traceback
 
 from .context import RunContext
 
-__all__ = ["main", "ScriptRunnerError", "DEFAULT_CLASS_NAME", "ROUTING_KEYS"]
+__all__ = [
+    "main",
+    "ScriptRunnerError",
+    "DEFAULT_CLASS_NAME",
+    "ROUTING_KEYS",
+    "ARGS_KEY",
+    "STATUS_PORT",
+]
 
 DEFAULT_CLASS_NAME = "Job"
 ROUTING_KEYS = ("script.module", "script.class")
+# Node param carrying the task's own arguments. It is a container (not a
+# business value itself): parsed by `_parse_args` into the task params, so the
+# key never reaches the job class.
+ARGS_KEY = "args"
+# Fixed status-only output port (mirrors the exec_bash component): carries
+# `{"status": "ok" | "error"}` and exists only to wire control-dependency
+# edges in the DAG. Node success itself is decided by the process exit code.
+STATUS_PORT = "exec_status"
 
 
 class ScriptRunnerError(Exception):
@@ -44,8 +62,105 @@ def _load_inputs() -> dict:
     except ValueError as e:
         raise ScriptRunnerError(f"输入文件不是合法 JSON {path}: {e}") from e
     if not isinstance(data, dict):
-        raise ScriptRunnerError("输入 JSON 顶层必须是对象 {参数/端口: 值}")
+        raise ScriptRunnerError("输入 JSON 顶层必须是对象 {参数: 值}")
     return data
+
+
+def _tokenize_args(text: str) -> list[tuple[str, bool]]:
+    """把 args 文本切成 ``(片段, 是否被引号包裹)`` 列表。
+
+    空白分词；单/双引号内的内容原样成组（保留空格、去掉引号字符）。
+    刻意不做任何 shell 展开，规则可预测。引号未闭合报配置错误。
+
+    保留「是否被引号包裹」是为了让 ``--opt "--flag-like"`` 能被识别为
+    带值参数——普通分词器会丢掉引号信息，把以 ``--`` 开头的值误判成标志。
+    """
+    tokens: list[tuple[str, bool]] = []
+    buf: list[str] = []
+    quoted = False
+    in_quote = False
+    quote_char = ""
+    for ch in text:
+        if in_quote:
+            if ch == quote_char:
+                in_quote = False
+            else:
+                buf.append(ch)
+        elif ch in ("'", '"'):
+            in_quote = True
+            quote_char = ch
+            quoted = True
+        elif ch.isspace():
+            if buf:
+                tokens.append(("".join(buf), quoted))
+                buf = []
+                quoted = False
+        else:
+            buf.append(ch)
+    if in_quote:
+        raise ScriptRunnerError("args 无法按命令行规则分词（引号未闭合）")
+    if buf:
+        tokens.append(("".join(buf), quoted))
+    return tokens
+
+
+def _parse_args(raw) -> dict:
+    """解析节点 ``args`` 文本为任务参数字典（argv 风格，刻意不猜值类型）。
+
+    语法：
+      - ``--key value`` 与 ``--key=value``：值一律为字符串
+      - ``--flag``（后面没有值片段）：布尔 ``True``
+      - 带空格或以 ``--`` 开头的值用引号包住：``--msg "hello world"``
+      - 同名重复，后者覆盖前者
+
+    不支持位置参数（裸片段）和 ``-x`` 短选项——它们映射不进命名字典，
+    遇到即报配置错误，不静默丢弃。
+    """
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        # 非 UI 调用方可直接给出结构化参数。
+        return raw
+    if not isinstance(raw, str):
+        raise ScriptRunnerError(
+            f"节点参数 args 必须是文本，实际类型 {type(raw).__name__}"
+        )
+    if not raw.strip():
+        return {}
+    tokens = _tokenize_args(raw)
+
+    parsed: dict = {}
+    i = 0
+    while i < len(tokens):
+        token, _ = tokens[i]
+        if token == "--" or not token.startswith("--"):
+            raise ScriptRunnerError(
+                f"args 含无法识别的片段 {token!r}：只支持 --键 值、--键=值、--标志，"
+                "不支持位置参数和 -x 短选项"
+            )
+        body = token[2:]
+        if not body.strip():
+            raise ScriptRunnerError("args 中存在空键名（单独的 --）")
+        if "=" in body:
+            key, value = body.split("=", 1)
+            key = key.strip()
+            if not key:
+                raise ScriptRunnerError(f"args 参数 {token!r} 的键名为空")
+            parsed[key] = value
+            i += 1
+            continue
+        key = body.strip()
+        # 下一个片段是值的条件：不以 -- 开头，**或**它被引号显式包裹
+        #（引号里写 --xxx 表示「这就是一个值」）。
+        if i + 1 < len(tokens):
+            nxt, nxt_quoted = tokens[i + 1]
+            if not nxt.startswith("--") or nxt_quoted:
+                parsed[key] = nxt
+                i += 2
+                continue
+        parsed[key] = True
+        i += 1
+    return parsed
 
 
 def _ensure_component_root_on_path() -> None:
@@ -84,12 +199,12 @@ def _resolve_job_class(module_name: str, class_name: str):
     return cls
 
 
-def _instantiate_job(cls, inputs: dict, ctx: RunContext):
+def _instantiate_job(cls, params: dict, ctx: RunContext):
     try:
-        job = cls(inputs, ctx)
+        job = cls(params, ctx)
     except TypeError as e:
         raise ScriptRunnerError(
-            f"任务类 {cls.__name__} 必须能用 (inputs, ctx) 两个位置参数构造: {e}"
+            f"任务类 {cls.__name__} 必须能用 (params, ctx) 两个位置参数构造: {e}"
         ) from e
     except Exception as e:
         raise ScriptRunnerError(
@@ -102,48 +217,24 @@ def _instantiate_job(cls, inputs: dict, ctx: RunContext):
     return job
 
 
-def _to_jsonable(value, path: str = "$"):
-    """把 run() 返回值规整为严格可 JSON 序列化的对象。
-
-    - 路径类型（pathlib）→ str（端口值的常规形态）
-    - dict 键统一为 str；list/tuple → list
-    - 拒绝 NaN/Infinity（合法 JSON 不允许）与其他不支持的类型，报错带定位路径
-    """
-    if value is None or isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        if math.isnan(value) or math.isinf(value):
-            raise ScriptRunnerError(f"输出在 {path} 处为 NaN/Infinity，不能序列化为 JSON")
-        return value
-    if isinstance(value, os.PathLike):
-        return os.fspath(value)
-    if isinstance(value, dict):
-        return {
-            str(key): _to_jsonable(item, f"{path}.{key}")
-            for key, item in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [_to_jsonable(item, f"{path}[{i}]") for i, item in enumerate(value)]
-    raise ScriptRunnerError(
-        f"输出在 {path} 处含不可 JSON 序列化的类型 {type(value).__name__}，"
-        f"请先转换为基础类型/str 路径/dict/list"
-    )
-
-
-def _write_output(payload: dict) -> None:
+def _write_status(status: str, error: str = "") -> None:
+    """回写固定状态端口。best effort：节点成败只看退出码，写状态文件失败
+    （如平台没注入输出路径）绝不能反过来影响判定。"""
     out_path = os.environ.get("AGENT_UI_OUTPUT_PATH")
     if not out_path:
-        raise ScriptRunnerError("未注入 AGENT_UI_OUTPUT_PATH，无法回写输出")
-    parent = os.path.dirname(os.path.abspath(out_path))
-    os.makedirs(parent, exist_ok=True)
-    tmp = f"{out_path}.tmp.{os.getpid()}"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, out_path)
+        return
+    payload = {STATUS_PORT: {"status": status}}
+    if error:
+        payload[STATUS_PORT]["error"] = error
+    try:
+        parent = os.path.dirname(os.path.abspath(out_path))
+        os.makedirs(parent, exist_ok=True)
+        tmp = f"{out_path}.tmp.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, out_path)
+    except OSError:
+        pass
 
 
 def main() -> int:
@@ -160,35 +251,27 @@ def main() -> int:
         if not isinstance(class_name, str) or not class_name.strip():
             raise ScriptRunnerError("节点参数 script.class 必须是非空字符串")
 
-        # 平台路由参数不下发给业务任务；其余 params 与上游产物平铺为业务输入。
-        inputs = {k: v for k, v in raw_inputs.items() if k not in ROUTING_KEYS}
+        # 本组件没有数据输入端口：任务参数只来自 args 文本；路由键不下发。
+        params = _parse_args(raw_inputs.get(ARGS_KEY))
 
         _ensure_component_root_on_path()
         cls = _resolve_job_class(module_name.strip(), class_name.strip())
         ctx = RunContext()
-        job = _instantiate_job(cls, inputs, ctx)
+        job = _instantiate_job(cls, params, ctx)
 
-        result = job.run()
-        if result is None:
-            result = {}
-        if not isinstance(result, dict):
-            raise ScriptRunnerError(
-                f"run() 必须返回 dict（{{端口名: 端口值}}）或 None，"
-                f"实际返回 {type(result).__name__}"
-            )
-        for key in result:
-            if not isinstance(key, str) or not key:
-                raise ScriptRunnerError("输出字典的键必须是非空字符串端口名")
-
-        _write_output(_to_jsonable(result))
+        # 返回值刻意忽略：成败只看是否抛异常（与执行脚本看退出码同构）。
+        job.run()
+        _write_status("ok")
         return 0
 
     except ScriptRunnerError as e:
         # 协议/配置错误：一行明确原因，不需要 traceback 噪音。
         print(f"[script-runner] 配置/协议错误: {e}", file=sys.stderr)
+        _write_status("error", str(e))
         return 1
-    except Exception:
+    except Exception as e:
         # 业务代码自身的异常：保留完整 traceback。
         print("[script-runner] 任务执行异常:", file=sys.stderr)
         traceback.print_exc()
+        _write_status("error", f"{type(e).__name__}: {e}")
         return 1

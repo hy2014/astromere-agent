@@ -5,22 +5,25 @@ Covers:
   1. resolve_argv: repo-local file passthrough (trimmed), the reserved ``@``
      keyword -> ``python -m ...`` argv (whitespace tolerant), unknown keyword
      fails loudly listing available entries, None / empty input.
-  2. core.main full protocol, in-process: success with ScriptJob subclass and
-     default class name, duck-typed class with a custom name, whitespace
-     trimming, None result -> {}, routing keys stripped while other inputs are
-     flattened through, PathLike/nested/tuple normalization, every protocol
-     violation (missing/blank/wrong-typed routing params, import failure,
-     missing class with a hint, non-class target, bad constructor, missing
-     run(), business exception keeping its traceback, non-dict result, bad
-     output keys, NaN/Infinity/unserializable values), malformed input
-     (bad JSON / top-level non-object / missing env / unreadable file),
-     missing output env, and atomic output writes.
-  3. RunContext: platform-allocated dir wins and is created, fallback dir for
-     standalone runs and unknown ports, invalid port names, env snapshot,
-     stderr logging.
-  4. ScriptJob base: input/ctx storage, output_dir/log forwarding, abstract run.
-  5. End-to-end through runner.run_node: a business repo containing only a
-     task class runs via the ``@global_components.script_runner`` keyword.
+  2. `_parse_args`: argv-style node args (`--k v`, `--k=v`, `--flag`, quoted
+     values, repeats, multiline) -> named dict; positional tokens / short
+     options / empty keys / unclosed quotes rejected; dict passthrough.
+  3. core.main status-only protocol, in-process: success with a ScriptJob
+     subclass and the default class name, duck-typed class with a custom name,
+     whitespace trimming, no params, run() return values deliberately ignored,
+     args expanded into params while routing/container/other top-level keys
+     never reach the job, every protocol violation (missing/blank/wrong-typed
+     routing params, bad args, import failure, missing class with a hint,
+     non-class target, bad constructor, missing run(), business exception
+     keeping its traceback), malformed input (bad JSON / top-level non-object
+     / missing env / unreadable file), the fixed exec_status payload (ok /
+     error), missing output env not affecting the exit code, and atomic
+     writes.
+  4. RunContext: env snapshot, stderr logging.
+  5. ScriptJob base: params/ctx storage, log forwarding, abstract run.
+  6. End-to-end through runner.run_node: a business repo containing only a
+     task class runs via the ``@global_components.script_runner`` keyword;
+     the task manages its own file paths; success and failure paths.
 
 All examples use generic names only — the platform must stay ignorant of any
 specific business project.
@@ -51,54 +54,69 @@ ENV_KEYS = (
     "AGENT_UI_OUTPUT_PATH",
     "AGENT_UI_COMPONENT_ROOT",
     "AGENT_UI_OUTPUT_DATA_DIRS",
+    "SR_PROBE",
 )
 
 # --- Generic business-module sources (no project-specific information) ---
+# Jobs cannot return data anymore (status-only component), so test jobs expose
+# what they received by dumping params to the probe file named by $SR_PROBE.
 
-SUBCLASS_JOB = """
-from pathlib import Path
+PROBE_TEMPLATE = """
+import json
+import os
 
-from global_components.script_runner import ScriptJob
+{base_import}
 
-
-class Job(ScriptJob):
+class {class_name}({base_class}):
     def run(self):
-        return {
-            "echo": self.inputs["message"],
-            "count": len(self.inputs["items"]),
-            "ratio": 3.14,
-            "enabled": True,
-            "path": Path("/generic/output/data.parquet"),
-            "nested": {"vals": (1, "two", 3.0), "deep": {"ok": True}},
-        }
+        probe = os.environ.get("SR_PROBE")
+        if probe:
+            with open(probe, "w", encoding="utf-8") as f:
+                json.dump(dict(sorted(self.params.items())), f)
+        {extra_body}
 """
 
-DUCK_TYPED_JOB = """
+SUBCLASS_PROBE_JOB = PROBE_TEMPLATE.format(
+    base_import="from global_components.script_runner import ScriptJob",
+    class_name="Job",
+    base_class="ScriptJob",
+    extra_body="self.log.info('probe ok')",
+)
+
+DUCK_PROBE_JOB = """
+import json
+import os
+
+
 class CustomTask:
-    def __init__(self, inputs, ctx):
-        self.inputs = inputs
+    def __init__(self, params, ctx):
+        self.params = params
         self.ctx = ctx
 
     def run(self):
-        return {"got": self.inputs["value"]}
+        probe = os.environ.get("SR_PROBE")
+        if probe:
+            with open(probe, "w", encoding="utf-8") as f:
+                json.dump(dict(sorted(self.params.items())), f)
 """
 
-RECORDS_INPUTS_JOB = """
-from global_components.script_runner import ScriptJob
-
-
-class Job(ScriptJob):
-    def run(self):
-        return {"keys": sorted(self.inputs.keys())}
-"""
-
-NONE_RESULT_JOB = """
+OK_JOB = """
 class Job:
-    def __init__(self, inputs, ctx):
+    def __init__(self, params, ctx):
         pass
 
     def run(self):
         return None
+"""
+
+RETURN_VALUE_IGNORED_JOB = """
+class Job:
+    def __init__(self, params, ctx):
+        pass
+
+    def run(self):
+        # The component ignores return values: this must still succeed.
+        return {"anything": ["unexpected"], "n": 1}
 """
 
 BAD_CONSTRUCTOR_JOB = """
@@ -107,94 +125,40 @@ class Job:
         pass
 
     def run(self):
-        return {}
+        pass
 """
 
 RAISING_CONSTRUCTOR_JOB = """
 class Job:
-    def __init__(self, inputs, ctx):
+    def __init__(self, params, ctx):
         raise ValueError("constructor boom")
 
     def run(self):
-        return {}
+        pass
 """
 
 NO_RUN_JOB = """
 class Job:
-    def __init__(self, inputs, ctx):
+    def __init__(self, params, ctx):
         pass
 """
 
 BUSINESS_EXCEPTION_JOB = """
 class Job:
-    def __init__(self, inputs, ctx):
+    def __init__(self, params, ctx):
         pass
 
     def run(self):
         raise RuntimeError("business boom")
 """
 
-NON_DICT_RESULT_JOB = """
-class Job:
-    def __init__(self, inputs, ctx):
-        pass
-
-    def run(self):
-        return [1, 2, 3]
-"""
-
-NON_STRING_KEY_JOB = """
-class Job:
-    def __init__(self, inputs, ctx):
-        pass
-
-    def run(self):
-        return {1: "x"}
-"""
-
-EMPTY_KEY_JOB = """
-class Job:
-    def __init__(self, inputs, ctx):
-        pass
-
-    def run(self):
-        return {"": "x"}
-"""
-
-NAN_JOB = """
-class Job:
-    def __init__(self, inputs, ctx):
-        pass
-
-    def run(self):
-        return {"x": float("nan")}
-"""
-
-INF_JOB = """
-class Job:
-    def __init__(self, inputs, ctx):
-        pass
-
-    def run(self):
-        return {"x": float("inf")}
-"""
-
-UNSERIALIZABLE_JOB = """
-class Job:
-    def __init__(self, inputs, ctx):
-        pass
-
-    def run(self):
-        return {"x": {1, 2}}
-"""
-
 OTHER_CLASS_ONLY = """
 class Other:
-    def __init__(self, inputs, ctx):
+    def __init__(self, params, ctx):
         pass
 
     def run(self):
-        return {}
+        pass
 
 
 not_a_class = 42
@@ -217,17 +181,27 @@ from global_components.script_runner import ScriptJob
 
 class Job(ScriptJob):
     def run(self):
-        out_dir = self.output_dir("report")
-        path = os.path.join(out_dir, "report.csv")
-        with open(path, "w", newline="") as f:
+        # The component has no file ports: the task owns its output path,
+        # received like any other parameter (including creating directories).
+        outfile = self.params["outfile"]
+        os.makedirs(os.path.dirname(outfile), exist_ok=True)
+        with open(outfile, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["date", "value"])
-            writer.writerow([self.inputs["date"], 1])
-        return {
-            "report": {"path": path, "format": "csv"},
-            "echo": self.inputs["date"],
-        }
+            writer.writerow([self.params["date"], 1])
+        self.log.info("report written")
 """
+
+E2E_FAILING_JOB = """
+class Job:
+    def __init__(self, params, ctx):
+        pass
+
+    def run(self):
+        raise RuntimeError("business boom")
+"""
+
+OK_STATUS = {"exec_status": {"status": "ok"}}
 
 
 class ResolveArgvTests(unittest.TestCase):
@@ -278,6 +252,127 @@ class ResolveArgvTests(unittest.TestCase):
         self.assertEqual(runner.resolve_argv(self.PY, "   "), [self.PY, ""])
 
 
+class ParseArgsTests(unittest.TestCase):
+    """Rules for the node `args` text (argv-style named parameters)."""
+
+    def test_key_value_pairs(self):
+        self.assertEqual(
+            sr_core._parse_args("--date 2026-01-01 --mode full"),
+            {"date": "2026-01-01", "mode": "full"},
+        )
+
+    def test_equals_form(self):
+        self.assertEqual(
+            sr_core._parse_args("--date=2026-01-01 --mode=full"),
+            {"date": "2026-01-01", "mode": "full"},
+        )
+
+    def test_mixed_pair_and_equals_forms(self):
+        self.assertEqual(
+            sr_core._parse_args("--date 2026-01-01 --mode=full"),
+            {"date": "2026-01-01", "mode": "full"},
+        )
+
+    def test_boolean_flags(self):
+        self.assertEqual(
+            sr_core._parse_args("--dry-run --verbose"),
+            {"dry-run": True, "verbose": True},
+        )
+        # A flag at the end (nothing follows) must NOT swallow a value later;
+        # here it is simply terminal.
+        self.assertEqual(sr_core._parse_args("--mode full --force"),
+                         {"mode": "full", "force": True})
+
+    def test_flag_followed_by_another_flag(self):
+        # The token after a flag also starts with -- => first one is boolean.
+        self.assertEqual(
+            sr_core._parse_args("--force --mode full"),
+            {"force": True, "mode": "full"},
+        )
+
+    def test_quoted_value_may_contain_spaces_and_dashes(self):
+        self.assertEqual(
+            sr_core._parse_args('--msg "hello world" --eq "--literal"'),
+            {"msg": "hello world", "eq": "--literal"},
+        )
+
+    def test_single_quoted_value(self):
+        self.assertEqual(
+            sr_core._parse_args("--msg 'hello world'"),
+            {"msg": "hello world"},
+        )
+
+    def test_dash_dash_value_via_equals_form(self):
+        self.assertEqual(
+            sr_core._parse_args("--eq=--literal"),
+            {"eq": "--literal"},
+        )
+
+    def test_empty_value_after_equals(self):
+        self.assertEqual(sr_core._parse_args("--note="), {"note": ""})
+
+    def test_values_are_always_strings(self):
+        # No smart type coercion: versions / leading-zero ids / dates must
+        # survive verbatim; jobs do their own int()/bool().
+        parsed = sr_core._parse_args("--limit 100 --ratio 0.5 --zero 007")
+        self.assertEqual(parsed, {"limit": "100", "ratio": "0.5", "zero": "007"})
+        self.assertIsInstance(parsed["limit"], str)
+
+    def test_repeated_key_last_value_wins(self):
+        self.assertEqual(
+            sr_core._parse_args("--date a --date b"),
+            {"date": "b"},
+        )
+
+    def test_none_missing_and_blank_mean_no_args(self):
+        self.assertEqual(sr_core._parse_args(None), {})
+        self.assertEqual(sr_core._parse_args(""), {})
+        self.assertEqual(sr_core._parse_args("   \n\t "), {})
+
+    def test_dict_passes_through(self):
+        # Non-UI callers may supply structured args directly.
+        self.assertEqual(
+            sr_core._parse_args({"date": "2026-01-01", "limit": 100}),
+            {"date": "2026-01-01", "limit": 100},
+        )
+
+    def test_positional_token_rejected(self):
+        with self.assertRaises(sr_core.ScriptRunnerError) as ctx:
+            sr_core._parse_args("positional --date x")
+        self.assertIn("无法识别的片段", str(ctx.exception))
+        self.assertIn("positional", str(ctx.exception))
+
+    def test_short_option_rejected(self):
+        with self.assertRaises(sr_core.ScriptRunnerError) as ctx:
+            sr_core._parse_args("-x 1")
+        self.assertIn("无法识别的片段", str(ctx.exception))
+
+    def test_double_dash_alone_rejected(self):
+        with self.assertRaises(sr_core.ScriptRunnerError):
+            sr_core._parse_args("--date x --")
+
+    def test_empty_key_rejected(self):
+        with self.assertRaises(sr_core.ScriptRunnerError):
+            sr_core._parse_args("--=x")
+
+    def test_unclosed_quote_rejected(self):
+        with self.assertRaises(sr_core.ScriptRunnerError) as ctx:
+            sr_core._parse_args('--msg "unclosed')
+        self.assertIn("分词", str(ctx.exception))
+
+    def test_non_string_non_dict_rejected(self):
+        with self.assertRaises(sr_core.ScriptRunnerError):
+            sr_core._parse_args(123)
+        with self.assertRaises(sr_core.ScriptRunnerError):
+            sr_core._parse_args(["--date", "x"])
+
+    def test_multiline_text(self):
+        self.assertEqual(
+            sr_core._parse_args("--date 2026-01-01\n  --mode full\n"),
+            {"date": "2026-01-01", "mode": "full"},
+        )
+
+
 class _Sandbox(unittest.TestCase):
     """Isolate env vars / sys.path / sys.modules / temp files per test."""
 
@@ -285,6 +380,7 @@ class _Sandbox(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="sr_core_")
         self.biz_root = os.path.join(self.tmp, "biz")
         os.makedirs(self.biz_root)
+        self.probe_path = os.path.join(self.tmp, "probe.json")
         self._saved_env = {key: os.environ.get(key) for key in ENV_KEYS}
         self._saved_path = sys.path[:]
         self._saved_modules = set(sys.modules)
@@ -324,7 +420,6 @@ class _Sandbox(unittest.TestCase):
         output_path=None,
         with_input_env=True,
         with_output_env=True,
-        data_dirs=None,
     ):
         if input_path is None:
             input_path = os.path.join(self.tmp, "input.json")
@@ -346,10 +441,9 @@ class _Sandbox(unittest.TestCase):
         else:
             os.environ.pop("AGENT_UI_OUTPUT_PATH", None)
         os.environ["AGENT_UI_COMPONENT_ROOT"] = self.biz_root
-        if data_dirs is not None:
-            os.environ["AGENT_UI_OUTPUT_DATA_DIRS"] = json.dumps(data_dirs)
-        else:
-            os.environ.pop("AGENT_UI_OUTPUT_DATA_DIRS", None)
+        os.environ.pop("AGENT_UI_OUTPUT_DATA_DIRS", None)
+        # Probe target for jobs that record the params they were constructed with.
+        os.environ["SR_PROBE"] = self.probe_path
         return input_path, output_path
 
     @staticmethod
@@ -360,79 +454,160 @@ class _Sandbox(unittest.TestCase):
         return rc, buf.getvalue()
 
     @staticmethod
-    def _read_output(output_path):
-        if not os.path.exists(output_path):
+    def _read_json(path):
+        if not os.path.exists(path):
             return None
-        with open(output_path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
+
+    def _read_output(self, output_path):
+        return self._read_json(output_path)
+
+    def _read_probe(self):
+        return self._read_json(self.probe_path)
 
 
 class ScriptRunnerCoreTests(_Sandbox):
+    # ---- success paths ----
+
     def test_success_subclass_default_class_name(self):
-        module = self._write_module(SUBCLASS_JOB)
+        module = self._write_module(SUBCLASS_PROBE_JOB)
         _, out_path = self._wire_env(
-            {"script.module": module, "message": "hello", "items": [1, 2, 3]}
+            {"script.module": module, "args": "--message hello --count 3"}
         )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
-        out = self._read_output(out_path)
-        self.assertEqual(out["echo"], "hello")
-        self.assertEqual(out["count"], 3)
-        self.assertEqual(out["ratio"], 3.14)
-        self.assertIs(out["enabled"], True)
-        self.assertEqual(out["path"], "/generic/output/data.parquet")
-        self.assertIsInstance(out["path"], str)
-        self.assertEqual(out["nested"]["vals"], [1, "two", 3.0])
-        self.assertEqual(out["nested"]["deep"], {"ok": True})
+        self.assertEqual(self._read_output(out_path), OK_STATUS)
+        self.assertEqual(
+            self._read_probe(), {"message": "hello", "count": "3"}
+        )
 
     def test_success_duck_typed_custom_class(self):
-        module = self._write_module(DUCK_TYPED_JOB)
+        module = self._write_module(DUCK_PROBE_JOB)
         _, out_path = self._wire_env(
-            {"script.module": module, "script.class": "CustomTask", "value": 42}
+            {"script.module": module, "script.class": "CustomTask",
+             "args": "--value 42"}
         )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
-        self.assertEqual(self._read_output(out_path), {"got": 42})
+        self.assertEqual(self._read_output(out_path), OK_STATUS)
+        self.assertEqual(self._read_probe(), {"value": "42"})
 
     def test_module_and_class_names_are_trimmed(self):
-        module = self._write_module(DUCK_TYPED_JOB, file_name="daily_job.py")
+        module = self._write_module(DUCK_PROBE_JOB, file_name="daily_job.py")
         _, out_path = self._wire_env(
             {
                 "script.module": f"  {module}  ",
                 "script.class": "  CustomTask\n",
-                "value": "ok",
+                "args": "--value ok",
             }
         )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
-        self.assertEqual(self._read_output(out_path), {"got": "ok"})
+        self.assertEqual(self._read_output(out_path), OK_STATUS)
+        self.assertEqual(self._read_probe(), {"value": "ok"})
 
-    def test_none_result_writes_empty_object(self):
-        module = self._write_module(NONE_RESULT_JOB)
+    def test_success_without_any_params(self):
+        module = self._write_module(OK_JOB)
         _, out_path = self._wire_env({"script.module": module})
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
-        self.assertEqual(self._read_output(out_path), {})
+        self.assertEqual(self._read_output(out_path), OK_STATUS)
+        self.assertIsNone(self._read_probe())
 
-    def test_routing_keys_stripped_other_inputs_flattened(self):
-        module = self._write_module(RECORDS_INPUTS_JOB)
+    def test_run_return_value_is_ignored(self):
+        # Status-only contract: run() must not need to return anything, and a
+        # stray non-None value must not be treated as an error either.
+        module = self._write_module(RETURN_VALUE_IGNORED_JOB)
+        _, out_path = self._wire_env({"script.module": module})
+        rc, err = self._run_main()
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(self._read_output(out_path), OK_STATUS)
+
+    def test_args_expanded_into_params(self):
+        module = self._write_module(SUBCLASS_PROBE_JOB)
+        _, out_path = self._wire_env(
+            {
+                "script.module": module,
+                "args": "--date 2026-01-01 --mode=full --dry-run --msg \"hi there\"",
+            }
+        )
+        rc, err = self._run_main()
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(
+            self._read_probe(),
+            {"date": "2026-01-01", "mode": "full", "dry-run": True,
+             "msg": "hi there"},
+        )
+        self.assertEqual(self._read_output(out_path), OK_STATUS)
+
+    def test_routing_and_container_keys_never_reach_job(self):
+        module = self._write_module(SUBCLASS_PROBE_JOB)
         _, out_path = self._wire_env(
             {
                 "script.module": module,
                 "script.class": "Job",
-                "upstream_port": "/data/input.csv",
-                "date": "2026-01-01",
-                "flags": {"dry_run": False},
+                "args": "--date 2026-01-01",
             }
         )
         rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
-        keys = self._read_output(out_path)["keys"]
-        self.assertNotIn("script.module", keys)
-        self.assertNotIn("script.class", keys)
-        self.assertEqual(
-            sorted(keys), sorted(["upstream_port", "date", "flags"])
+        self.assertEqual(self._read_probe(), {"date": "2026-01-01"})
+
+    def test_other_top_level_keys_are_not_inputs(self):
+        # Status-only component has no data input ports: stray top-level keys
+        # (e.g. leftover edge payloads) must NOT be smuggled into params.
+        module = self._write_module(SUBCLASS_PROBE_JOB)
+        _, _ = self._wire_env(
+            {
+                "script.module": module,
+                "args": "--date 2026-01-01",
+                "upstream_file": "/data/input.csv",
+                "nested": {"a": 1},
+            }
         )
+        rc, err = self._run_main()
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(self._read_probe(), {"date": "2026-01-01"})
+
+    def test_missing_or_blank_args_means_empty_params(self):
+        module = self._write_module(SUBCLASS_PROBE_JOB)
+        for args in (None, "", "   \n"):
+            self._wire_env({"script.module": module, "args": args})
+            rc, err = self._run_main()
+            self.assertEqual(rc, 0, msg=err)
+            self.assertEqual(self._read_probe(), {})
+
+    def test_bad_args_fails_as_config_error(self):
+        module = self._write_module(OK_JOB)
+        _, out_path = self._wire_env(
+            {"script.module": module, "args": "positional-token"}
+        )
+        rc, err = self._run_main()
+        self.assertEqual(rc, 1)
+        self.assertIn("配置/协议错误", err)
+        self.assertIn("无法识别的片段", err)
+        status = self._read_output(out_path)["exec_status"]
+        self.assertEqual(status["status"], "error")
+        self.assertIn("无法识别的片段", status["error"])
+
+    def test_output_written_atomically_with_no_tmp_left(self):
+        module = self._write_module(OK_JOB)
+        _, out_path = self._wire_env({"script.module": module})
+        rc, err = self._run_main()
+        self.assertEqual(rc, 0, msg=err)
+        parent = os.path.dirname(out_path)
+        self.assertEqual(os.listdir(parent), [os.path.basename(out_path)])
+
+    def test_component_root_added_to_sys_path(self):
+        module = self._write_module(OK_JOB, file_name="daily_job.py")
+        pkg = module.split(".")[0]
+        self._wire_env({"script.module": f"{pkg}.daily_job"})
+        rc, err = self._run_main()
+        self.assertEqual(rc, 0, msg=err)
+        self.assertIn(self.biz_root, sys.path)
+
+    # ---- config/parameter errors ----
 
     def test_missing_module_param(self):
         _, _ = self._wire_env({"script.class": "Job"})
@@ -453,25 +628,30 @@ class ScriptRunnerCoreTests(_Sandbox):
         self.assertIn("script.module", err)
 
     def test_non_string_class_param(self):
-        module = self._write_module(DUCK_TYPED_JOB)
+        module = self._write_module(DUCK_PROBE_JOB)
         _, _ = self._wire_env({"script.module": module, "script.class": 7})
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("script.class", err)
 
     def test_blank_class_param(self):
-        module = self._write_module(DUCK_TYPED_JOB)
+        module = self._write_module(DUCK_PROBE_JOB)
         _, _ = self._wire_env({"script.module": module, "script.class": " "})
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("script.class", err)
 
+    # ---- module/class resolution ----
+
     def test_module_not_found(self):
-        _, _ = self._wire_env({"script.module": "no_such_pkg_xyz.missing"})
+        _, out_path = self._wire_env({"script.module": "no_such_pkg_xyz.missing"})
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
         self.assertIn("导入业务模块失败", err)
         self.assertIn("no_such_pkg_xyz.missing", err)
+        self.assertEqual(
+            self._read_output(out_path)["exec_status"]["status"], "error"
+        )
 
     def test_import_time_exception_is_wrapped(self):
         module = self._write_module(IMPORT_TIME_FAILURE)
@@ -503,12 +683,14 @@ class ScriptRunnerCoreTests(_Sandbox):
         self.assertEqual(rc, 1)
         self.assertIn("不是类", err)
 
+    # ---- instantiation / execution ----
+
     def test_constructor_signature_wrong(self):
         module = self._write_module(BAD_CONSTRUCTOR_JOB)
         _, _ = self._wire_env({"script.module": module})
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
-        self.assertIn("(inputs, ctx)", err)
+        self.assertIn("(params, ctx)", err)
 
     def test_constructor_other_exception_is_wrapped(self):
         module = self._write_module(RAISING_CONSTRUCTOR_JOB)
@@ -525,61 +707,24 @@ class ScriptRunnerCoreTests(_Sandbox):
         self.assertEqual(rc, 1)
         self.assertIn("run()", err)
 
-    def test_business_exception_keeps_full_traceback(self):
+    def test_business_exception_keeps_full_traceback_and_error_status(self):
         module = self._write_module(BUSINESS_EXCEPTION_JOB)
-        _, _ = self._wire_env({"script.module": module})
+        _, out_path = self._wire_env({"script.module": module})
         rc, err = self._run_main()
         self.assertEqual(rc, 1)
-        # Business failures must surface as execution errors WITH a traceback,
-        # not be flattened into a one-line config error.
+        # Business failures surface WITH a traceback, not flattened into a
+        # one-line config error.
         self.assertIn("任务执行异常", err)
         self.assertIn("Traceback (most recent call last)", err)
         self.assertIn("RuntimeError", err)
         self.assertIn("business boom", err)
         self.assertNotIn("配置/协议错误", err)
+        status = self._read_output(out_path)["exec_status"]
+        self.assertEqual(status["status"], "error")
+        self.assertIn("RuntimeError", status["error"])
+        self.assertIn("business boom", status["error"])
 
-    def test_non_dict_result(self):
-        module = self._write_module(NON_DICT_RESULT_JOB)
-        _, _ = self._wire_env({"script.module": module})
-        rc, err = self._run_main()
-        self.assertEqual(rc, 1)
-        self.assertIn("必须返回 dict", err)
-
-    def test_non_string_output_key(self):
-        module = self._write_module(NON_STRING_KEY_JOB)
-        _, _ = self._wire_env({"script.module": module})
-        rc, err = self._run_main()
-        self.assertEqual(rc, 1)
-        self.assertIn("键必须是非空字符串", err)
-
-    def test_empty_output_key(self):
-        module = self._write_module(EMPTY_KEY_JOB)
-        _, _ = self._wire_env({"script.module": module})
-        rc, err = self._run_main()
-        self.assertEqual(rc, 1)
-        self.assertIn("键必须是非空字符串", err)
-
-    def test_nan_rejected(self):
-        module = self._write_module(NAN_JOB)
-        _, _ = self._wire_env({"script.module": module})
-        rc, err = self._run_main()
-        self.assertEqual(rc, 1)
-        self.assertIn("NaN/Infinity", err)
-
-    def test_infinity_rejected(self):
-        module = self._write_module(INF_JOB)
-        _, _ = self._wire_env({"script.module": module})
-        rc, err = self._run_main()
-        self.assertEqual(rc, 1)
-        self.assertIn("NaN/Infinity", err)
-
-    def test_unserializable_type_rejected_with_path(self):
-        module = self._write_module(UNSERIALIZABLE_JOB)
-        _, _ = self._wire_env({"script.module": module})
-        rc, err = self._run_main()
-        self.assertEqual(rc, 1)
-        self.assertIn("$.x", err)
-        self.assertIn("set", err)
+    # ---- malformed input ----
 
     def test_input_not_valid_json(self):
         self._wire_env(raw_input="{not json")
@@ -608,95 +753,31 @@ class ScriptRunnerCoreTests(_Sandbox):
         self.assertEqual(rc, 1)
         self.assertIn("读取输入文件失败", err)
 
-    def test_missing_output_env(self):
-        module = self._write_module(NONE_RESULT_JOB)
+    def test_missing_output_env_still_succeeds(self):
+        # Success is decided by the exit code, not the status file: without
+        # AGENT_UI_OUTPUT_PATH the run still succeeds, status write is skipped.
+        module = self._write_module(OK_JOB)
         self._wire_env({"script.module": module}, with_output_env=False)
         rc, err = self._run_main()
-        self.assertEqual(rc, 1)
-        self.assertIn("AGENT_UI_OUTPUT_PATH", err)
-
-    def test_output_written_atomically_with_no_tmp_left(self):
-        module = self._write_module(SUBCLASS_JOB)
-        _, out_path = self._wire_env(
-            {"script.module": module, "message": "x", "items": []}
-        )
-        rc, err = self._run_main()
         self.assertEqual(rc, 0, msg=err)
-        parent = os.path.dirname(out_path)
-        self.assertEqual(os.listdir(parent), [os.path.basename(out_path)])
-        with open(out_path, encoding="utf-8") as f:
-            self.assertIsInstance(json.load(f), dict)
-
-    def test_component_root_added_to_sys_path(self):
-        module = self._write_module(SUBCLASS_JOB, file_name="daily_job.py")
-        pkg = module.split(".")[0]
-        self._wire_env(
-            {
-                "script.module": f"{pkg}.daily_job",
-                "message": "x",
-                "items": [],
-            }
-        )
-        rc, err = self._run_main()
-        self.assertEqual(rc, 0, msg=err)
-        self.assertIn(self.biz_root, sys.path)
+        self.assertEqual(err, "")
 
 
 class RunContextTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="sr_ctx_")
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self._saved = os.environ.get("AGENT_UI_OUTPUT_DATA_DIRS")
+        self._saved_marker = os.environ.get("SR_TEST_MARKER")
 
     def tearDown(self):
-        if self._saved is None:
-            os.environ.pop("AGENT_UI_OUTPUT_DATA_DIRS", None)
+        if self._saved_marker is None:
+            os.environ.pop("SR_TEST_MARKER", None)
         else:
-            os.environ["AGENT_UI_OUTPUT_DATA_DIRS"] = self._saved
-
-    def test_platform_allocated_dir_wins_and_is_created(self):
-        allocated = os.path.join(self.tmp, "platform_dirs", "report")
-        os.environ["AGENT_UI_OUTPUT_DATA_DIRS"] = json.dumps(
-            {"report": allocated}
-        )
-        ctx = RunContext()
-        got = ctx.output_dir("report")
-        self.assertEqual(got, allocated)
-        self.assertTrue(os.path.isdir(allocated))
-
-    def test_fallback_dir_for_standalone_run(self):
-        os.environ.pop("AGENT_UI_OUTPUT_DATA_DIRS", None)
-        fallback_root = os.path.join(self.tmp, "fallback")
-        ctx = RunContext(fallback_root=fallback_root)
-        got = ctx.output_dir("report")
-        self.assertEqual(got, os.path.join(fallback_root, "report"))
-        self.assertTrue(os.path.isdir(got))
-
-    def test_unknown_port_uses_fallback(self):
-        allocated = os.path.join(self.tmp, "platform_dirs", "report")
-        os.environ["AGENT_UI_OUTPUT_DATA_DIRS"] = json.dumps(
-            {"report": allocated}
-        )
-        fallback_root = os.path.join(self.tmp, "fallback")
-        ctx = RunContext(fallback_root=fallback_root)
-        got = ctx.output_dir("other_port")
-        self.assertEqual(got, os.path.join(fallback_root, "other_port"))
-        self.assertTrue(os.path.isdir(got))
-
-    def test_invalid_port_raises(self):
-        ctx = RunContext()
-        for bad in ("", None, 123):
-            with self.assertRaises(ValueError):
-                ctx.output_dir(bad)
+            os.environ["SR_TEST_MARKER"] = self._saved_marker
 
     def test_env_is_a_snapshot(self):
         os.environ["SR_TEST_MARKER"] = "present"
-        try:
-            ctx = RunContext()
-        finally:
-            os.environ.pop("SR_TEST_MARKER", None)
+        ctx = RunContext()
+        os.environ["SR_TEST_MARKER"] = "changed-after"
         self.assertEqual(ctx.env.get("SR_TEST_MARKER"), "present")
-        self.assertNotIn("SR_TEST_MARKER", os.environ)
 
     def test_log_levels_go_to_stderr(self):
         ctx = RunContext()
@@ -722,24 +803,16 @@ class ScriptJobBaseTests(unittest.TestCase):
     class _StubCtx:
         def __init__(self):
             self.log = "LOGGER"
-            self.asked = None
 
-        def output_dir(self, port):
-            self.asked = port
-            return f"/fallback/{port}"
-
-    def test_stores_inputs_and_ctx(self):
-        inputs = {"a": 1}
+    def test_stores_params_and_ctx(self):
+        params = {"a": "1"}
         ctx = self._StubCtx()
-        job = ScriptJob(inputs, ctx)
-        self.assertIs(job.inputs, inputs)
+        job = ScriptJob(params, ctx)
+        self.assertIs(job.params, params)
         self.assertIs(job.ctx, ctx)
 
-    def test_forwards_output_dir_and_log(self):
-        ctx = self._StubCtx()
-        job = ScriptJob({}, ctx)
-        self.assertEqual(job.output_dir("report"), "/fallback/report")
-        self.assertEqual(ctx.asked, "report")
+    def test_forwards_log(self):
+        job = ScriptJob({}, self._StubCtx())
         self.assertIs(job.log, "LOGGER")
 
     def test_run_is_abstract(self):
@@ -750,7 +823,7 @@ class ScriptJobBaseTests(unittest.TestCase):
 
 class ScriptRunnerEndToEndTests(unittest.TestCase):
     """Full path through runner.run_node with the reserved keyword: the
-    business repo contains only a task class, no component boilerplate."""
+    business repo contains only task classes, no component boilerplate."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="sr_e2e_")
@@ -766,34 +839,52 @@ class ScriptRunnerEndToEndTests(unittest.TestCase):
         open(os.path.join(jobs_dir, "__init__.py"), "w").close()
         with open(os.path.join(jobs_dir, "daily_job.py"), "w") as f:
             f.write(E2E_JOB)
+        with open(os.path.join(jobs_dir, "failing_job.py"), "w") as f:
+            f.write(E2E_FAILING_JOB)
         return root
 
-    def test_run_node_executes_business_class_via_keyword(self):
+    def test_run_node_success_writes_ok_status(self):
         root = self._make_repo()
         work_dir = os.path.join(self.tmp, "work")
+        outfile = os.path.join(self.tmp, "task_own_dir", "report.csv")
         result = runner.run_node(
             root,
             "@global_components.script_runner",
-            {"script.module": "jobs.daily_job", "date": "2026-01-01"},
+            {
+                "script.module": "jobs.daily_job",
+                "args": f"--date 2026-01-01 --outfile {outfile}",
+            },
             work_dir,
             python_path=sys.executable,
-            output_ports=["report"],
+            output_ports=["exec_status"],
         )
         self.assertTrue(result["success"], msg=result.get("stderr"))
-
-        out = result["output_value"]
-        self.assertEqual(out["echo"], "2026-01-01")
-        report_path = out["report"]["path"]
-        # The component wrote into the runner-allocated port directory
-        # (work_dir/outputs/report), obtained through ctx.output_dir.
         self.assertEqual(
-            os.path.dirname(report_path),
-            os.path.join(work_dir, "outputs", "report"),
+            result["output_value"], {"exec_status": {"status": "ok"}}
         )
-        self.assertTrue(os.path.isfile(report_path))
-        with open(report_path, newline="") as f:
-            content = f.read()
-        self.assertIn("2026-01-01,1", content)
+        # The task managed its own output path; the component provided no
+        # file port directories for it.
+        self.assertTrue(os.path.isfile(outfile))
+        with open(outfile, newline="") as f:
+            self.assertIn("2026-01-01,1", f.read())
+
+    def test_run_node_business_exception_fails_node(self):
+        root = self._make_repo()
+        result = runner.run_node(
+            root,
+            "@global_components.script_runner",
+            {"script.module": "jobs.failing_job"},
+            os.path.join(self.tmp, "work_fail"),
+            python_path=sys.executable,
+            output_ports=["exec_status"],
+        )
+        self.assertFalse(result["success"])
+        self.assertIn("business boom", result.get("stderr", ""))
+        self.assertEqual(
+            result["output_value"],
+            {"exec_status": {"status": "error",
+                             "error": "RuntimeError: business boom"}},
+        )
 
     def test_run_node_unknown_keyword_fails(self):
         root = self._make_repo()
