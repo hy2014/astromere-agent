@@ -162,29 +162,60 @@ fn resolve_params(params: &mut Value, now: DateTime<Local>) -> Result<(), String
     Ok(())
 }
 
-/// 把参数值里的日期表达式换成具体值，提交时解析一次：
+/// 把参数值里的日期表达式替换成具体值，提交时解析一次：
 ///
 ///     $current_month(yyyyMM, -1)   上月，如 202608
 ///     $current_day(yyyyMMdd, -1)   昨天，如 20260917
 ///
+/// 表达式既可以占满整个值，也可以嵌在普通字符串中间（一个值可出现多个），
+/// 例如 script_runner 的 args：`--month $current_month(yyyyMM, -1)`。
+/// `$` 后面不跟「函数名(」的一律视为普通字符（如 `$HOME`、`$5`），不会误伤。
 /// `fmt` 用 yyyy / MM / dd 记号，其余字符原样输出（如 `yyyy-MM`）。`$current_month`
-/// 只到月，fmt 里出现 dd 报错。不是表达式的值原样返回；形状像表达式但写错则报错
+/// 只到月，fmt 里出现 dd 报错。不含表达式的值原样返回；形状像表达式但写错则报错
 /// （避免把 `$current_month(...)` 当普通字符串传给组件，让组件报看不懂的日期错）。
 fn resolve_param_expr(value: &str, now: DateTime<Local>) -> Result<String, String> {
-    let body = match value.strip_prefix('$') {
-        Some(body) => body,
-        None => return Ok(value.to_string()),
-    };
-    let open = match body.find('(') {
-        Some(i) if body.ends_with(')') => i,
-        _ => return Ok(value.to_string()),
-    };
-    let name = &body[..open];
-    let args: Vec<&str> = body[open + 1..body.len() - 1]
-        .split(',')
-        .map(str::trim)
-        .collect();
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(dollar_at) = rest.find('$') {
+        out.push_str(&rest[..dollar_at]);
+        let after = &rest[dollar_at + 1..];
 
+        // 函数名：ASCII 字母/下划线开头，后接字母数字下划线；紧跟 '(' 才算表达式。
+        let name_len = after
+            .bytes()
+            .enumerate()
+            .take_while(|(i, b)| {
+                (b.is_ascii_alphanumeric() || *b == b'_')
+                    && (*i > 0 || b.is_ascii_alphabetic() || *b == b'_')
+            })
+            .count();
+        let close = if name_len > 0 && after.as_bytes().get(name_len) == Some(&b'(') {
+            after[name_len + 1..].find(')')
+        } else {
+            None
+        };
+
+        match close {
+            Some(close_at) => {
+                let name = &after[..name_len];
+                let inner = &after[name_len + 1..name_len + 1 + close_at];
+                let args: Vec<&str> = inner.split(',').map(str::trim).collect();
+                out.push_str(&eval_param_expr(name, &args, now)?);
+                rest = &after[name_len + 1 + close_at + 1..];
+            }
+            // 不是函数调用形态：把这个 '$' 当普通字符保留，继续往后找。
+            None => {
+                out.push('$');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// 计算单个 `$name(fmt, delta)` 表达式（调用方已剥掉 `$` 与括号）。
+fn eval_param_expr(name: &str, args: &[&str], now: DateTime<Local>) -> Result<String, String> {
     if name != "current_month" && name != "current_day" {
         return Err(format!("未知函数 ${name}（支持 $current_month / $current_day）"));
     }
@@ -1448,6 +1479,60 @@ mod tests {
         for v in ["202001", "000001", "/home/x/run.sh", "", "$HOME/x", "a(b)c"] {
             assert_eq!(resolve_param_expr(v, now).unwrap(), v, "value={v}");
         }
+    }
+
+    #[test]
+    fn param_expr_inline_in_args_string() {
+        let now = at(2026, 9, 18);
+        // script_runner 的 args 形态：表达式嵌在命令行文本里
+        assert_eq!(
+            resolve_param_expr("--index 399303 --month $current_month(yyyyMM, -1)", now).unwrap(),
+            "--index 399303 --month 202608"
+        );
+        // --k=v 形式
+        assert_eq!(
+            resolve_param_expr("--month=$current_month(yyyyMM, -1)", now).unwrap(),
+            "--month=202608"
+        );
+        // 一个值里多个表达式，空格写法（逗号后有空格）也能识别
+        assert_eq!(
+            resolve_param_expr("$current_month(yyyyMM,0) ~ $current_month(yyyyMM, -1)", now)
+                .unwrap(),
+            "202609 ~ 202608"
+        );
+        // 前缀/后缀文本与整个值是表达式共存
+        assert_eq!(
+            resolve_param_expr("m=$current_month(yyyyMM, 1)!", now).unwrap(),
+            "m=202610!"
+        );
+    }
+
+    #[test]
+    fn param_expr_inline_leaves_literal_dollars() {
+        let now = at(2026, 9, 18);
+        // 普通 $ 变量、价格、裸函数名（无括号）均原样保留
+        for v in [
+            "PATH=$HOME/bin",
+            "price is $5",
+            "$current_month",
+            "see $current_month docs",
+        ] {
+            assert_eq!(resolve_param_expr(v, now).unwrap(), v, "value={v}");
+        }
+        // 普通文本里的 $ 与真表达式混排：只替换表达式部分
+        assert_eq!(
+            resolve_param_expr("$HOME and $current_month(yyyyMM, -1)", now).unwrap(),
+            "$HOME and 202608"
+        );
+    }
+
+    #[test]
+    fn param_expr_inline_rejects_broken_expr() {
+        let now = at(2026, 9, 18);
+        // 嵌在 args 里的错误表达式也要报错，不许原样透传给组件
+        let err = resolve_param_expr("--month $current_month(yyyyMMdd, 0)", now).unwrap_err();
+        assert!(err.contains("dd"), "err={err}");
+        assert!(resolve_param_expr("--m $current_week(yyyyMM, 0)", now).is_err());
     }
 
     #[test]
