@@ -10,7 +10,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "pricing:deepseek": "node scripts/fetch-deepseek-pricing.mjs --write",
-    "test": "node --import tsx --test src/app/component-mode/register-component.test.ts"
+    "test": "node --import tsx --test src/app/component-mode/register-component.test.ts src/app/component-mode/componentModel.test.ts src/app/component-mode/nodeClipboard.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

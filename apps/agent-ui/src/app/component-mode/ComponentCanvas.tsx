@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {
   addEdge,
   Background,
@@ -18,6 +18,13 @@ import type {Component, DagEdge, DagNode, PortDef} from "../../types";
 import {createComponent} from "./api";
 import {message} from "@tauri-apps/plugin-dialog";
 import {COMPONENT_DRAG_KEY, GENERIC_DRAG_KEY, schemaToPorts} from "./componentModel";
+import {
+  buildPastedNode,
+  copyNodeToClipboard,
+  hasClipboardNode,
+  isPasteError,
+  readNodeClipboard,
+} from "./nodeClipboard";
 
 export type ComponentCanvasProps = {
   dagId: string;
@@ -225,6 +232,14 @@ function ComponentCanvasInner({
     nodeId: string;
     label: string;
   } | null>(null);
+  // 画布空白处右键菜单（粘贴入口）；position 是菜单点对应的画布坐标。
+  const [paneMenu, setPaneMenu] = useState<{
+    x: number;
+    y: number;
+    position: {x: number; y: number};
+  } | null>(null);
+  // 同一位置连续粘贴时错开一点，避免节点完全重叠；重新复制后归零。
+  const pasteNudge = useRef(0);
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState(
     nodes.map((node) =>
       dagNodeToFlowNode(
@@ -441,10 +456,99 @@ function ComponentCanvasInner({
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node<ComponentNodeData>) => {
       event.preventDefault();
+      setPaneMenu(null);
       const label = node.data.dagNode.label || node.data.component.name || node.id;
       setMenu({x: event.clientX, y: event.clientY, nodeId: node.id, label});
     },
     [],
+  );
+
+  const onPaneContextMenu = useCallback(
+    (event: MouseEvent | React.MouseEvent) => {
+      event.preventDefault();
+      setMenu(null);
+      setPaneMenu({
+        x: event.clientX,
+        y: event.clientY,
+        position: screenToFlowPosition({x: event.clientX, y: event.clientY}),
+      });
+    },
+    [screenToFlowPosition],
+  );
+
+  // 复制节点：定义快照 + 实例 label/params 进模块级剪贴板（可跨 DAG）。
+  const copyNode = useCallback(
+    (nodeId: string) => {
+      const fn = flowNodes.find((n) => n.id === nodeId);
+      if (!fn) return;
+      if (fn.data.broken) {
+        message("该节点的组件未解析，无法复制", {kind: "error", title: "复制失败"}).catch(() => {});
+        return;
+      }
+      const dagNode = fn.data.dagNode;
+      const params =
+        (dagNode.config?.params as Record<string, unknown> | undefined) ?? {};
+      copyNodeToClipboard({component: fn.data.component, label: dagNode.label ?? "", params});
+      pasteNudge.current = 0;
+    },
+    [flowNodes],
+  );
+
+  // 粘贴节点：已注册组件复用 ID；内联组件克隆一份新组件定义再建行。
+  const pasteNode = useCallback(
+    async (position: {x: number; y: number}) => {
+      const entry = readNodeClipboard();
+      if (!entry) return;
+      const nudge = Math.min(pasteNudge.current, 7) * 24;
+      pasteNudge.current += 1;
+      const result = buildPastedNode({
+        entry,
+        dagId,
+        position: {x: position.x + nudge, y: position.y + nudge},
+        newNodeId: makeUuid(),
+        newComponentId: makeUuid(),
+        now: Date.now(),
+        registeredExists: entry.component.global
+          ? componentMap.has(entry.component.id)
+          : false,
+        existingNames: components.map((c) => c.name),
+      });
+      if (isPasteError(result)) {
+        message(result.error, {kind: "error", title: "粘贴失败"}).catch(() => {});
+        return;
+      }
+      try {
+        let component = entry.component;
+        if (result.newComponent) {
+          component = await createComponent(result.newComponent);
+          onComponentCreated?.(component);
+        }
+        const newNode = dagNodeToFlowNode(
+          result.dagNode,
+          {component, broken: false},
+          onSelectNode,
+        );
+        const nextDagNodes = [...flowNodes.map(flowNodeToDagNode), result.dagNode];
+        setFlowNodes((prev) => [...prev, newNode]);
+        onChange(nextDagNodes, flowEdges.map((e) => flowEdgeToDagEdge(e, dagId)));
+        onSelectNode?.(result.dagNode.id);
+      } catch (err) {
+        console.error("[component-canvas] paste failed", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        message(`粘贴节点失败：${msg}`, {kind: "error", title: "粘贴失败"}).catch(() => {});
+      }
+    },
+    [
+      dagId,
+      flowNodes,
+      flowEdges,
+      components,
+      componentMap,
+      setFlowNodes,
+      onChange,
+      onSelectNode,
+      onComponentCreated,
+    ],
   );
 
   return (
@@ -460,6 +564,7 @@ function ComponentCanvasInner({
       onDragOver={onDragOver}
       onNodeDragStop={onNodeDragStop}
       onNodeContextMenu={onNodeContextMenu}
+      onPaneContextMenu={onPaneContextMenu}
       nodeTypes={nodeTypes}
       fitView
     >
@@ -474,6 +579,16 @@ function ComponentCanvasInner({
           style={{left: menu.x, top: menu.y}}
           onClick={(e) => e.stopPropagation()}
         >
+          <button
+            type="button"
+            className="node-context-item"
+            onClick={() => {
+              copyNode(menu.nodeId);
+              setMenu(null);
+            }}
+          >
+            复制
+          </button>
           <button
             type="button"
             className="node-context-item"
@@ -508,6 +623,33 @@ function ComponentCanvasInner({
               删除
             </button>
           )}
+        </div>
+      </>
+    )}
+    {paneMenu && (
+      <>
+        <div className="node-context-overlay" onClick={() => setPaneMenu(null)} />
+        <div
+          className="node-context-menu"
+          style={{left: paneMenu.x, top: paneMenu.y}}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className={
+              hasClipboardNode()
+                ? "node-context-item"
+                : "node-context-item node-context-item--disabled"
+            }
+            disabled={!hasClipboardNode()}
+            onClick={() => {
+              const position = paneMenu.position;
+              setPaneMenu(null);
+              void pasteNode(position);
+            }}
+          >
+            粘贴
+          </button>
         </div>
       </>
     )}

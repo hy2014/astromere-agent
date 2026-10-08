@@ -2668,6 +2668,13 @@
   color: #047857;
 }
 
+.node-context-item--disabled,
+.node-context-item--disabled:hover {
+  color: #94a3b8;
+  background: transparent;
+  cursor: not-allowed;
+}
+
 /* ─── 节点输出数据预览弹框 ─────────────────────────────────────── */
 .data-preview-overlay {
   position: fixed;
