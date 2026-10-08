@@ -298,6 +298,49 @@ export function validateInstanceConfig(
   return errors;
 }
 
+// Prefixes owned by other UI tabs: System Config (`system.*`) and the DW
+// registration section (`dw.*`). The run-param editor never edits them and
+// must always carry them through on save.
+export const SYSTEM_PARAM_PREFIX = "system.";
+export const DW_PARAM_PREFIX = "dw.";
+
+// Merge a freshly edited run-param map (`next`) on top of the persisted node
+// params (`existing`).
+//
+// Free-form mode (empty schema): `next` is the authoritative FULL set. A key
+// missing there was explicitly deleted by the user and must NOT be carried
+// over — otherwise deleted rows reappear as soon as the node is reselected
+// (they get resurrected from `existing`).
+//
+// Schema mode: the form enumerates only declared keys, so undeclared
+// non-prefixed keys are preserved to avoid clobbering legacy data.
+//
+// `system.*` / `dw.*` keys belong to other tabs and are always preserved.
+export function mergeInstanceParams(
+  existing: Record<string, unknown>,
+  next: Record<string, unknown>,
+  schemaKeys: string[],
+): Record<string, unknown> {
+  const ownedElsewhere = (k: string) =>
+    k.startsWith(SYSTEM_PARAM_PREFIX) || k.startsWith(DW_PARAM_PREFIX);
+
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(existing)) {
+    if (ownedElsewhere(k)) out[k] = v;
+  }
+
+  if (schemaKeys.length > 0) {
+    for (const [k, v] of Object.entries(existing)) {
+      if (!ownedElsewhere(k) && !schemaKeys.includes(k) && !(k in next)) {
+        out[k] = v;
+      }
+    }
+  }
+
+  Object.assign(out, next);
+  return out;
+}
+
 // Validate the schema *declaration* itself (definition-level editor). Guards
 // against empty / duplicate keys and enum items without options.
 export function validateConfigSchemaDef(

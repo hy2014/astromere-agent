@@ -4,6 +4,7 @@ import type {ConfigSchemaItem} from "../../types";
 import {
   buildSchemaType,
   isListType,
+  mergeInstanceParams,
   normalizeSchemaType,
   parseConfigSchema,
   validateConfigSchemaDef,
@@ -107,4 +108,91 @@ test("validateConfigSchemaDef requires enum options", () => {
     {key: "m", label: "", type: "enum", required: false},
   ] as ConfigSchemaItem[]);
   assert.equal(errors[0], "enum 需选项");
+});
+
+// ─── mergeInstanceParams (free-form run-param editor) ──────────────────────
+
+test("mergeInstanceParams free-form: deleted keys stay deleted", () => {
+  // Regression: deleted free-form rows were resurrected from `existing` by a
+  // "preserve legacy keys" loop, so they reappeared after reselecting the node.
+  const existing = {
+    "A": "",
+    "`script.module": "",
+    "`script.module`": "",
+    a: "B",
+    "script.module": "jobs.daily_job",
+  };
+  // The editor committed everything except the two backtick-typo keys.
+  const next = {
+    A: "",
+    a: "B",
+    "script.module": "jobs.daily_job",
+  };
+  const merged = mergeInstanceParams(existing, next, []);
+  assert.deepEqual(merged, next);
+  assert.ok(!("`script.module" in merged));
+  assert.ok(!("`script.module`" in merged));
+});
+
+test("mergeInstanceParams free-form: edited value overwrites existing", () => {
+  const merged = mergeInstanceParams(
+    {date: "2026-01-01", mode: "full"},
+    {date: "2026-02-02", mode: "full"},
+    [],
+  );
+  assert.deepEqual(merged, {date: "2026-02-02", mode: "full"});
+});
+
+test("mergeInstanceParams free-form: added keys are appended", () => {
+  const merged = mergeInstanceParams(
+    {a: "1"},
+    {a: "1", b: "2"},
+    [],
+  );
+  assert.deepEqual(merged, {a: "1", b: "2"});
+});
+
+test("mergeInstanceParams preserves system./dw. keys even in free-form mode", () => {
+  // Those keys belong to other tabs; the run-param editor must never drop them.
+  const merged = mergeInstanceParams(
+    {"system.python_path": "/usr/bin/python3", "dw.enabled": true, date: "x"},
+    {date: "x"},
+    [],
+  );
+  assert.deepEqual(merged, {
+    "system.python_path": "/usr/bin/python3",
+    "dw.enabled": true,
+    date: "x",
+  });
+});
+
+test("mergeInstanceParams schema mode: undeclared legacy keys are preserved", () => {
+  // The structured form only enumerates declared keys; an undeclared key
+  // absent from `next` must survive the save.
+  const merged = mergeInstanceParams(
+    {year: 2024, legacy: "keep"},
+    {year: 2025},
+    ["year"],
+  );
+  assert.deepEqual(merged, {year: 2025, legacy: "keep"});
+});
+
+test("mergeInstanceParams schema mode: deleting via overlay still works", () => {
+  // An undeclared key that IS present in `next` (e.g. cleared to "") follows
+  // the editor value rather than being force-kept.
+  const merged = mergeInstanceParams(
+    {year: 2024, legacy: "keep"},
+    {year: 2025, legacy: ""},
+    ["year"],
+  );
+  assert.deepEqual(merged, {year: 2025, legacy: ""});
+});
+
+test("mergeInstanceParams schema mode: system./dw. keys preserved", () => {
+  const merged = mergeInstanceParams(
+    {"system.python_path": "/py", year: 2024},
+    {year: 2025},
+    ["year"],
+  );
+  assert.deepEqual(merged, {"system.python_path": "/py", year: 2025});
 });

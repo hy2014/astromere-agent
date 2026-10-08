@@ -1,7 +1,14 @@
 import {useEffect, useRef, useState} from "react";
 import type {Component, ConfigSchemaItem, DagNode, PortDef} from "../../types";
 import {listValidateCapabilities, validateComponentParams} from "./api";
-import {isListType, schemaToPorts, validateInstanceConfig} from "./componentModel";
+import {
+  DW_PARAM_PREFIX,
+  SYSTEM_PARAM_PREFIX,
+  isListType,
+  mergeInstanceParams,
+  schemaToPorts,
+  validateInstanceConfig,
+} from "./componentModel";
 
 export type InstanceConfigFormProps = {
   node: DagNode;
@@ -13,12 +20,6 @@ type InstanceValues = Record<string, unknown>;
 
 type FreePair = {id: string; key: string; value: string};
 
-// System-level knobs are stored with the `system.` prefix (see SystemConfigForm)
-// and owned by the System Config tab; this tab only manages run parameters (no prefix).
-const SYSTEM_PREFIX = "system.";
-// DW registration knobs (`dw.enabled` / `dw.port` / `dw.table`) are owned by the
-// "注册到DW" section below; the run-param editors must not touch them.
-const DW_PREFIX = "dw.";
 // Table-name whitelist enforced here (UX) and again by the runner (safety).
 const DW_TABLE_RE = /^[A-Za-z0-9_-]+$/;
 
@@ -38,7 +39,7 @@ function readParams(node: DagNode): InstanceValues {
     const out: InstanceValues = {};
     // Drop `system.*` and `dw.*` keys — those belong to other UI sections.
     for (const [k, v] of Object.entries(all)) {
-      if (!k.startsWith(SYSTEM_PREFIX) && !k.startsWith(DW_PREFIX)) out[k] = v;
+      if (!k.startsWith(SYSTEM_PARAM_PREFIX) && !k.startsWith(DW_PARAM_PREFIX)) out[k] = v;
     }
     return out;
   }
@@ -447,28 +448,10 @@ export function InstanceConfigForm({node, component, onChange}: InstanceConfigFo
       config.params && typeof config.params === "object"
         ? (config.params as Record<string, unknown>)
         : {};
-    const out: Record<string, unknown> = {};
-    // Preserve system-level knobs (owned by the System Config tab, stored with
-    // the `system.` prefix) and DW knobs (owned by the 注册到DW section, `dw.`
-    // prefix) so this tab never clobbers them.
-    for (const [k, v] of Object.entries(existing)) {
-      if (k.startsWith(SYSTEM_PREFIX) || k.startsWith(DW_PREFIX)) out[k] = v;
-    }
-    // Preserve any other legacy run params this tab does not enumerate (the
-    // structured schema view only lists declared keys; free-form mode already
-    // includes them in `next`).
-    for (const [k, v] of Object.entries(existing)) {
-      if (
-        !k.startsWith(SYSTEM_PREFIX) &&
-        !k.startsWith(DW_PREFIX) &&
-        !schema.some((s) => s.key === k) &&
-        !(k in next)
-      ) {
-        out[k] = v;
-      }
-    }
-    // Overlay the run-param values edited in this tab.
-    Object.assign(out, next);
+    // Free-form (empty schema): `next` is the full authoritative set, so a
+    // deleted key stays deleted. Schema mode: undeclared legacy keys and
+    // `system.*`/`dw.*` keys owned by other tabs are carried through.
+    const out = mergeInstanceParams(existing, next, schema.map((s) => s.key));
     const updated: DagNode = {
       ...nodeRef.current,
       // Persist the instance params. Any legacy git/IO/name keys that an older
